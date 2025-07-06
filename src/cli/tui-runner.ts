@@ -205,10 +205,10 @@ export async function startStdioAdapterMode(options: CliOptions): Promise<void> 
   // console.log(`🌐 Connecting to server: ${options.stdioServerUrl || 'http://localhost:3001'}`);
   // console.log(`⏱️ Request timeout: ${options.stdioTimeout || 30000}ms`);
 
-  const { StdioToSSEAdapter } = await import('../mcp/stdio-adapter');
+  const { StdioToStreamableHTTPAdapter } = await import('../mcp/stdio-adapter');
 
-  const adapter = new StdioToSSEAdapter({
-    serverUrl: options.stdioServerUrl || 'http://localhost:3001/sse',
+  const adapter = new StdioToStreamableHTTPAdapter({
+    serverUrl: options.stdioServerUrl || 'http://localhost:3001/mcp',
     timeout: options.stdioTimeout || 30000
   });
 
@@ -319,11 +319,11 @@ export async function startMCPServerMode(options: CliOptions): Promise<void> {
 
     // Display configuration instructions
     console.log('\n🔗 MCP Server is now running!');
-    console.log('To connect your IDE to the HTTP SSE MCP server, use the following configuration:');
+    console.log('To connect your IDE to the HTTP Streamable MCP server, use the following configuration:');
     console.log(JSON.stringify({
       "mcpServers": {
       "codebase": {
-        "url": `http://${options.mcpHost || 'localhost'}:${options.mcpPort || 3001}/sse`
+        "url": `http://${options.mcpHost || 'localhost'}:${options.mcpPort || 3001}/mcp`
       }
       }
     }, null, 2));
@@ -332,7 +332,7 @@ export async function startMCPServerMode(options: CliOptions): Promise<void> {
       "mcpServers": {
       "codebase": {
         "command": "codebase",
-        "args": ["stdio-adapter", `--server-url=http://${options.mcpHost || 'localhost'}:${options.mcpPort || 3001}/sse`]
+        "args": ["stdio-adapter", `--server-url=http://${options.mcpHost || 'localhost'}:${options.mcpPort || 3001}/mcp`]
       }
       }
     }, null, 2));

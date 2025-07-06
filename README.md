@@ -235,7 +235,7 @@ Configure your IDE to connect to the MCP server:
 {
   "mcpServers": {
     "codebase": {
-      "url": "http://localhost:3001/sse"
+      "url": "http://localhost:3001/mcp"
     }
   }
 }
@@ -250,7 +250,7 @@ For clients that do not support SSE MCP, you can use the following configuration
       "command": "codebase",
       "args": [
         "stdio-adapter",
-        "--server-url=http://localhost:3001/sse"
+        "--server-url=http://localhost:3001/mcp"
       ]
     }
   }
@@ -261,7 +261,7 @@ For clients that do not support SSE MCP, you can use the following configuration
 ### Web Interface
 - **Home Page**: `http://localhost:3001` - Server status and configuration
 - **Health Check**: `http://localhost:3001/health` - JSON status endpoint
-- **MCP Endpoint**: `http://localhost:3001/sse` - SSE/HTTP MCP protocol endpoint
+- **MCP Endpoint**: `http://localhost:3001/mcp` - StreamableHTTP MCP protocol endpoint
 
 ### Available MCP Tools
 - **`search_codebase`** - Semantic search through your codebase

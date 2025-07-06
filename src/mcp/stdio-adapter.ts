@@ -1,14 +1,14 @@
 /**
- * StdioToSSEAdapter - Bridges stdio MCP clients to HTTP/SSE MCP servers
- * 
+ * StdioToStreamableHTTPAdapter - Bridges stdio MCP clients to HTTP/StreamableHTTP MCP servers
+ *
  * This adapter allows stdio-based MCP clients (like Claude Desktop) to connect
- * transparently to existing HTTP/SSE MCP servers without modifying server code.
- * 
+ * transparently to existing HTTP/StreamableHTTP MCP servers without modifying server code.
+ *
  * Architecture:
  * stdio MCP Client (Claude Desktop)
  *     ↓ stdin/stdout (JSON-RPC)
- * StdioToSSEAdapter (this class)
- *     ↓ HTTP/SSE
+ * StdioToStreamableHTTPAdapter (this class)
+ *     ↓ HTTP/StreamableHTTP
  * Existing CodebaseHTTPMCPServer (unchanged)
  */
 
@@ -16,17 +16,18 @@ import http from 'http';
 import { URL } from 'url';
 
 export interface StdioAdapterOptions {
-  serverUrl: string; // Full server URL including path (e.g., http://localhost:3001/sse)
+  serverUrl: string; // Full server URL including path (e.g., http://localhost:3001/mcp)
   timeout?: number;
 }
 
-export class StdioToSSEAdapter {
+export class StdioToStreamableHTTPAdapter {
   private serverUrl: string;
   private timeout: number;
   private requests: Map<number, { resolve: (value: any) => void; reject: (error: Error) => void }>;
   private sseConnection: http.IncomingMessage | null = null;
   private connected: boolean = false;
   private running: boolean = false;
+  private sessionId: string | null = null;
 
   constructor(options: StdioAdapterOptions) {
     this.serverUrl = options.serverUrl;
@@ -39,14 +40,11 @@ export class StdioToSSEAdapter {
    */
   async start(): Promise<void> {
     this.running = true;
-    
-    // Connect to SSE endpoint first
-    await this.connectSSE();
-    
-    // Setup stdio handlers
+
+    // Setup stdio handlers first - let client initialize the connection
     this.setupStdioHandlers();
-    
-    console.error('🔌 Stdio adapter started and connected to server');
+
+    console.error('🔌 Stdio adapter started and ready for connections');
   }
 
   /**
@@ -54,29 +52,34 @@ export class StdioToSSEAdapter {
    */
   stop(): void {
     this.running = false;
-    
+
     if (this.sseConnection) {
       this.sseConnection.destroy();
       this.sseConnection = null;
     }
-    
+
     // Reject any pending requests
     for (const [id, { reject }] of this.requests.entries()) {
       reject(new Error('Adapter stopped'));
     }
     this.requests.clear();
-    
+
     this.connected = false;
   }
 
   /**
    * Connect to the SSE endpoint of the HTTP server
-   * Based on SimpleMCPSSEClient.connectSSE()
+   * Based on SimpleMCPStreamableClient.connectSSE()
    */
   private async connectSSE(): Promise<void> {
     return new Promise((resolve, reject) => {
       const url = new URL(this.serverUrl);
-      
+
+      if (!this.sessionId) {
+        reject(new Error('Session ID is required for SSE connection'));
+        return;
+      }
+
       const req = http.request({
         hostname: url.hostname,
         port: url.port,
@@ -85,7 +88,8 @@ export class StdioToSSEAdapter {
         headers: {
           'Accept': 'text/event-stream',
           'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive'
+          'Connection': 'keep-alive',
+          'MCP-Session-ID': this.sessionId
         }
       }, (res) => {
         this.connected = true;
@@ -137,7 +141,7 @@ export class StdioToSSEAdapter {
 
   /**
    * Handle incoming messages from the SSE server
-   * Based on SimpleMCPSSEClient.handleServerMessage()
+   * Based on SimpleMCPStreamableClient.handleServerMessage()
    */
   private handleServerMessage(data: string): void {
     try {
@@ -149,7 +153,7 @@ export class StdioToSSEAdapter {
       }
 
       const message = JSON.parse(data);
-      
+
       // If this is a response to a request (has ID), resolve the pending promise
       if (message.id && this.requests.has(message.id)) {
         const { resolve } = this.requests.get(message.id)!;
@@ -169,16 +173,16 @@ export class StdioToSSEAdapter {
    */
   private setupStdioHandlers(): void {
     process.stdin.setEncoding('utf8');
-    
+
     let inputBuffer = '';
-    
+
     process.stdin.on('data', (chunk) => {
       inputBuffer += chunk;
-      
+
       // Process complete lines
       const lines = inputBuffer.split('\n');
       inputBuffer = lines.pop() || ''; // Keep incomplete line in buffer
-      
+
       for (const line of lines) {
         if (line.trim()) {
           this.handleStdinMessage(line.trim());
@@ -201,16 +205,16 @@ export class StdioToSSEAdapter {
   private async handleStdinMessage(message: string): Promise<void> {
     try {
       const request = JSON.parse(message);
-      
+
       // Forward the request to the HTTP server and await response via SSE
       const response = await this.forwardRequestToServer(request);
-      
+
       // Send response back via stdout
       this.writeStdoutResponse(response);
-      
+
     } catch (error) {
       console.error('❌ Failed to handle stdin message:', message, error);
-      
+
       // Send error response if possible
       try {
         const request = JSON.parse(message);
@@ -233,68 +237,135 @@ export class StdioToSSEAdapter {
 
   /**
    * Forward a JSON-RPC request to the HTTP server and return the response
-   * Based on SimpleMCPSSEClient.sendRequest()
+   * Based on SimpleMCPStreamableClient.sendRequest()
    */
   private async forwardRequestToServer(request: any): Promise<any> {
-    return new Promise(async (resolve, reject) => {
-      const timeout = setTimeout(() => {
-        if (this.requests.has(request.id)) {
-          this.requests.delete(request.id);
-          reject(new Error(`Request ${request.id} timed out`));
-        }
-      }, this.timeout);
+    try {
+      // Special handling for initialize request
+      if (request.method === 'initialize' && !this.sessionId) {
+        console.error('🔧 Handling initialize request from client...');
+        const response = await this.httpRequest('', 'POST', request);
 
-      try {
-        // Store the promise resolvers for when the SSE response arrives
-        if (request.id) {
-          this.requests.set(request.id, { 
+        // Extract session ID from response headers
+        if (response.headers && response.headers['mcp-session-id']) {
+          this.sessionId = response.headers['mcp-session-id'];
+          console.error(`🔑 Session ID obtained: ${this.sessionId}`);
+
+          // Start SSE connection with the session ID
+          await this.connectSSE();
+        }
+
+        // Handle response format
+        if (response.data && typeof response.data === 'string' && response.data.includes('data: ')) {
+          const lines = response.data.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              try {
+                const jsonResponse = JSON.parse(data);
+                if (jsonResponse.id === request.id) {
+                  console.error('📨 Initialize response:', JSON.stringify(jsonResponse, null, 2));
+                  return jsonResponse;
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE data:', data);
+              }
+            }
+          }
+        } else if (response.id === request.id) {
+          console.error('📨 Initialize response:', JSON.stringify(response, null, 2));
+          return response;
+        }
+
+        throw new Error('No valid initialize response received');
+      }
+
+      // For non-initialize requests, ensure we have a session
+      if (!this.sessionId) {
+        throw new Error('No session ID available. Initialize must be called first.');
+      }
+
+      // Send HTTP POST request to /mcp endpoint
+      const response = await this.httpRequest('', 'POST', request);
+
+      // Handle different response formats
+      if (response.data && typeof response.data === 'string' && response.data.includes('data: ')) {
+        // SSE format response - parse it
+        const lines = response.data.split('\n');
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            try {
+              const jsonResponse = JSON.parse(data);
+              if (jsonResponse.id === request.id) {
+                console.error('📨 Parsed SSE response:', JSON.stringify(jsonResponse, null, 2));
+                return jsonResponse;
+              }
+            } catch (e) {
+              console.error('Failed to parse SSE data:', data);
+            }
+          }
+        }
+        throw new Error('No valid response found in SSE data');
+      } else if (response.id === request.id) {
+        // Direct JSON response
+        console.error('📨 Direct response:', JSON.stringify(response, null, 2));
+        return response;
+      } else {
+        // Response came via SSE - wait for it
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            if (this.requests.has(request.id)) {
+              this.requests.delete(request.id);
+              reject(new Error(`Request ${request.id} timed out`));
+            }
+          }, this.timeout);
+
+          this.requests.set(request.id, {
             resolve: (response) => {
               clearTimeout(timeout);
               resolve(response);
-            }, 
+            },
             reject: (error) => {
               clearTimeout(timeout);
               reject(error);
             }
           });
-        }
-
-        // Send HTTP POST request
-        await this.httpRequest('/messages', 'POST', request);
-        
-        // Response will come via SSE and be handled by handleServerMessage()
-        
-      } catch (error) {
-        clearTimeout(timeout);
-        if (request.id) {
-          this.requests.delete(request.id);
-        }
-        reject(error);
+        });
       }
-    });
+    } catch (error) {
+      console.error('❌ Request error:', error);
+      throw error;
+    }
   }
 
   /**
    * Make HTTP request to the server
-   * Based on SimpleMCPSSEClient.httpRequest()
+   * Based on SimpleMCPStreamableClient.httpRequest()
    */
   private async httpRequest(path: string, method: string = 'GET', data: any = null): Promise<any> {
     return new Promise((resolve, reject) => {
-      // Extract base URL from serverUrl (remove path) and add the new path
+      // Use serverUrl directly for /mcp endpoint
       const serverUrl = new URL(this.serverUrl);
-      const baseUrl = `${serverUrl.protocol}//${serverUrl.host}`;
-      const url = new URL(path, baseUrl);
       const postData = data ? JSON.stringify(data) : null;
 
+      const headers: any = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/event-stream',
+        ...(postData && { 'Content-Length': Buffer.byteLength(postData) })
+      };
+
+      // Add session ID header if available
+      if (this.sessionId) {
+        headers['MCP-Session-ID'] = this.sessionId;
+      }
+
       const options = {
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
+        hostname: serverUrl.hostname,
+        port: serverUrl.port,
+        path: serverUrl.pathname,
         method: method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(postData && { 'Content-Length': Buffer.byteLength(postData) })
-        }
+        headers
       };
 
       const req = http.request(options, (res) => {
@@ -307,9 +378,15 @@ export class StdioToSSEAdapter {
         res.on('end', () => {
           try {
             const parsed = JSON.parse(responseData);
+            // Include response headers for session ID extraction
+            parsed.headers = res.headers;
             resolve(parsed);
           } catch (error) {
-            resolve(responseData);
+            // Return response data with headers for SSE format handling
+            resolve({
+              data: responseData,
+              headers: res.headers
+            });
           }
         });
       });

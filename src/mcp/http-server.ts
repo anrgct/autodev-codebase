@@ -3,7 +3,8 @@ import { createServer, Server as HTTPServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { InMemoryEventStore } from '@modelcontextprotocol/sdk/examples/shared/inMemoryEventStore.js';
 import {
     CallToolResult,
     TextContent,
@@ -24,7 +25,7 @@ export class CodebaseHTTPMCPServer {
     private codeIndexManager: CodeIndexManager;
     private port: number;
     private host: string;
-    private sseTransports: Map<string, SSEServerTransport> = new Map();
+    private transports: Map<string, StreamableHTTPServerTransport> = new Map();
 
     constructor(options: HTTPMCPServerOptions) {
         this.codeIndexManager = options.codeIndexManager;
@@ -308,12 +309,13 @@ Note: Configuration changes will apply to subsequent searches.
 
     private setupHTTPServer() {
         const app = express();
+        app.use(express.json());
 
         // Minimal CORS - only if needed
         app.use((req: any, res: any, next: any) => {
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, MCP-Session-ID');
 
             if (req.method === 'OPTIONS') {
                 res.writeHead(200);
@@ -323,32 +325,78 @@ Note: Configuration changes will apply to subsequent searches.
             next();
         });
 
-        let transport: SSEServerTransport | undefined;
+        // MCP endpoint handler
+        const mcpHandler = async (req: Request, res: Response) => {
+            const sessionId = req.headers['mcp-session-id'] as string | undefined;
+            // console.log(sessionId ? `Received MCP request for session: ${sessionId}` : 'Received MCP request:', req.body);
 
-        // Simple SSE endpoint following demo-server pattern exactly
-        app.get('/sse', async (_req: Request, res: Response) => {
-            const sessionId = this.generateSessionId();
-            transport = new SSEServerTransport('/messages', res);
+            try {
+                let transport: StreamableHTTPServerTransport;
+                if (sessionId && this.transports.has(sessionId)) {
+                    // Reuse existing transport
+                    transport = this.transports.get(sessionId)!;
+                } else if (!sessionId && req.method === 'POST' && isInitializeRequest(req.body)) {
+                    // New initialization request
+                    const eventStore = new InMemoryEventStore();
+                    const newSessionId = randomUUID();
+                    transport = new StreamableHTTPServerTransport({
+                        sessionIdGenerator: () => newSessionId,
+                        eventStore, // Enable resumability
+                        onsessioninitialized: (sessionId) => {
+                            console.log(`Session initialized with ID: ${sessionId}`);
+                            this.transports.set(sessionId, transport);
+                            // Set the session ID in response header for client to extract
+                            res.setHeader('MCP-Session-ID', sessionId);
+                        }
+                    });
 
-            // Track the transport for proper cleanup
-            this.sseTransports.set(sessionId, transport);
+                    // Set up onclose handler to clean up transport when closed
+                    transport.onclose = () => {
+                        const sid = transport.sessionId;
+                        if (sid && this.transports.has(sid)) {
+                            console.log(`Transport closed for session ${sid}, removing from transports map`);
+                            this.transports.delete(sid);
+                        }
+                    };
 
-            // Clean up when connection closes
-            res.on('close', () => {
-                this.sseTransports.delete(sessionId);
-            });
+                    // Connect the transport to the MCP server
+                    await this.mcpServer.connect(transport);
+                    await transport.handleRequest(req, res, req.body);
+                    return;
+                } else {
+                    // Invalid request
+                    res.status(400).json({
+                        jsonrpc: '2.0',
+                        error: {
+                            code: -32000,
+                            message: 'Bad Request: No valid session ID provided',
+                        },
+                        id: null,
+                    });
+                    return;
+                }
 
-            await this.mcpServer.connect(transport);
-        });
-
-        // Message handling endpoint - exactly like demo-server
-        app.post('/messages', async (req: Request, res: Response) => {
-            if (!transport) {
-                res.status(404).send('No transport found');
-                return;
+                // Handle the request with existing transport
+                await transport.handleRequest(req, res, req.body);
+            } catch (error) {
+                console.error('Error handling MCP request:', error);
+                if (!res.headersSent) {
+                    res.status(500).json({
+                        jsonrpc: '2.0',
+                        error: {
+                            code: -32603,
+                            message: 'Internal server error',
+                        },
+                        id: null,
+                    });
+                }
             }
-            await transport.handlePostMessage(req, res);
-        });
+        };
+
+        // Set up MCP endpoints
+        app.post('/mcp', mcpHandler);
+        app.get('/mcp', mcpHandler);
+        app.delete('/mcp', mcpHandler);
 
         // Health check endpoint
         app.get('/health', (req: any, res: any) => {
@@ -380,14 +428,15 @@ Note: Configuration changes will apply to subsequent searches.
 
         <h2>Endpoints</h2>
         <ul>
-            <li><code>GET /sse</code> - SSE connection endpoint</li>
-            <li><code>POST /messages</code> - Message handling endpoint</li>
+            <li><code>POST /mcp</code> - MCP JSON-RPC endpoint</li>
+            <li><code>GET /mcp</code> - MCP SSE stream endpoint</li>
+            <li><code>DELETE /mcp</code> - MCP session termination endpoint</li>
             <li><code>GET /health</code> - Health check</li>
         </ul>
 
         <h2>Client Configuration</h2>
-        <p>Connect via SSE to: <code>http://${this.host}:${this.port}/sse</code></p>
-        <p>Send messages to: <code>http://${this.host}:${this.port}/messages</code></p>
+        <p>MCP endpoint: <code>http://${this.host}:${this.port}/mcp</code></p>
+        <p>Use MCP-Session-ID header for session management</p>
     </div>
 </body>
 </html>
@@ -403,8 +452,7 @@ Note: Configuration changes will apply to subsequent searches.
             this.httpServer.listen(this.port, this.host, () => {
                 console.log(`🔍 Codebase MCP Server running at http://${this.host}:${this.port}`);
                 console.log(`📁 Workspace: ${this.codeIndexManager.workspacePathValue}`);
-                console.log(`🌐 SSE endpoint: http://${this.host}:${this.port}/sse`);
-                console.log(`📨 Messages endpoint: http://${this.host}:${this.port}/messages`);
+                console.log(`🌐 MCP endpoint: http://${this.host}:${this.port}/mcp`);
                 console.log(`❤️  Health check: http://${this.host}:${this.port}/health`);
                 resolve();
             });
@@ -437,15 +485,15 @@ Note: Configuration changes will apply to subsequent searches.
                     this.mcpServer.close();
                 }
 
-                // Close all SSE transports
-                this.sseTransports.forEach((transport, sessionId) => {
+                // Close all transports
+                this.transports.forEach((transport, sessionId) => {
                     try {
                         transport.close();
                     } catch (error) {
-                        console.warn(`Failed to close SSE transport ${sessionId}:`, error);
+                        console.warn(`Failed to close transport ${sessionId}:`, error);
                     }
                 });
-                this.sseTransports.clear();
+                this.transports.clear();
 
                 // Close HTTP server
                 this.httpServer.close((error) => {
