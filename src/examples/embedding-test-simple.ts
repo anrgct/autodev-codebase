@@ -71,6 +71,7 @@ async function runEmbeddingTest() {
   const ollamaModelList = {
     // ollamaBaseUrl: 'http://192.168.31.10:11434',
     // ollamaModelId: 'nomic-embed-text', // dimension 768
+    // ollamaModelId: 'embeddinggemma', // dimension 768
     // ollamaModelId: 'bge-m3:latest', // dimension 1024
     // ollamaModelId: 'dengcao/Dmeta-embedding-zh:F16', // dimension 768
     // ollamaModelId: 'granite-embedding:278m-fp16', // dimension 768
@@ -90,8 +91,13 @@ async function runEmbeddingTest() {
   }
   const openaiModelList = {
     // openaiBaseUrl: 'http://one-api-proxy.orb.local/v1', // oneapi
-    openaiBaseUrl: 'http://192.168.31.10:5000/v1', // lmstudio
-    openaiApiKey: 'sk-USqYzFUmccukXK0jC392D995Aa4b4a2d9c49892c37E323B7',
+    // openaiBaseUrl: 'http://192.168.31.10:5000/v1', // lmstudio
+    openaiBaseUrl: 'https://api.jina.ai/v1', // jina
+    // openaiApiKey: 'sk-USqYzFUmccukXK0jC392D995Aa4b4a2d9c49892c37E323B7',
+    openaiApiKey: 'jina_9c69850dfc7442c189152fa6f2e9eeffamfT5zJm28du0A9T9ldrh-loHFEM',
+    // openaiModel: 'jina-embeddings-v4', // dimension 2048
+    // openaiModel: 'jina-code-embeddings-1.5b', // dimension 1536
+    // openaiModel: 'jina-code-embeddings-0.5b', // dimension 896
     // openaiModel: 'Qwen/Qwen3-Embedding-8B', // dimension 4096
     // openaiModel: 'Qwen/Qwen3-Embedding-4B', // dimension 2560
     // openaiModel: 'Qwen/Qwen3-Embedding-0.6B', // dimension 1024
@@ -116,15 +122,14 @@ async function runEmbeddingTest() {
   // const vectorSearch = new MemoryVectorSearch({
   //   provider: 'ollama',
   //   baseUrl: 'http://localhost:11434',
-  //   model: 'dengcao/Qwen3-Embedding-0.6B:Q8_0',
-  //   dimension: 1024,
+  //   model: 'embeddinggemma',
+  //   dimension: 768,
   // })
   const vectorSearch = new MemoryVectorSearch({
-    provider: 'openai-compatible',
-    apiKey: 'sk-USqYzFUmccukXK0jC392D995Aa4b4a2d9c49892c37E323B7',
-    baseUrl: 'http://localhost:2302/v1',
-    model: 'Qwen/Qwen3-Embedding-8B',
-    dimension: 1024,
+    provider: 'jina',
+    apiKey: 'jina_9c69850dfc7442c189152fa6f2e9eeffamfT5zJm28du0A9T9ldrh-loHFEM',
+    model: 'jina-code-embeddings-0.5b',
+    dimension: 896, // jina-embeddings-v2-base-code is 768 dimensions
   })
 
   // 添加模拟数据

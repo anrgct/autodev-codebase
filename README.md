@@ -297,12 +297,15 @@ npm run mcp-server
 | siliconflow/Qwen/Qwen3-Embedding-8B              | 4096      | **76.7%**       | 66.0%           | 5/10                  | 0/10                |
 | siliconflow/Qwen/Qwen3-Embedding-4B              | 2560      | **73.3%**       | 54.0%           | 5/10                  | 1/10                |
 | voyage/voyage-code-3                             | 1024      | **73.3%**       | 52.0%           | 6/10                  | 1/10                |
+| jina/jina-code-embeddings-1.5b                   | 1536      | **66.7%**       | 52.0%           | 4/10                  | 0/10                |
+| jina/jina-code-embeddings-0.5b                   | 896       | **63.3%**       | 50.0%           | 2/10                  | 0/10                |
 | siliconflow/Qwen/Qwen3-Embedding-0.6B            | 1024      | **63.3%**       | 42.0%           | 4/10                  | 1/10                |
 | morph-embedding-v2                               | 1536      | **56.7%**       | 44.0%           | 3/10                  | 1/10                |
 | openai/text-embedding-ada-002                    | 1536      | **53.3%**       | 38.0%           | 2/10                  | 1/10                |
 | voyage/voyage-3-large                            | 1024      | **53.3%**       | 42.0%           | 3/10                  | 2/10                |
 | openai/text-embedding-3-large                    | 3072      | **46.7%**       | 38.0%           | 1/10                  | 3/10                |
 | voyage/voyage-3.5                                | 1024      | **43.3%**       | 38.0%           | 1/10                  | 2/10                |
+| jina-embeddings-v4                               | 2048      | **36.7%**       | 36.0%           | 0/10                  | 4/10                |
 | voyage/voyage-3.5-lite                           | 1024      | **36.7%**       | 28.0%           | 1/10                  | 2/10                |
 | openai/text-embedding-3-small                    | 1536      | **33.3%**       | 28.0%           | 1/10                  | 4/10                |
 | siliconflow/BAAI/bge-large-en-v1.5               | 1024      | **30.0%**       | 28.0%           | 0/10                  | 3/10                |
@@ -323,6 +326,7 @@ npm run mcp-server
 | lmstudio/taylor-jones/bge-code-v1-Q8_0-GGUF              | 1536      | 60.0%       | 54.0%       | 4/10                  | 1/10                |
 | ollama/dengcao/Qwen3-Embedding-8B:Q4_K_M                 | 4096      | 56.7%       | 42.0%       | 2/10                  | 2/10                |
 | ollama/hf.co/nomic-ai/nomic-embed-code-GGUF:Q4_K_M       | 3584      | 53.3%       | 44.0%       | 2/10                  | 0/10                |
+| ollama/embeddinggemma:bf16                               | 768       | 26.7%       | 26.0%       | 0/10                  | 3/10                |
 | ollama/bge-m3:f16                                        | 1024      | 26.7%       | 24.0%       | 0/10                  | 2/10                |
 | ollama/hf.co/nomic-ai/nomic-embed-text-v2-moe-GGUF:f16   | 768       | 26.7%       | 20.0%       | 0/10                  | 2/10                |
 | ollama/granite-embedding:278m-fp16                       | 768       | 23.3%       | 18.0%       | 0/10                  | 4/10                |

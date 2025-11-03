@@ -1,5 +1,6 @@
 import { CodeIndexOllamaEmbedder } from '../code-index/embedders/ollama'
 import { OpenAICompatibleEmbedder } from '../code-index/embedders/openai-compatible'
+import { JinaEmbedder } from '../code-index/embedders/jina-embedder'
 import { IEmbedder } from '../code-index/interfaces/embedder'
 import { EmbedderConfig } from '../code-index/interfaces/config'
 
@@ -29,6 +30,11 @@ export class MemoryVectorSearch {
       if (config.provider === 'openai-compatible') {
         this.embedder = new OpenAICompatibleEmbedder(
           (config as any).baseUrl,
+          (config as any).apiKey,
+          config.model
+        )
+      } else if (config.provider === 'jina') {
+        this.embedder = new JinaEmbedder(
           (config as any).apiKey,
           config.model
         )

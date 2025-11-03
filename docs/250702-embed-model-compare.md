@@ -1,5 +1,5 @@
-`rg -A 5 "^# |📊 总体表现:" embed-model-compare.md`
 ```
+rg -A 5 "^# |📊 总体表现:" docs/250702-embed-model-compare.md
 awk '
 /^# / {
     print $0
@@ -16,20 +16,23 @@ awk '
         }
     }
 }
+rg -A 5 "^# |📊 总体表现:" docs/250702-embed-model-compare.md | awk '/^# / {print; for(i=1;i<=5;i++) {getline; if(/📊 总体表现:/) {skip=0; print; break} else skip++} next} /^--$/ {next} {print}'
 ```
-`rg -A 5 "^# |📊 总体表现:" embed-model-compare.md | awk '/^# / {print; for(i=1;i<=5;i++) {getline; if(/📊 总体表现:/) {skip=0; print; break} else skip++} next} /^--$/ {next} {print}'`
 
 | Model | Avg Precision@3 | Avg Precision@5 | Good Queries (≥66.7%) | Failed Queries (0%) |
 |-------|-----------------|-----------------|-----------------------|---------------------|
 | siliconflow/Qwen/Qwen3-Embedding-8B | **76.7%** | 66.0% | 5/10 | 0/10 |
 | siliconflow/Qwen/Qwen3-Embedding-4B | **73.3%** | 54.0% | 5/10 | 1/10 |
 | voyage/voyage-code-3 | **73.3%** | 52.0% | 6/10 | 1/10 |
+| jina/jina-code-embeddings-1.5b | **66.7%** | 52.0% | 4/10 | 0/10 |
+| jina/jina-code-embeddings-0.5b | **63.3%** | 50.0% | 2/10 | 0/10 |
 | siliconflow/Qwen/Qwen3-Embedding-0.6B | **63.3%** | 42.0% | 4/10 | 1/10 |
 | morph-embedding-v2 | **56.7%** | 44.0% | 3/10 | 1/10 |
 | openai/text-embedding-ada-002 | **53.3%** | 38.0% | 2/10 | 1/10 |
 | voyage/voyage-3-large | **53.3%** | 42.0% | 3/10 | 2/10 |
 | openai/text-embedding-3-large | **46.7%** | 38.0% | 1/10 | 3/10 |
 | voyage/voyage-3.5 | **43.3%** | 38.0% | 1/10 | 2/10 |
+| jina-embeddings-v4 | **36.7%** | 36.0% | 0/10 | 4/10 |
 | voyage/voyage-3.5-lite | **36.7%** | 28.0% | 1/10 | 2/10 |
 | openai/text-embedding-3-small | **33.3%** | 28.0% | 1/10 | 4/10 |
 | siliconflow/BAAI/bge-large-en-v1.5 | **30.0%** | 28.0% | 0/10 | 3/10 |
@@ -48,6 +51,7 @@ ollama专场
 | lmstudio/taylor-jones/bge-code-v1-Q8_0-GGUF              | 60.0%       | 54.0%       | 4/10                  | 1/10                |
 | ollama/dengcao/Qwen3-Embedding-8B:Q4_K_M                 | 56.7%       | 42.0%       | 2/10                  | 2/10                |
 | ollama/hf.co/nomic-ai/nomic-embed-code-GGUF:Q4_K_M       | 53.3%       | 44.0%       | 2/10                  | 0/10                |
+| ollama/embeddinggemma:bf16                               | 26.7%       | 26.0%       | 0/10                  | 3/10                |
 | ollama/bge-m3:f16                                        | 26.7%       | 24.0%       | 0/10                  | 2/10                |
 | ollama/hf.co/nomic-ai/nomic-embed-text-v2-moe-GGUF:f16   | 26.7%       | 20.0%       | 0/10                  | 2/10                |
 | ollama/granite-embedding:278m-fp16                       | 23.3%       | 18.0%       | 0/10                  | 4/10                |
@@ -83,6 +87,7 @@ ollama专场
 | ollama/dengcao/Qwen3-Embedding-0.6B:f16              | 2            | pnpm, yarn      |
 | ollama/dengcao/Qwen3-Embedding-0.6B:Q8_0             | 2            | pnpm, yarn      |
 | ollama/nomic-embed-text:f16                          | 0            | -               |
+| ollama/embeddinggemma:bf16                           | 0            | -               |
 | ollama/bge-m3:f16                                    | 1            | pnpm            |
 | ollama/dengcao/Dmeta-embedding-zh:F16                | 2            | pnpm, yarn      |
 | ollama/granite-embedding:278m-fp16                   | 0            | -               |
@@ -118,6 +123,7 @@ ollama专场
 | ollama/dengcao/Qwen3-Embedding-0.6B:f16              | 1            | parcel             |
 | ollama/dengcao/Qwen3-Embedding-0.6B:Q8_0             | 1            | parcel             |
 | ollama/nomic-embed-text:f16                          | 2            | parcel, swc        |
+| ollama/embeddinggemma:bf16                          | 2            | parcel, turbo      |
 | ollama/bge-m3:f16                                    | 1            | turbo              |
 | ollama/dengcao/Dmeta-embedding-zh:F16                | 0            | -                  |
 | ollama/granite-embedding:278m-fp16                   | 0            | -                  |
@@ -5388,6 +5394,990 @@ document dimension 1536
 🔍 关键洞察:
   最佳查询: "build tool" (33.3%)
   最差查询: "code quality" (0.0%)
+  模型对抽象命名包的理解能力有限
+  字面相似性对结果影响显著
+
+🧹 正在清理网络连接池...
+✅ 清理完成，程序即将退出
+
+# jina-embeddings-v4
+
+🚀 开始embedding测试...
+
+[memory-vector-search] {
+  provider: 'openai-compatible',
+  apiKey: 'jina_9c69850dfc7442c189152fa6f2e9eeffamfT5zJm28du0A9T9ldrh-loHFEM',
+  baseUrl: 'https://api.jina.ai/v1',
+  model: 'jina-embeddings-v4',
+  dimension: 1024
+}
+📝 调试: OpenAI客户端不使用代理 (undici)
+📦 添加模拟包数据...
+📝 开始批量添加文档，数量: 27
+📝 将分成 3 个批次处理，每批最多 10 个文档
+📝 处理批次 1/3: 10 个文档
+📝 内容示例: [ 'node_modules/parcel', 'node_modules/turbo', 'node_modules/rome' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 2048
+📝 返回的嵌入向量数量: 10
+📝 批次 1 添加成功
+📝 处理批次 2/3: 10 个文档
+📝 内容示例: [ 'node_modules/vue', 'node_modules/react', 'node_modules/svelte' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 2048
+📝 返回的嵌入向量数量: 10
+📝 批次 2 添加成功
+📝 处理批次 3/3: 7 个文档
+📝 内容示例: [ '/usr/local/bin/yarn', '/usr/local/bin/bun', '/usr/local/bin/deno' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 2048
+📝 返回的嵌入向量数量: 7
+📝 批次 3 添加成功
+📝 所有文档添加成功
+✅ 已添加 27 个包
+
+🔍 查询: "build tool"
+📋 期望结果: parcel, turbo, rome, swc
+📝 开始搜索，查询: build tool
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. turbo (70.0%) ✅
+  2. biome (70.0%) ❌
+  3. parcel (69.8%) ✅
+  4. swc (69.0%) ✅
+  5. tap (68.9%) ❌
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+🔍 查询: "test framework"
+📋 期望结果: mocha, jasmine, ava, tap
+📝 开始搜索，查询: test framework
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. tap (67.2%) ✅
+  2. biome (66.6%) ❌
+  3. ava (66.5%) ✅
+  4. mocha (66.0%) ✅
+  5. turbo (65.8%) ❌
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+🔍 查询: "code quality"
+📋 期望结果: standard, biome
+📝 开始搜索，查询: code quality
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. standard (65.2%) ✅
+  2. biome (62.3%) ✅
+  3. tap (62.1%) ❌
+  4. rome (62.0%) ❌
+  5. swc (61.4%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "ui framework"
+📋 期望结果: vue, svelte, solid, qwik, react
+📝 开始搜索，查询: ui framework
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. biome (66.4%) ❌
+  2. solid (64.9%) ✅
+  3. qwik (64.7%) ✅
+  4. turbo (64.5%) ❌
+  5. tap (64.3%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "state management"
+📋 期望结果: redux, zustand, jotai, recoil
+📝 开始搜索，查询: state management
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. biome (63.6%) ❌
+  2. turbo (62.6%) ❌
+  3. tap (62.5%) ❌
+  4. solid (62.3%) ❌
+  5. rome (62.0%) ❌
+📈 Precision@3: 0.0% | Precision@5: 0.0%
+---
+🔍 查询: "package manager"
+📋 期望结果: pnpm, yarn, bun
+📝 开始搜索，查询: package manager
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. parcel (73.3%) ❌
+  2. biome (73.3%) ❌
+  3. tap (73.1%) ❌
+  4. pnpm (72.4%) ✅
+  5. rome (72.3%) ❌
+📈 Precision@3: 0.0% | Precision@5: 20.0%
+---
+🔍 查询: "javascript runtime"
+📋 期望结果: deno, node, bun
+📝 开始搜索，查询: javascript runtime
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. swc (68.6%) ❌
+  2. jasmine (68.5%) ❌
+  3. node (68.4%) ✅
+  4. turbo (68.4%) ❌
+  5. tap (68.3%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "database orm"
+📋 期望结果: prisma, drizzle, kysely
+📝 开始搜索，查询: database orm
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. biome (66.7%) ❌
+  2. rome (65.3%) ❌
+  3. turbo (65.1%) ❌
+  4. tap (64.7%) ❌
+  5. prisma (64.6%) ✅
+📈 Precision@3: 0.0% | Precision@5: 20.0%
+---
+🔍 查询: "bundler"
+📋 期望结果: parcel, turbo, swc
+📝 开始搜索，查询: bundler
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. parcel (72.5%) ✅
+  2. turbo (72.5%) ✅
+  3. bun (72.2%) ❌
+  4. biome (71.4%) ❌
+  5. swc (71.0%) ✅
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+🔍 查询: "frontend framework"
+📋 期望结果: vue, svelte, solid, qwik
+📝 开始搜索，查询: frontend framework
+📝 查询向量维度: 2048
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. biome (68.2%) ❌
+  2. parcel (67.3%) ❌
+  3. turbo (67.1%) ❌
+  4. solid (67.0%) ✅
+  5. qwik (66.7%) ✅
+📈 Precision@3: 0.0% | Precision@5: 40.0%
+---
+
+🎯 测试汇总报告
+============================================================
+📊 总体表现:
+  平均 Precision@3: 36.7%
+  平均 Precision@5: 36.0%
+  表现良好查询: 0/10 (≥66.7%)
+  完全失败查询: 4/10 (0%)
+
+📋 详细结果:
+  🟡 build tool           P@3:  66.7% | 首位: turbo (70.0%) 首个命中: turbo
+  🟡 test framework       P@3:  66.7% | 首位: tap (67.2%) 首个命中: tap
+  🟡 code quality         P@3:  66.7% | 首位: standard (65.2%) 首个命中: standard
+  🟡 ui framework         P@3:  66.7% | 首位: biome (66.4%) 首个命中: solid
+  🔴 state management     P@3:   0.0% | 首位: biome (63.6%) 无命中
+  🔴 package manager      P@3:   0.0% | 首位: parcel (73.3%) 首个命中: pnpm
+  🟡 javascript runtime   P@3:  33.3% | 首位: swc (68.6%) 首个命中: node
+  🔴 database orm         P@3:   0.0% | 首位: biome (66.7%) 首个命中: prisma
+  🟡 bundler              P@3:  66.7% | 首位: parcel (72.5%) 首个命中: parcel
+  🔴 frontend framework   P@3:   0.0% | 首位: biome (68.2%) 首个命中: solid
+
+🔍 关键洞察:
+  最佳查询: "build tool" (66.7%)
+  最差查询: "state management" (0.0%)
+  模型对抽象命名包的理解能力有限
+  字面相似性对结果影响显著
+
+🧹 正在清理网络连接池...
+✅ 清理完成，程序即将退出
+
+# jina-embeddings-v2-base-code
+🚀 开始embedding测试...
+
+[memory-vector-search] {
+  provider: 'jina',
+  apiKey: 'jina_9c69850dfc7442c189152fa6f2e9eeffamfT5zJm28du0A9T9ldrh-loHFEM',
+  model: 'jina-embeddings-v2-base-code',
+  dimension: 768
+}
+📦 添加模拟包数据...
+📝 开始批量添加文档，数量: 27
+📝 将分成 3 个批次处理，每批最多 10 个文档
+📝 处理批次 1/3: 10 个文档
+📝 内容示例: [ 'node_modules/parcel', 'node_modules/turbo', 'node_modules/rome' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 768
+📝 返回的嵌入向量数量: 10
+📝 批次 1 添加成功
+📝 处理批次 2/3: 10 个文档
+📝 内容示例: [ 'node_modules/vue', 'node_modules/react', 'node_modules/svelte' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 768
+📝 返回的嵌入向量数量: 10
+📝 批次 2 添加成功
+📝 处理批次 3/3: 7 个文档
+📝 内容示例: [ '/usr/local/bin/yarn', '/usr/local/bin/bun', '/usr/local/bin/deno' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 768
+📝 返回的嵌入向量数量: 7
+📝 批次 3 添加成功
+📝 所有文档添加成功
+✅ 已添加 27 个包
+
+🔍 查询: "build tool"
+📋 期望结果: parcel, turbo, rome, swc
+📝 开始搜索，查询: build tool
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. drizzle (46.3%) ❌
+  2. qwik (40.6%) ❌
+  3. jotai (40.4%) ❌
+  4. rome (40.2%) ✅
+  5. ava (39.3%) ❌
+📈 Precision@3: 0.0% | Precision@5: 20.0%
+---
+🔍 查询: "test framework"
+📋 期望结果: mocha, jasmine, ava, tap
+📝 开始搜索，查询: test framework
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. jasmine (46.8%) ✅
+  2. qwik (41.8%) ❌
+  3. mocha (40.7%) ✅
+  4. drizzle (40.4%) ❌
+  5. jotai (38.3%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "code quality"
+📋 期望结果: standard, biome
+📝 开始搜索，查询: code quality
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. drizzle (37.0%) ❌
+  2. qwik (32.3%) ❌
+  3. ava (29.2%) ❌
+  4. kysely (28.5%) ❌
+  5. jotai (27.5%) ❌
+📈 Precision@3: 0.0% | Precision@5: 0.0%
+---
+🔍 查询: "ui framework"
+📋 期望结果: vue, svelte, solid, qwik, react
+📝 开始搜索，查询: ui framework
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. qwik (28.5%) ✅
+  2. jotai (27.2%) ❌
+  3. kysely (25.0%) ❌
+  4. ava (21.4%) ❌
+  5. rome (21.1%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "state management"
+📋 期望结果: redux, zustand, jotai, recoil
+📝 开始搜索，查询: state management
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. qwik (21.7%) ❌
+  2. drizzle (21.3%) ❌
+  3. ava (18.1%) ❌
+  4. jotai (17.6%) ✅
+  5. tap (17.0%) ❌
+📈 Precision@3: 0.0% | Precision@5: 20.0%
+---
+🔍 查询: "package manager"
+📋 期望结果: pnpm, yarn, bun
+📝 开始搜索，查询: package manager
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. qwik (43.6%) ❌
+  2. drizzle (43.4%) ❌
+  3. kysely (43.3%) ❌
+  4. ava (42.6%) ❌
+  5. jotai (41.5%) ❌
+📈 Precision@3: 0.0% | Precision@5: 0.0%
+---
+🔍 查询: "javascript runtime"
+📋 期望结果: deno, node, bun
+📝 开始搜索，查询: javascript runtime
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. drizzle (35.4%) ❌
+  2. qwik (34.0%) ❌
+  3. jotai (32.7%) ❌
+  4. svelte (32.3%) ❌
+  5. turbo (32.3%) ❌
+📈 Precision@3: 0.0% | Precision@5: 0.0%
+---
+🔍 查询: "database orm"
+📋 期望结果: prisma, drizzle, kysely
+📝 开始搜索，查询: database orm
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. prisma (35.3%) ✅
+  2. qwik (28.7%) ❌
+  3. drizzle (28.1%) ✅
+  4. jotai (25.7%) ❌
+  5. turbo (22.0%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "bundler"
+📋 期望结果: parcel, turbo, swc
+📝 开始搜索，查询: bundler
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. drizzle (49.8%) ❌
+  2. ava (47.2%) ❌
+  3. biome (47.0%) ❌
+  4. jotai (45.9%) ❌
+  5. bun (45.7%) ❌
+📈 Precision@3: 0.0% | Precision@5: 0.0%
+---
+🔍 查询: "frontend framework"
+📋 期望结果: vue, svelte, solid, qwik
+📝 开始搜索，查询: frontend framework
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. qwik (31.2%) ✅
+  2. jotai (28.2%) ❌
+  3. kysely (26.5%) ❌
+  4. turbo (24.8%) ❌
+  5. swc (24.6%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+
+🎯 测试汇总报告
+============================================================
+📊 总体表现:
+  平均 Precision@3: 20.0%
+  平均 Precision@5: 16.0%
+  表现良好查询: 0/10 (≥66.7%)
+  完全失败查询: 6/10 (0%)
+
+📋 详细结果:
+  🔴 build tool           P@3:   0.0% | 首位: drizzle (46.3%) 首个命中: rome
+  🟡 test framework       P@3:  66.7% | 首位: jasmine (46.8%) 首个命中: jasmine
+  🔴 code quality         P@3:   0.0% | 首位: drizzle (37.0%) 无命中
+  🟡 ui framework         P@3:  33.3% | 首位: qwik (28.5%) 首个命中: qwik
+  🔴 state management     P@3:   0.0% | 首位: qwik (21.7%) 首个命中: jotai
+  🔴 package manager      P@3:   0.0% | 首位: qwik (43.6%) 无命中
+  🔴 javascript runtime   P@3:   0.0% | 首位: drizzle (35.4%) 无命中
+  🟡 database orm         P@3:  66.7% | 首位: prisma (35.3%) 首个命中: prisma
+  🔴 bundler              P@3:   0.0% | 首位: drizzle (49.8%) 无命中
+  🟡 frontend framework   P@3:  33.3% | 首位: qwik (31.2%) 首个命中: qwik
+
+🔍 关键洞察:
+  最佳查询: "test framework" (66.7%)
+  最差查询: "build tool" (0.0%)
+  模型对抽象命名包的理解能力有限
+  字面相似性对结果影响显著
+
+🧹 正在清理网络连接池...
+✅ 清理完成，程序即将退出
+
+# ollama/embeddinggemma
+
+🚀 开始embedding测试...
+
+[memory-vector-search] {
+  provider: 'ollama',
+  baseUrl: 'http://localhost:11434',
+  model: 'embeddinggemma',
+  dimension: 768
+}
+📦 添加模拟包数据...
+📝 开始批量添加文档，数量: 27
+📝 将分成 3 个批次处理，每批最多 10 个文档
+📝 处理批次 1/3: 10 个文档
+📝 内容示例: [ 'node_modules/parcel', 'node_modules/turbo', 'node_modules/rome' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 768
+📝 返回的嵌入向量数量: 10
+📝 批次 1 添加成功
+📝 处理批次 2/3: 10 个文档
+📝 内容示例: [ 'node_modules/vue', 'node_modules/react', 'node_modules/svelte' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 768
+📝 返回的嵌入向量数量: 10
+📝 批次 2 添加成功
+📝 处理批次 3/3: 7 个文档
+📝 内容示例: [ '/usr/local/bin/yarn', '/usr/local/bin/bun', '/usr/local/bin/deno' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 768
+📝 返回的嵌入向量数量: 7
+📝 批次 3 添加成功
+📝 所有文档添加成功
+✅ 已添加 27 个包
+
+🔍 查询: "build tool"
+📋 期望结果: parcel, turbo, rome, swc
+📝 开始搜索，查询: build tool
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. bun (76.9%) ❌
+  2. solid (76.0%) ❌
+  3. node (75.8%) ❌
+  4. turbo (75.5%) ✅
+  5. jasmine (75.2%) ❌
+📈 Precision@3: 0.0% | Precision@5: 20.0%
+---
+🔍 查询: "test framework"
+📋 期望结果: mocha, jasmine, ava, tap
+📝 开始搜索，查询: test framework
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. react (81.4%) ❌
+  2. tap (81.3%) ✅
+  3. parcel (81.3%) ❌
+  4. turbo (81.1%) ❌
+  5. mocha (81.0%) ✅
+📈 Precision@3: 33.3% | Precision@5: 40.0%
+---
+🔍 查询: "code quality"
+📋 期望结果: standard, biome
+📝 开始搜索，查询: code quality
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. standard (80.3%) ✅
+  2. solid (79.8%) ❌
+  3. parcel (79.8%) ❌
+  4. turbo (79.6%) ❌
+  5. mocha (79.3%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "ui framework"
+📋 期望结果: vue, svelte, solid, qwik, react
+📝 开始搜索，查询: ui framework
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. vue (84.1%) ✅
+  2. tap (83.7%) ❌
+  3. redux (83.7%) ❌
+  4. react (83.7%) ✅
+  5. turbo (83.3%) ❌
+📈 Precision@3: 33.3% | Precision@5: 40.0%
+---
+🔍 查询: "state management"
+📋 期望结果: redux, zustand, jotai, recoil
+📝 开始搜索，查询: state management
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. zustand (74.6%) ✅
+  2. parcel (71.8%) ❌
+  3. yarn (71.0%) ❌
+  4. solid (71.0%) ❌
+  5. redux (70.9%) ✅
+📈 Precision@3: 33.3% | Precision@5: 40.0%
+---
+🔍 查询: "package manager"
+📋 期望结果: pnpm, yarn, bun
+📝 开始搜索，查询: package manager
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. parcel (78.6%) ❌
+  2. redux (77.8%) ❌
+  3. turbo (77.4%) ❌
+  4. mocha (77.3%) ❌
+  5. jasmine (77.1%) ❌
+📈 Precision@3: 0.0% | Precision@5: 0.0%
+---
+🔍 查询: "javascript runtime"
+📋 期望结果: deno, node, bun
+📝 开始搜索，查询: javascript runtime
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. jasmine (82.6%) ❌
+  2. react (81.7%) ❌
+  3. node (81.1%) ✅
+  4. yarn (80.8%) ❌
+  5. turbo (80.7%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "database orm"
+📋 期望结果: prisma, drizzle, kysely
+📝 开始搜索，查询: database orm
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. prisma (78.2%) ✅
+  2. parcel (78.2%) ❌
+  3. turbo (78.1%) ❌
+  4. mocha (77.8%) ❌
+  5. redux (77.8%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "bundler"
+📋 期望结果: parcel, turbo, swc
+📝 开始搜索，查询: bundler
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. parcel (83.3%) ✅
+  2. solid (82.8%) ❌
+  3. turbo (82.2%) ✅
+  4. bun (81.9%) ❌
+  5. mocha (81.7%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "frontend framework"
+📋 期望结果: vue, svelte, solid, qwik
+📝 开始搜索，查询: frontend framework
+📝 查询向量维度: 768
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. react (85.6%) ❌
+  2. redux (84.6%) ❌
+  3. parcel (84.6%) ❌
+  4. turbo (84.4%) ❌
+  5. solid (84.3%) ✅
+📈 Precision@3: 0.0% | Precision@5: 20.0%
+---
+
+🎯 测试汇总报告
+============================================================
+📊 总体表现:
+  平均 Precision@3: 26.7%
+  平均 Precision@5: 26.0%
+  表现良好查询: 0/10 (≥66.7%)
+  完全失败查询: 3/10 (0%)
+
+📋 详细结果:
+  🔴 build tool           P@3:   0.0% | 首位: bun (76.9%) 首个命中: turbo
+  🟡 test framework       P@3:  33.3% | 首位: react (81.4%) 首个命中: tap
+  🟡 code quality         P@3:  33.3% | 首位: standard (80.3%) 首个命中: standard
+  🟡 ui framework         P@3:  33.3% | 首位: vue (84.1%) 首个命中: vue
+  🟡 state management     P@3:  33.3% | 首位: zustand (74.6%) 首个命中: zustand
+  🔴 package manager      P@3:   0.0% | 首位: parcel (78.6%) 无命中
+  🟡 javascript runtime   P@3:  33.3% | 首位: jasmine (82.6%) 首个命中: node
+  🟡 database orm         P@3:  33.3% | 首位: prisma (78.2%) 首个命中: prisma
+  🟡 bundler              P@3:  66.7% | 首位: parcel (83.3%) 首个命中: parcel
+  🔴 frontend framework   P@3:   0.0% | 首位: react (85.6%) 首个命中: solid
+
+🔍 关键洞察:
+  最佳查询: "bundler" (66.7%)
+  最差查询: "build tool" (0.0%)
+  模型对抽象命名包的理解能力有限
+  字面相似性对结果影响显著
+
+🧹 正在清理网络连接池...
+✅ 清理完成，程序即将退出
+
+# jina/jina-code-embeddings-1.5b
+🚀 开始embedding测试...
+
+[memory-vector-search] {
+  provider: 'jina',
+  apiKey: 'jina_9c69850dfc7442c189152fa6f2e9eeffamfT5zJm28du0A9T9ldrh-loHFEM',
+  model: 'jina-code-embeddings-1.5b',
+  dimension: 1536
+}
+📦 添加模拟包数据...
+📝 开始批量添加文档，数量: 27
+📝 将分成 3 个批次处理，每批最多 10 个文档
+📝 处理批次 1/3: 10 个文档
+📝 内容示例: [ 'node_modules/parcel', 'node_modules/turbo', 'node_modules/rome' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 1536
+📝 返回的嵌入向量数量: 10
+📝 批次 1 添加成功
+📝 处理批次 2/3: 10 个文档
+📝 内容示例: [ 'node_modules/vue', 'node_modules/react', 'node_modules/svelte' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 1536
+📝 返回的嵌入向量数量: 10
+📝 批次 2 添加成功
+📝 处理批次 3/3: 7 个文档
+📝 内容示例: [ '/usr/local/bin/yarn', '/usr/local/bin/bun', '/usr/local/bin/deno' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 1536
+📝 返回的嵌入向量数量: 7
+📝 批次 3 添加成功
+📝 所有文档添加成功
+✅ 已添加 27 个包
+
+🔍 查询: "build tool"
+📋 期望结果: parcel, turbo, rome, swc
+📝 开始搜索，查询: build tool
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. bun (28.2%) ❌
+  2. node (28.1%) ❌
+  3. swc (26.9%) ✅
+  4. turbo (25.9%) ✅
+  5. deno (24.7%) ❌
+📈 Precision@3: 33.3% | Precision@5: 40.0%
+---
+🔍 查询: "test framework"
+📋 期望结果: mocha, jasmine, ava, tap
+📝 开始搜索，查询: test framework
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. mocha (27.8%) ✅
+  2. jasmine (23.4%) ✅
+  3. turbo (19.5%) ❌
+  4. ava (17.2%) ✅
+  5. standard (16.1%) ❌
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+🔍 查询: "code quality"
+📋 期望结果: standard, biome
+📝 开始搜索，查询: code quality
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. standard (28.8%) ✅
+  2. turbo (25.7%) ❌
+  3. kysely (24.9%) ❌
+  4. rome (24.8%) ❌
+  5. mocha (22.4%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "ui framework"
+📋 期望结果: vue, svelte, solid, qwik, react
+📝 开始搜索，查询: ui framework
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. vue (28.6%) ✅
+  2. react (26.9%) ✅
+  3. qwik (25.1%) ✅
+  4. svelte (23.8%) ✅
+  5. mocha (23.5%) ❌
+📈 Precision@3: 100.0% | Precision@5: 80.0%
+---
+🔍 查询: "state management"
+📋 期望结果: redux, zustand, jotai, recoil
+📝 开始搜索，查询: state management
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. zustand (30.5%) ✅
+  2. redux (24.1%) ✅
+  3. recoil (22.1%) ✅
+  4. jotai (19.8%) ✅
+  5. turbo (19.3%) ❌
+📈 Precision@3: 100.0% | Precision@5: 80.0%
+---
+🔍 查询: "package manager"
+📋 期望结果: pnpm, yarn, bun
+📝 开始搜索，查询: package manager
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. pnpm (30.2%) ✅
+  2. bun (25.3%) ✅
+  3. yarn (23.7%) ✅
+  4. mocha (22.6%) ❌
+  5. node (21.9%) ❌
+📈 Precision@3: 100.0% | Precision@5: 60.0%
+---
+🔍 查询: "javascript runtime"
+📋 期望结果: deno, node, bun
+📝 开始搜索，查询: javascript runtime
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. node (30.5%) ✅
+  2. rome (27.3%) ❌
+  3. swc (27.0%) ❌
+  4. jasmine (26.8%) ❌
+  5. deno (26.2%) ✅
+📈 Precision@3: 33.3% | Precision@5: 40.0%
+---
+🔍 查询: "database orm"
+📋 期望结果: prisma, drizzle, kysely
+📝 开始搜索，查询: database orm
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. kysely (28.3%) ✅
+  2. prisma (23.8%) ✅
+  3. drizzle (21.3%) ✅
+  4. turbo (11.7%) ❌
+  5. recoil (10.2%) ❌
+📈 Precision@3: 100.0% | Precision@5: 60.0%
+---
+🔍 查询: "bundler"
+📋 期望结果: parcel, turbo, swc
+📝 开始搜索，查询: bundler
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. bun (34.0%) ❌
+  2. parcel (25.5%) ✅
+  3. mocha (24.2%) ❌
+  4. jasmine (24.1%) ❌
+  5. yarn (23.0%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "frontend framework"
+📋 期望结果: vue, svelte, solid, qwik
+📝 开始搜索，查询: frontend framework
+📝 查询向量维度: 1536
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. react (25.8%) ❌
+  2. vue (25.6%) ✅
+  3. qwik (22.8%) ✅
+  4. turbo (21.4%) ❌
+  5. solid (21.1%) ✅
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+
+🎯 测试汇总报告
+============================================================
+📊 总体表现:
+  平均 Precision@3: 66.7%
+  平均 Precision@5: 52.0%
+  表现良好查询: 4/10 (≥66.7%)
+  完全失败查询: 0/10 (0%)
+
+📋 详细结果:
+  🟡 build tool           P@3:  33.3% | 首位: bun (28.2%) 首个命中: swc
+  🟡 test framework       P@3:  66.7% | 首位: mocha (27.8%) 首个命中: mocha
+  🟡 code quality         P@3:  33.3% | 首位: standard (28.8%) 首个命中: standard
+  🟢 ui framework         P@3: 100.0% | 首位: vue (28.6%) 首个命中: vue
+  🟢 state management     P@3: 100.0% | 首位: zustand (30.5%) 首个命中: zustand
+  🟢 package manager      P@3: 100.0% | 首位: pnpm (30.2%) 首个命中: pnpm
+  🟡 javascript runtime   P@3:  33.3% | 首位: node (30.5%) 首个命中: node
+  🟢 database orm         P@3: 100.0% | 首位: kysely (28.3%) 首个命中: kysely
+  🟡 bundler              P@3:  33.3% | 首位: bun (34.0%) 首个命中: parcel
+  🟡 frontend framework   P@3:  66.7% | 首位: react (25.8%) 首个命中: vue
+
+🔍 关键洞察:
+  最佳查询: "ui framework" (100.0%)
+  最差查询: "build tool" (33.3%)
+  模型对抽象命名包的理解能力有限
+  字面相似性对结果影响显著
+
+🧹 正在清理网络连接池...
+✅ 清理完成，程序即将退出
+
+# jina-code-embeddings-0.5b
+🚀 开始embedding测试...
+
+[memory-vector-search] {
+  provider: 'jina',
+  apiKey: 'jina_9c69850dfc7442c189152fa6f2e9eeffamfT5zJm28du0A9T9ldrh-loHFEM',
+  model: 'jina-code-embeddings-0.5b',
+  dimension: 896
+}
+📦 添加模拟包数据...
+📝 开始批量添加文档，数量: 27
+📝 将分成 3 个批次处理，每批最多 10 个文档
+📝 处理批次 1/3: 10 个文档
+📝 内容示例: [ 'node_modules/parcel', 'node_modules/turbo', 'node_modules/rome' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 896
+📝 返回的嵌入向量数量: 10
+📝 批次 1 添加成功
+📝 处理批次 2/3: 10 个文档
+📝 内容示例: [ 'node_modules/vue', 'node_modules/react', 'node_modules/svelte' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 896
+📝 返回的嵌入向量数量: 10
+📝 批次 2 添加成功
+📝 处理批次 3/3: 7 个文档
+📝 内容示例: [ '/usr/local/bin/yarn', '/usr/local/bin/bun', '/usr/local/bin/deno' ]
+📝 调用embedder.createEmbeddings...
+📝 准备发送网络请求，等待响应...
+📝 嵌入向量创建成功，维度: 896
+📝 返回的嵌入向量数量: 7
+📝 批次 3 添加成功
+📝 所有文档添加成功
+✅ 已添加 27 个包
+
+🔍 查询: "build tool"
+📋 期望结果: parcel, turbo, rome, swc
+📝 开始搜索，查询: build tool
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. turbo (28.2%) ✅
+  2. bun (25.8%) ❌
+  3. rome (24.4%) ✅
+  4. node (23.5%) ❌
+  5. standard (23.4%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "test framework"
+📋 期望结果: mocha, jasmine, ava, tap
+📝 开始搜索，查询: test framework
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. jasmine (23.3%) ✅
+  2. ava (21.8%) ✅
+  3. standard (20.9%) ❌
+  4. turbo (20.1%) ❌
+  5. tap (19.7%) ✅
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+🔍 查询: "code quality"
+📋 期望结果: standard, biome
+📝 开始搜索，查询: code quality
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. standard (29.2%) ✅
+  2. rome (27.0%) ❌
+  3. recoil (19.9%) ❌
+  4. turbo (18.4%) ❌
+  5. swc (17.9%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "ui framework"
+📋 期望结果: vue, svelte, solid, qwik, react
+📝 开始搜索，查询: ui framework
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. vue (24.1%) ✅
+  2. qwik (24.0%) ✅
+  3. redux (23.5%) ❌
+  4. svelte (20.1%) ✅
+  5. react (19.1%) ✅
+📈 Precision@3: 66.7% | Precision@5: 80.0%
+---
+🔍 查询: "state management"
+📋 期望结果: redux, zustand, jotai, recoil
+📝 开始搜索，查询: state management
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. zustand (34.5%) ✅
+  2. redux (31.2%) ✅
+  3. recoil (27.7%) ✅
+  4. jotai (24.7%) ✅
+  5. kysely (22.2%) ❌
+📈 Precision@3: 100.0% | Precision@5: 80.0%
+---
+🔍 查询: "package manager"
+📋 期望结果: pnpm, yarn, bun
+📝 开始搜索，查询: package manager
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. pnpm (32.3%) ✅
+  2. node (26.3%) ❌
+  3. yarn (25.6%) ✅
+  4. standard (23.6%) ❌
+  5. parcel (22.6%) ❌
+📈 Precision@3: 66.7% | Precision@5: 40.0%
+---
+🔍 查询: "javascript runtime"
+📋 期望结果: deno, node, bun
+📝 开始搜索，查询: javascript runtime
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. turbo (34.0%) ❌
+  2. node (29.7%) ✅
+  3. vue (28.8%) ❌
+  4. svelte (28.2%) ❌
+  5. standard (27.0%) ❌
+📈 Precision@3: 33.3% | Precision@5: 20.0%
+---
+🔍 查询: "database orm"
+📋 期望结果: prisma, drizzle, kysely
+📝 开始搜索，查询: database orm
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. kysely (27.1%) ✅
+  2. drizzle (26.3%) ✅
+  3. prisma (25.8%) ✅
+  4. bun (18.3%) ❌
+  5. recoil (17.2%) ❌
+📈 Precision@3: 100.0% | Precision@5: 60.0%
+---
+🔍 查询: "bundler"
+📋 期望结果: parcel, turbo, swc
+📝 开始搜索，查询: bundler
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. bun (38.7%) ❌
+  2. turbo (31.1%) ✅
+  3. yarn (28.0%) ❌
+  4. parcel (25.6%) ✅
+  5. biome (23.5%) ❌
+📈 Precision@3: 33.3% | Precision@5: 40.0%
+---
+🔍 查询: "frontend framework"
+📋 期望结果: vue, svelte, solid, qwik
+📝 开始搜索，查询: frontend framework
+📝 查询向量维度: 896
+📝 搜索完成，返回结果数量: 5
+📊 搜索结果:
+  1. vue (26.1%) ✅
+  2. redux (25.5%) ❌
+  3. qwik (23.4%) ✅
+  4. turbo (22.9%) ❌
+  5. svelte (22.1%) ✅
+📈 Precision@3: 66.7% | Precision@5: 60.0%
+---
+
+🎯 测试汇总报告
+============================================================
+📊 总体表现:
+  平均 Precision@3: 63.3%
+  平均 Precision@5: 50.0%
+  表现良好查询: 2/10 (≥66.7%)
+  完全失败查询: 0/10 (0%)
+
+📋 详细结果:
+  🟡 build tool           P@3:  66.7% | 首位: turbo (28.2%) 首个命中: turbo
+  🟡 test framework       P@3:  66.7% | 首位: jasmine (23.3%) 首个命中: jasmine
+  🟡 code quality         P@3:  33.3% | 首位: standard (29.2%) 首个命中: standard
+  🟡 ui framework         P@3:  66.7% | 首位: vue (24.1%) 首个命中: vue
+  🟢 state management     P@3: 100.0% | 首位: zustand (34.5%) 首个命中: zustand
+  🟡 package manager      P@3:  66.7% | 首位: pnpm (32.3%) 首个命中: pnpm
+  🟡 javascript runtime   P@3:  33.3% | 首位: turbo (34.0%) 首个命中: node
+  🟢 database orm         P@3: 100.0% | 首位: kysely (27.1%) 首个命中: kysely
+  🟡 bundler              P@3:  33.3% | 首位: bun (38.7%) 首个命中: turbo
+  🟡 frontend framework   P@3:  66.7% | 首位: vue (26.1%) 首个命中: vue
+
+🔍 关键洞察:
+  最佳查询: "state management" (100.0%)
+  最差查询: "code quality" (33.3%)
   模型对抽象命名包的理解能力有限
   字面相似性对结果影响显著
 

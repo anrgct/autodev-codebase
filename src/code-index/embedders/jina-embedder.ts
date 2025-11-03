@@ -1,0 +1,169 @@
+import { IEmbedder, EmbeddingResponse, EmbedderInfo } from "../interfaces/embedder"
+import {
+	MAX_BATCH_TOKENS,
+	MAX_ITEM_TOKENS,
+	MAX_BATCH_RETRIES as MAX_RETRIES,
+	INITIAL_RETRY_DELAY_MS as INITIAL_DELAY_MS,
+} from "../constants"
+
+interface JinaEmbeddingResponse {
+	model: string
+	object: string
+	usage: {
+		total_tokens: number
+		prompt_tokens: number
+	}
+	data: Array<{
+		object: string
+		index: number
+		embedding: number[]
+	}>
+}
+
+/**
+ * Jina AI implementation of the embedder interface with batching and rate limiting.
+ */
+export class JinaEmbedder implements IEmbedder {
+	private readonly baseUrl: string
+	private readonly apiKey: string
+	private readonly modelId: string
+
+	constructor(apiKey: string, modelId: string = 'jina-embeddings-v2-base-code') {
+		if (!apiKey) {
+			throw new Error("API key is required for Jina embedder")
+		}
+
+		this.baseUrl = 'https://api.jina.ai/v1'
+		this.apiKey = apiKey
+		this.modelId = modelId
+	}
+
+	/**
+	 * Creates embeddings for the given texts with batching and rate limiting
+	 */
+	async createEmbeddings(texts: string[], model?: string): Promise<EmbeddingResponse> {
+		const modelToUse = model || this.modelId
+		const allEmbeddings: number[][] = []
+		const usage = { promptTokens: 0, totalTokens: 0 }
+		const remainingTexts = [...texts]
+
+		while (remainingTexts.length > 0) {
+			const currentBatch: string[] = []
+			let currentBatchTokens = 0
+			const processedIndices: number[] = []
+
+			for (let i = 0; i < remainingTexts.length; i++) {
+				const text = remainingTexts[i]
+				const itemTokens = Math.ceil(text.length / 4)
+
+				if (itemTokens > MAX_ITEM_TOKENS) {
+					console.warn(
+						`Text at index ${i} exceeds maximum token limit (${itemTokens} > ${MAX_ITEM_TOKENS}). Skipping.`,
+					)
+					processedIndices.push(i)
+					continue
+				}
+
+				if (currentBatchTokens + itemTokens <= MAX_BATCH_TOKENS) {
+					currentBatch.push(text)
+					currentBatchTokens += itemTokens
+					processedIndices.push(i)
+				} else {
+					break
+				}
+			}
+
+			// Remove processed items from remainingTexts (in reverse order to maintain correct indices)
+			for (let i = processedIndices.length - 1; i >= 0; i--) {
+				remainingTexts.splice(processedIndices[i], 1)
+			}
+
+			if (currentBatch.length > 0) {
+				try {
+					const batchResult = await this._embedBatchWithRetries(currentBatch, modelToUse)
+					allEmbeddings.push(...batchResult.embeddings)
+					usage.promptTokens += batchResult.usage.promptTokens
+					usage.totalTokens += batchResult.usage.totalTokens
+				} catch (error) {
+					console.error("Failed to process batch:", error)
+					throw new Error("Failed to create embeddings: batch processing error")
+				}
+			}
+		}
+
+		return { embeddings: allEmbeddings, usage }
+	}
+
+	/**
+	 * Helper method to handle batch embedding with retries and exponential backoff
+	 */
+	private async _embedBatchWithRetries(
+		batchTexts: string[],
+		model: string,
+	): Promise<{ embeddings: number[][]; usage: { promptTokens: number; totalTokens: number } }> {
+		for (let attempts = 0; attempts < MAX_RETRIES; attempts++) {
+			try {
+				const requestData = {
+					model: model,
+					input: batchTexts,
+				}
+
+				const response = await fetch(`${this.baseUrl}/embeddings`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Bearer ${this.apiKey}`,
+					},
+					body: JSON.stringify(requestData),
+				})
+
+				if (!response.ok) {
+					const errorText = await response.text()
+					throw new Error(`HTTP ${response.status}: ${errorText}`)
+				}
+
+				const result: JinaEmbeddingResponse = await response.json()
+				const embeddings = result.data.map(item => item.embedding)
+
+				return {
+					embeddings,
+					usage: {
+						promptTokens: result.usage.prompt_tokens,
+						totalTokens: result.usage.total_tokens,
+					},
+				}
+			} catch (error: any) {
+				const isRateLimitError = error.message?.includes('429')
+				const hasMoreAttempts = attempts < MAX_RETRIES - 1
+
+				if (isRateLimitError && hasMoreAttempts) {
+					const delayMs = INITIAL_DELAY_MS * Math.pow(2, attempts)
+					console.warn(`Rate limit hit, retrying in ${delayMs}ms (attempt ${attempts + 1}/${MAX_RETRIES})`)
+					await new Promise((resolve) => setTimeout(resolve, delayMs))
+					continue
+				}
+
+				console.error(`Jina embedder error (attempt ${attempts + 1}/${MAX_RETRIES}):`, error)
+
+				if (!hasMoreAttempts) {
+					throw new Error(
+						`Failed to create embeddings after ${MAX_RETRIES} attempts: ${error.message || error}`,
+					)
+				}
+
+				throw error
+			}
+		}
+
+		throw new Error(`Failed to create embeddings after ${MAX_RETRIES} attempts`)
+	}
+
+	/**
+	 * Returns information about this embedder
+	 */
+	get embedderInfo(): EmbedderInfo {
+		return {
+			name: "jina",
+		}
+	}
+}
