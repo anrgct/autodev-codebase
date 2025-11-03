@@ -349,11 +349,11 @@ class SimpleMCPStreamableClient {
             const response = await this.sendRequest('tools/call', {
                 name: 'search_codebase',
                 arguments: {
-                    query: 'CodeIndexManager',
+                    query: 'function',
                     limit: 3,
-                    filters: {
-                        pathFilters: ['.ts']   
-                    }
+                    // filters: {
+                    //     pathFilters: ['.ts']   
+                    // }
                 }
             });
             console.log('✅ Search result:', response);

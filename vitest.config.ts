@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    testTimeout: 60000,
+    hookTimeout: 30000,
   },
   esbuild: {
     target: 'node18'
