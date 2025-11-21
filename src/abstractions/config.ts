@@ -105,6 +105,7 @@ export interface ConfigSnapshot {
   modelId?: string
   openAiKey?: string
   ollamaBaseUrl?: string
+  ollamaApiKey?: string
   openAiCompatibleBaseUrl?: string
   openAiCompatibleApiKey?: string
   openAiCompatibleModelDimension?: number

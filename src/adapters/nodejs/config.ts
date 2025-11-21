@@ -15,8 +15,10 @@ export interface NodeConfigOptions {
   defaultConfig?: Partial<CodeIndexConfig>
   cliOverrides?: {
     ollamaUrl?: string
+    ollamaApiKey?: string
     model?: string
     qdrantUrl?: string
+    qdrantApiKey?: string
   }
 }
 
@@ -74,7 +76,8 @@ export class NodeConfigProvider implements IConfigProvider {
         provider: "ollama",
         modelId: config.embedder.model,
         ollamaOptions: {
-          ollamaBaseUrl: config.embedder.baseUrl
+          ollamaBaseUrl: config.embedder.baseUrl,
+          apiKey: config.embedder.apiKey
         }
       }
     } else if (config.embedder.provider === "openai-compatible") {
@@ -198,11 +201,17 @@ export class NodeConfigProvider implements IConfigProvider {
       if (this.cliOverrides.ollamaUrl && 'baseUrl' in this.config.embedder) {
         this.config.embedder.baseUrl = this.cliOverrides.ollamaUrl
       }
+      if (this.cliOverrides.ollamaApiKey !== undefined && 'apiKey' in this.config.embedder) {
+        this.config.embedder.apiKey = this.cliOverrides.ollamaApiKey
+      }
       if (this.cliOverrides.model && this.cliOverrides.model.trim()) {
         this.config.embedder.model = this.cliOverrides.model
       }
       if (this.cliOverrides.qdrantUrl) {
         this.config.qdrantUrl = this.cliOverrides.qdrantUrl
+      }
+      if (this.cliOverrides.qdrantApiKey !== undefined) {
+        this.config.qdrantApiKey = this.cliOverrides.qdrantApiKey
       }
     }
 

@@ -5,6 +5,9 @@
     "provider": "ollama",
     "model": "dengcao/Qwen3-Embedding-0.6B:Q8_0",
     "dimension": 1024,
-    "baseUrl": "http://localhost:11434"
-  }
+    "baseUrl": "http://localhost:11434",
+    "apiKey": ""
+  },
+  "qdrantUrl": "http://localhost:6333",
+  "qdrantApiKey": ""
 }

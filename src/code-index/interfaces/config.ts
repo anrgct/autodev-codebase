@@ -8,6 +8,7 @@ export interface OllamaEmbedderConfig {
 	baseUrl: string
 	model: string
 	dimension: number
+	apiKey?: string
 }
 
 /**

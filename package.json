@@ -53,7 +53,8 @@
     "undici-types": "^7.10.0",
     "uuid": "^10.0.0",
     "vitest": "^3.2.4",
-    "web-tree-sitter": "^0.23.0"
+    "web-tree-sitter": "^0.23.0",
+    "yargs": "^17.7.2"
   },
   "devDependencies": {
     "@rollup/plugin-commonjs": "^26.0.1",
@@ -65,6 +66,7 @@
     "@types/react": "^18.3.23",
     "@types/uuid": "^10.0.0",
     "@types/vscode": "^1.101.0",
+    "@types/yargs": "^17.0.32",
     "rollup": "^4.21.2",
     "tsx": "^4.20.3",
     "typescript": "^5.6.2",

@@ -21,6 +21,7 @@ export class CodeIndexConfigManager {
 	private modelId?: string
 	private openAiOptions?: ApiHandlerOptions
 	private ollamaOptions?: ApiHandlerOptions
+	private ollamaApiKey?: string
 	private openAiCompatibleOptions?: { baseUrl: string; apiKey: string; modelDimension?: number }
 	private qdrantUrl?: string = "http://localhost:6333"
 	private qdrantApiKey?: string
@@ -65,6 +66,8 @@ export class CodeIndexConfigManager {
 			this.ollamaOptions = {
 				ollamaBaseUrl: config.embedder.baseUrl
 			}
+			// Store the API key separately for Ollama
+			this.ollamaApiKey = config.embedder.apiKey
 			this.openAiOptions = undefined
 			this.openAiCompatibleOptions = undefined
 		} else if (config.embedder.provider === "openai-compatible") {
@@ -114,6 +117,7 @@ export class CodeIndexConfigManager {
 			modelId: this.modelId,
 			openAiKey: this.openAiOptions?.apiKey ?? "",
 			ollamaBaseUrl: this.ollamaOptions?.ollamaBaseUrl ?? "",
+			ollamaApiKey: this.ollamaApiKey ?? "",
 			openAiCompatibleBaseUrl: this.openAiCompatibleOptions?.baseUrl ?? "",
 			openAiCompatibleApiKey: this.openAiCompatibleOptions?.apiKey ?? "",
 			openAiCompatibleModelDimension: this.openAiCompatibleOptions?.modelDimension,
@@ -154,9 +158,10 @@ export class CodeIndexConfigManager {
 			const isConfigured = !!(openAiKey && qdrantUrl)
 			return isConfigured
 		} else if (this.embedderProvider === "ollama") {
-			// Ollama model ID has a default, so only base URL is strictly required for config
+			// Ollama model ID has a default, and we may have an API key
 			const ollamaBaseUrl = this.ollamaOptions?.ollamaBaseUrl
 			const qdrantUrl = this.qdrantUrl
+			// API key is optional for Ollama, so only base URL and qdrant URL are required
 			const isConfigured = !!(ollamaBaseUrl && qdrantUrl)
 			return isConfigured
 		} else if (this.embedderProvider === "openai-compatible") {
@@ -223,7 +228,11 @@ export class CodeIndexConfigManager {
 
 			if (this.embedderProvider === "ollama") {
 				const currentOllamaBaseUrl = this.ollamaOptions?.ollamaBaseUrl ?? ""
-				if (prevOllamaBaseUrl !== currentOllamaBaseUrl) {
+				const currentOllamaApiKey = this.ollamaApiKey ?? ""
+				if (
+					prevOllamaBaseUrl !== currentOllamaBaseUrl ||
+					prev.ollamaApiKey !== currentOllamaApiKey
+				) {
 					return true
 				}
 			}

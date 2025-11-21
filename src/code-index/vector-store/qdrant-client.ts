@@ -22,20 +22,41 @@ export class QdrantVectorStore implements IVectorStore {
 	 * Creates a new Qdrant vector store
 	 * @param workspacePath Path to the workspace
 	 * @param url Optional URL to the Qdrant server
+	 * @param apiKey Optional API key for Qdrant authentication
 	 */
 	constructor(workspacePath: string, url: string, vectorSize: number, apiKey?: string) {
-		this.client = new QdrantClient({
-			url: url ?? this.QDRANT_URL,
-			apiKey,
-			headers: {
-				"User-Agent": "Roo-Code",
-			},
-		})
+		// For HTTP connections with API key, we need to construct the client in a way
+		// that it will send the Authorization header properly
+		const fullUrl = url ?? this.QDRANT_URL;
+
+		// Create client options with URL
+		const clientOptions: any = {
+			url: fullUrl,
+		};
+
+		// Add User-Agent header first
+		clientOptions.headers = {
+			"User-Agent": "Roo-Code",
+		};
+
+		// For API key authentication, add both the apiKey option and Authorization header
+		// This addresses the issue where the library may not send the Authorization header
+		// properly over HTTP connections by ensuring it's explicitly included in requests
+		if (apiKey) {
+			// Add API key to client options
+			clientOptions.apiKey = apiKey;
+
+			// Ensure Authorization header is properly set for cases where the library
+			// doesn't automatically add it for HTTP connections
+			clientOptions.headers["Authorization"] = `Bearer ${apiKey}`;
+		}
+
+		this.client = new QdrantClient(clientOptions);
 
 		// Generate collection name from workspace path
-		const hash = createHash("sha256").update(workspacePath).digest("hex")
-		this.vectorSize = vectorSize
-		this.collectionName = `ws-${hash.substring(0, 16)}`
+		const hash = createHash("sha256").update(workspacePath).digest("hex");
+		this.vectorSize = vectorSize;
+		this.collectionName = `ws-${hash.substring(0, 16)}`;
 	}
 
 	private async getCollectionInfo(): Promise<Schemas["CollectionInfo"] | null> {

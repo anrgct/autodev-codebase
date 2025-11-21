@@ -63,6 +63,7 @@ export class CodeIndexServiceFactory {
 			return new CodeIndexOllamaEmbedder({
 				ollamaBaseUrl: embedderConfig.baseUrl,
 				ollamaModelId: embedderConfig.model,
+				apiKey: embedderConfig.apiKey,  // Pass the API key if available
 			})
 		} else if (embedderConfig.provider === "openai-compatible") {
 			if (!embedderConfig.baseUrl || !embedderConfig.apiKey) {

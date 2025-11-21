@@ -8,11 +8,13 @@ import { fetch, ProxyAgent } from "undici"
 export class CodeIndexOllamaEmbedder implements IEmbedder {
 	private readonly baseUrl: string
 	private readonly defaultModelId: string
+	private readonly apiKey?: string
 
 	constructor(options: ApiHandlerOptions) {
 		// Ensure ollamaBaseUrl and ollamaModelId exist on ApiHandlerOptions or add defaults
 		this.baseUrl = options['ollamaBaseUrl'] || "http://localhost:11434"
 		this.defaultModelId = options['ollamaModelId'] || "nomic-embed-text:latest"
+		this.apiKey = options['apiKey']
 	}
 
 	/**
@@ -48,6 +50,7 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
+				...(this.apiKey ? { "Authorization": `Bearer ${this.apiKey}` } : {}),
 			},
 			body: JSON.stringify({
 				model: modelToUse,

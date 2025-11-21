@@ -52,8 +52,10 @@ export function createTUIApp(options: CliOptions) {
             configPath,
             cliOverrides: {
               ollamaUrl: options.ollamaUrl,
+              ollamaApiKey: options.ollamaApiKey,
               model: options.model,
-              qdrantUrl: options.qdrantUrl
+              qdrantUrl: options.qdrantUrl,
+              qdrantApiKey: options.qdrantApiKey
             }
           }
         });
@@ -268,8 +270,10 @@ export async function startMCPServerMode(options: CliOptions): Promise<void> {
       configPath,
       cliOverrides: {
         ollamaUrl: options.ollamaUrl,
+        ollamaApiKey: options.ollamaApiKey,
         model: options.model,
-        qdrantUrl: options.qdrantUrl
+        qdrantUrl: options.qdrantUrl,
+        qdrantApiKey: options.qdrantApiKey
       }
     }
   });
