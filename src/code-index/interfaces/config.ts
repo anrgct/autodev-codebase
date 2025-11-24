@@ -32,9 +32,19 @@ export interface OpenAICompatibleEmbedderConfig {
 }
 
 /**
+ * Jina embedder configuration
+ */
+export interface JinaEmbedderConfig {
+	provider: "jina"
+	apiKey: string
+	model: string
+	dimension: number
+}
+
+/**
  * Union type for all embedder configurations
  */
-export type EmbedderConfig = OllamaEmbedderConfig | OpenAIEmbedderConfig | OpenAICompatibleEmbedderConfig
+export type EmbedderConfig = OllamaEmbedderConfig | OpenAIEmbedderConfig | OpenAICompatibleEmbedderConfig | JinaEmbedderConfig
 
 /**
  * Configuration state for the code indexing feature

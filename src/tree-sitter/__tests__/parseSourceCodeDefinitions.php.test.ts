@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions, inspectTreeStructure } from "./helpers"
 import { phpQuery } from "../queries"
 import samplePhpContent from "./fixtures/sample-php"

@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import { vueQuery } from "../queries/vue"
 import { sampleVue } from "./fixtures/sample-vue"

@@ -115,7 +115,7 @@ describe('Node.js Adapters Integration', () => {
       })
 
       expect(storage.getGlobalStorageUri()).toBe(customPath)
-      expect(storage.getCacheBasePath()).toBe(require('os').homedir()) // Now defaults to home directory
+      expect(storage.getCacheBasePath()).toBe(path.join(require('os').homedir(), '.autodev-cache')) // Defaults to .autodev-cache in home directory
     })
   })
 
@@ -298,7 +298,11 @@ describe('Node.js Adapters Integration', () => {
         configPath,
         defaultConfig: {
           isEnabled: false,
-          embedderProvider: "openai"
+          embedder: {
+            provider: "openai" as const,
+            model: "text-embedding-3-small",
+            dimension: 1536
+          }
         }
       })
     })
@@ -307,10 +311,11 @@ describe('Node.js Adapters Integration', () => {
       const testConfig = {
         isEnabled: true,
         isConfigured: true,
-        embedderProvider: "ollama",
-        ollamaOptions: {
+        embedder: {
+          provider: "ollama" as const,
           baseUrl: 'http://localhost:11434',
-          apiKey: ''
+          model: "dengcao/Qwen3-Embedding-0.6B:Q8_0",
+          dimension: 1024
         }
       }
 
@@ -318,21 +323,27 @@ describe('Node.js Adapters Integration', () => {
       const loadedConfig = await configProvider.loadConfig()
 
       expect(loadedConfig.isEnabled).toBe(true)
-      expect(loadedConfig.embedderProvider).toBe("ollama")
-      expect(loadedConfig.ollamaOptions?.baseUrl).toBe('http://localhost:11434')
+      expect(loadedConfig.embedder.provider).toBe("ollama")
+      expect(loadedConfig.embedder.baseUrl).toBe('http://localhost:11434')
     })
 
     it('should validate configuration', async () => {
-      // Test invalid configuration
+      // Test invalid configuration - missing OpenAI API key
       await configProvider.saveConfig({
         isEnabled: true,
-        embedderProvider: "openai"
-        // Missing required openAiOptions
+        embedder: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          dimension: 1536
+          // Missing required apiKey
+        }
+        // Missing required qdrantUrl
       })
 
       const validation = await configProvider.validateConfig()
       expect(validation.isValid).toBe(false)
       expect(validation.errors).toContain('OpenAI API key is required')
+      expect(validation.errors).toContain('Qdrant URL is required')
     })
 
     it('should notify configuration changes', (done) => {
@@ -385,9 +396,11 @@ describe('Node.js Adapters Integration', () => {
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
         isConfigured: true,
-        embedderProvider: "openai",
-        openAiOptions: {
-          apiKey: 'test-key'
+        embedder: {
+          provider: "openai",
+          apiKey: 'test-key',
+          model: "text-embedding-3-small",
+          dimension: 1536
         },
         qdrantUrl: 'http://localhost:6333'
       })

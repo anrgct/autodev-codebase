@@ -1,50 +1,93 @@
 import * as fs from "fs/promises"
+import { vi } from "vitest"
 
-import { parseSourceCodeForDefinitionsTopLevel } from "../index"
+import { parseSourceCodeForDefinitionsTopLevel, TreeSitterDependencies } from "../index"
 import { listFiles } from "../../glob/list-files"
 import { loadRequiredLanguageParsers } from "../languageParser"
-import { fileExistsAtPath } from "../../../utils/fs"
+import { fileExistsAtPath } from "../../utils/fs"
+import { IFileSystem, IWorkspace, IPathUtils } from "../../abstractions"
 
 // Mock dependencies
-jest.mock("../../glob/list-files")
-jest.mock("../languageParser")
-jest.mock("../../../utils/fs")
-jest.mock("fs/promises")
+vi.mock("../../glob/list-files")
+vi.mock("../languageParser")
+vi.mock("../../utils/fs")
+vi.mock("fs/promises")
+
+// Create mock dependencies for testing
+const createMockDependencies = (): TreeSitterDependencies => ({
+	fileSystem: {
+		exists: vi.fn().mockResolvedValue(true),
+		readFile: vi.fn().mockResolvedValue(new TextEncoder().encode("mock content")),
+		writeFile: vi.fn(),
+		stat: vi.fn(),
+		readdir: vi.fn(),
+		mkdir: vi.fn(),
+		delete: vi.fn(),
+	} as IFileSystem,
+	workspace: {
+		getRootPath: () => "/test/path",
+		getRelativePath: (path: string) => path.replace("/test/path/", ""),
+		getIgnoreRules: () => [],
+		shouldIgnore: vi.fn().mockResolvedValue(false),
+		getName: () => "test-workspace",
+		getWorkspaceFolders: () => [],
+		findFiles: vi.fn().mockResolvedValue([]),
+	} as IWorkspace,
+	pathUtils: {
+		join: (...paths: string[]) => paths.join("/"),
+		dirname: (path: string) => path.split("/").slice(0, -1).join("/"),
+		basename: (path: string, ext?: string) => {
+			const base = path.split("/").pop() || ""
+			return ext ? base.replace(ext, "") : base
+		},
+		extname: (path: string) => {
+			const parts = path.split(".")
+			return parts.length > 1 ? `.${parts.pop()}` : ""
+		},
+		resolve: (...paths: string[]) => paths.join("/"),
+		isAbsolute: (path: string) => path.startsWith("/"),
+		relative: (from: string, to: string) => to.replace(from + "/", ""),
+		normalize: (path: string) => path.replace(/\\/g, "/"),
+	} as IPathUtils,
+})
 
 describe("Tree-sitter Service", () => {
+	let mockDependencies: TreeSitterDependencies
+
 	beforeEach(() => {
-		jest.clearAllMocks()
-		;(fileExistsAtPath as jest.Mock).mockResolvedValue(true)
+		vi.clearAllMocks()
+		mockDependencies = createMockDependencies()
+		vi.mocked(fileExistsAtPath).mockResolvedValue(true)
 	})
 
 	describe("parseSourceCodeForDefinitionsTopLevel", () => {
 		it("should handle non-existent directory", async () => {
-			;(fileExistsAtPath as jest.Mock).mockResolvedValue(false)
+			vi.mocked(mockDependencies.fileSystem.exists).mockResolvedValue(false)
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/non/existent/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/non/existent/path", mockDependencies)
 			expect(result).toBe("This directory does not exist or you do not have permission to access it.")
 		})
 
 		it("should handle empty directory", async () => {
-			;(listFiles as jest.Mock).mockResolvedValue([[], new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue([])
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 			expect(result).toBe("No source code definitions found.")
 		})
 
 		it("should parse TypeScript files correctly", async () => {
 			const mockFiles = ["/test/path/file1.ts", "/test/path/file2.tsx", "/test/path/readme.md"]
 
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			const mockParser = {
-				parse: jest.fn().mockReturnValue({
+				parse: vi.fn().mockReturnValue({
 					rootNode: "mockNode",
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn().mockReturnValue([
+				captures: vi.fn().mockReturnValue([
 					{
 						// Must span 4 lines to meet MIN_COMPONENT_LINES
 						node: {
@@ -61,13 +104,13 @@ describe("Tree-sitter Service", () => {
 				]),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				ts: { parser: mockParser, query: mockQuery },
 				tsx: { parser: mockParser, query: mockQuery },
 			})
-			;(fs.readFile as jest.Mock).mockResolvedValue("export class TestClass {\n  constructor() {}\n}")
+			vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode("export class TestClass {\n  constructor() {}\n}"))
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 
 			expect(result).toContain("file1.ts")
 			expect(result).toContain("file2.tsx")
@@ -77,16 +120,16 @@ describe("Tree-sitter Service", () => {
 
 		it("should handle multiple definition types", async () => {
 			const mockFiles = ["/test/path/file.ts"]
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			const mockParser = {
-				parse: jest.fn().mockReturnValue({
+				parse: vi.fn().mockReturnValue({
 					rootNode: "mockNode",
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn().mockReturnValue([
+				captures: vi.fn().mockReturnValue([
 					{
 						node: {
 							startPosition: { row: 0 },
@@ -114,15 +157,15 @@ describe("Tree-sitter Service", () => {
 				]),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			;vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				ts: { parser: mockParser, query: mockQuery },
 			})
 
 			const fileContent = "class TestClass {\n" + "  constructor() {}\n" + "  testMethod() {}\n" + "}"
 
-			;(fs.readFile as jest.Mock).mockResolvedValue(fileContent)
+			vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(fileContent))
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 
 			expect(result).toContain("class TestClass")
 			expect(result).toContain("testMethod()")
@@ -130,30 +173,30 @@ describe("Tree-sitter Service", () => {
 
 		it("should handle parsing errors gracefully", async () => {
 			const mockFiles = ["/test/path/file.ts"]
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			const mockParser = {
-				parse: jest.fn().mockImplementation(() => {
+				parse: vi.fn().mockImplementation(() => {
 					throw new Error("Parsing error")
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn(),
+				captures: vi.fn(),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				ts: { parser: mockParser, query: mockQuery },
 			})
-			;(fs.readFile as jest.Mock).mockResolvedValue("invalid code")
+			vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode("invalid code"))
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 			expect(result).toBe("No source code definitions found.")
 		})
 
 		it("should capture arrow functions in JSX attributes with 4+ lines", async () => {
 			const mockFiles = ["/test/path/jsx-arrow.tsx"]
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			// Embed the fixture content directly
 			const fixtureContent = `import React from 'react';
@@ -176,7 +219,7 @@ export const CheckboxExample = () => (
 		  </label>
 		</VSCodeCheckbox>
 );`
-			;(fs.readFile as jest.Mock).mockResolvedValue(fixtureContent)
+			vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(fixtureContent))
 
 			const lines = fixtureContent.split("\n")
 
@@ -268,13 +311,13 @@ export const CheckboxExample = () => (
 			}
 
 			const mockParser = {
-				parse: jest.fn().mockReturnValue({
+				parse: vi.fn().mockReturnValue({
 					rootNode: mockRootNode,
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn().mockImplementation(() => {
+				captures: vi.fn().mockImplementation(() => {
 					// Log tree structure for debugging
 					console.log("TREE STRUCTURE:")
 					if (mockRootNode.printTree) {
@@ -301,11 +344,11 @@ export const CheckboxExample = () => (
 				}),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				tsx: { parser: mockParser, query: mockQuery },
 			})
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 
 			// Verify function found and correctly parsed
 			expect(result).toContain("jsx-arrow.tsx")
@@ -320,23 +363,23 @@ export const CheckboxExample = () => (
 			const mockFiles = Array(100)
 				.fill(0)
 				.map((_, i) => `/test/path/file${i}.ts`)
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			const mockParser = {
-				parse: jest.fn().mockReturnValue({
+				parse: vi.fn().mockReturnValue({
 					rootNode: "mockNode",
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn().mockReturnValue([]),
+				captures: vi.fn().mockReturnValue([]),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				ts: { parser: mockParser, query: mockQuery },
 			})
 
-			await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 
 			// Should only process first 50 files
 			expect(mockParser.parse).toHaveBeenCalledTimes(50)
@@ -353,16 +396,16 @@ export const CheckboxExample = () => (
 				"/test/path/script.kts",
 			]
 
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			const mockParser = {
-				parse: jest.fn().mockReturnValue({
+				parse: vi.fn().mockReturnValue({
 					rootNode: "mockNode",
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn().mockReturnValue([
+				captures: vi.fn().mockReturnValue([
 					{
 						node: {
 							startPosition: { row: 0 },
@@ -378,7 +421,7 @@ export const CheckboxExample = () => (
 				]),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				js: { parser: mockParser, query: mockQuery },
 				py: { parser: mockParser, query: mockQuery },
 				rs: { parser: mockParser, query: mockQuery },
@@ -387,9 +430,9 @@ export const CheckboxExample = () => (
 				kt: { parser: mockParser, query: mockQuery },
 				kts: { parser: mockParser, query: mockQuery },
 			})
-			;(fs.readFile as jest.Mock).mockResolvedValue("function test() {}")
+			vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode("function test() {}"))
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 
 			expect(result).toContain("script.js")
 			expect(result).toContain("app.py")
@@ -401,17 +444,17 @@ export const CheckboxExample = () => (
 		})
 
 		it("should normalize paths in output", async () => {
-			const mockFiles = ["/test/path/dir\\file.ts"]
-			;(listFiles as jest.Mock).mockResolvedValue([mockFiles, new Set()])
+			const mockFiles = ["/test/path/dir/file.ts"] // Use normalized path in mock
+			vi.mocked(mockDependencies.workspace.findFiles).mockResolvedValue(mockFiles)
 
 			const mockParser = {
-				parse: jest.fn().mockReturnValue({
+				parse: vi.fn().mockReturnValue({
 					rootNode: "mockNode",
 				}),
 			}
 
 			const mockQuery = {
-				captures: jest.fn().mockReturnValue([
+				captures: vi.fn().mockReturnValue([
 					{
 						node: {
 							startPosition: { row: 0 },
@@ -427,12 +470,12 @@ export const CheckboxExample = () => (
 				]),
 			}
 
-			;(loadRequiredLanguageParsers as jest.Mock).mockResolvedValue({
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({
 				ts: { parser: mockParser, query: mockQuery },
 			})
-			;(fs.readFile as jest.Mock).mockResolvedValue("class Test {}")
+			vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode("class Test {}"))
 
-			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path")
+			const result = await parseSourceCodeForDefinitionsTopLevel("/test/path", mockDependencies)
 
 			// Should use forward slashes regardless of platform
 			expect(result).toContain("dir/file.ts")

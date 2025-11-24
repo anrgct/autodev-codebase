@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions } from "./helpers"
 import { csharpQuery } from "../queries"
 import sampleCSharpContent from "./fixtures/sample-c-sharp"

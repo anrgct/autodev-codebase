@@ -31,7 +31,7 @@ TODO: The following structures can be parsed by tree-sitter but lack query suppo
    - Parsed but no specific patterns for React synthetic events
 */
 
-import { describe, expect, it, jest, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions, mockedFs } from "./helpers"
 import sampleTsxContent from "./fixtures/sample-tsx"
 
@@ -41,7 +41,7 @@ describe("parseSourceCodeDefinitionsForFile with TSX", () => {
 
 	beforeAll(async () => {
 		// Set up mock for file system operations
-		jest.mock("fs/promises")
+		vi.mock("fs/promises")
 		mockedFs.readFile.mockResolvedValue(Buffer.from(sampleTsxContent))
 
 		// Cache the parse result for use in all tests

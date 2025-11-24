@@ -1,4 +1,4 @@
-import { describe, expect, it, jest, beforeEach } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { rubyQuery } from "../queries"
 import { testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import sampleRubyContent from "./fixtures/sample-ruby"
@@ -11,17 +11,17 @@ const rubyOptions = {
 }
 
 // Setup shared mocks
-jest.mock("fs/promises")
-jest.mock("../languageParser", () => ({
-	loadRequiredLanguageParsers: jest.fn(),
+vi.mock("fs/promises")
+vi.mock("../languageParser", () => ({
+	loadRequiredLanguageParsers: vi.fn(),
 }))
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+vi.mock("../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
 describe("Ruby Source Code Definition Parsing", () => {
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
 	})
 
 	it("should capture standard and nested class definitions", async () => {

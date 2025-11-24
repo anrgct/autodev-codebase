@@ -8,7 +8,7 @@ TODO: The following structures can be parsed by tree-sitter but lack query suppo
    (attribute (attribute_name) (quoted_attribute_value (attribute_value)))
 */
 
-import { describe, it, expect, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import { sampleVue } from "./fixtures/sample-vue"
 import { vueQuery } from "../queries/vue"

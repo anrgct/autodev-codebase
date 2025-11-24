@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions } from "./helpers"
 import { rubyQuery } from "../queries"
 import sampleRubyContent from "./fixtures/sample-ruby"

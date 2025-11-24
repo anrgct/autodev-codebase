@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import systemrdlQuery from "../queries/systemrdl"
 import sampleSystemRDLContent from "./fixtures/sample-systemrdl"

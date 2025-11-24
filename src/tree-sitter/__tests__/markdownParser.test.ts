@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { parseMarkdown, formatMarkdownCaptures } from "../markdownParser"
 
 describe("markdownParser", () => {

@@ -48,3 +48,5 @@ pnpm-debug.log*
 /.autodev-cache
 /.rollup.cache
 /.repoproject
+/upgrade_changes
+/tasks

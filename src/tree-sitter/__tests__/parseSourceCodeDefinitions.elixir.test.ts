@@ -1,4 +1,4 @@
-import { describe, expect, it, jest, beforeAll, beforeEach } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { elixirQuery } from "../queries"
 import { testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import sampleElixirContent from "./fixtures/sample-elixir"
@@ -12,16 +12,16 @@ const elixirOptions = {
 }
 
 // Mock file system operations
-jest.mock("fs/promises")
+vi.mock("fs/promises")
 
 // Mock loadRequiredLanguageParsers
-jest.mock("../languageParser", () => ({
-	loadRequiredLanguageParsers: jest.fn(),
+vi.mock("../languageParser", () => ({
+	loadRequiredLanguageParsers: vi.fn(),
 }))
 
 // Mock fileExistsAtPath to return true for our test paths
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+vi.mock("../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
 describe("parseSourceCodeDefinitionsForFile with Elixir", () => {
@@ -34,7 +34,7 @@ describe("parseSourceCodeDefinitionsForFile with Elixir", () => {
 	})
 
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
 	})
 
 	it("should parse module definitions", () => {

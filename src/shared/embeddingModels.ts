@@ -2,7 +2,7 @@
  * Defines profiles for different embedding models, including their dimensions.
  */
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" // Add other providers as needed
+export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" // Add other providers as needed
 
 export interface EmbeddingModelProfile {
 	dimension: number
@@ -34,6 +34,12 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
 		"text-embedding-3-small": { dimension: 1536 },
 		"text-embedding-3-large": { dimension: 3072 },
 		"text-embedding-ada-002": { dimension: 1536 },
+	},
+	jina: {
+		"jina-embeddings-v2-base-code": { dimension: 768 },
+		"jina-code-embeddings-0.5b": { dimension: 896 },
+		"jina-code-embeddings-1.5b": { dimension: 1536 },
+		"jina-embeddings-v4": { dimension: 2048 },
 	},
 }
 
@@ -86,6 +92,15 @@ export function getDefaultModelId(provider: EmbedderProvider): string {
 			console.warn("No default Ollama model found in profiles.")
 			// Return a placeholder or throw an error, depending on desired behavior
 			return "unknown-default" // Placeholder specific model ID
+		}
+		case "jina": {
+			const jinaModels = EMBEDDING_MODEL_PROFILES.jina
+			const defaultJinaModel = jinaModels && Object.keys(jinaModels)[0]
+			if (defaultJinaModel) {
+				return defaultJinaModel
+			}
+			console.warn("No default Jina model found in profiles.")
+			return "jina-embeddings-v2-base-code"
 		}
 		default:
 			// Fallback for unknown providers

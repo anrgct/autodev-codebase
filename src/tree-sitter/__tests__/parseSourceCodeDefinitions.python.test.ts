@@ -22,7 +22,7 @@ TODO: The following structures can be parsed by tree-sitter but lack query suppo
    Example: Nested functions with nonlocal/global declarations
 */
 
-import { describe, expect, it, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import { samplePythonContent } from "./fixtures/sample-python"
 import { pythonQuery } from "../queries"

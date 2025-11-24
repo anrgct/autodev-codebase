@@ -1,4 +1,4 @@
-import { describe, expect, it, jest, beforeAll, beforeEach } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { javaQuery } from "../queries"
 import { testParseSourceCodeDefinitions } from "./helpers"
 import sampleJavaContent from "./fixtures/sample-java"
@@ -39,7 +39,7 @@ describe("parseSourceCodeDefinitionsForFile with Java", () => {
 	})
 
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
 	})
 
 	it("should parse package declarations", () => {

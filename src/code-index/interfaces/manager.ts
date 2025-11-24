@@ -72,7 +72,7 @@ export interface ICodeIndexManager {
 	dispose(): void
 }
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible"
+export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina"
 
 export interface IndexProgressUpdate {
 	systemStatus: IndexingState

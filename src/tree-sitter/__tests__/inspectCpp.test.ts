@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions } from "./helpers"
 import { cppQuery } from "../queries"
 import sampleCppContent from "./fixtures/sample-cpp"

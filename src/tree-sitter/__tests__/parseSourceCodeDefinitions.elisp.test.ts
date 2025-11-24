@@ -8,7 +8,7 @@ TODO: The following structures can be parsed by tree-sitter but lack query suppo
    (defconst name value docstring)
 */
 
-import { describe, it, expect } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import { elispQuery } from "../queries/elisp"
 import sampleElispContent from "./fixtures/sample-elisp"

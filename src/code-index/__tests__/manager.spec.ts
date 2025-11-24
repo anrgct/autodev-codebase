@@ -1,54 +1,109 @@
 import { vitest, describe, it, expect, beforeEach, afterEach } from "vitest"
 import * as vscode from "vscode"
 import { CodeIndexManager } from "../manager"
-import { ContextProxy } from "../../../core/config/ContextProxy"
+
 
 // Mock only the essential dependencies
 vitest.mock("../../../utils/path", () => ({
 	getWorkspacePath: vitest.fn(() => "/test/workspace"),
 }))
 
+// Mock the StateManager class
+const mockStateManager = {
+	onProgressUpdate: vitest.fn(),
+	getCurrentStatus: vitest.fn(),
+	dispose: vitest.fn(),
+	setSystemState: vitest.fn(),
+	reportBlockIndexingProgress: vitest.fn(),
+	reportFileQueueProgress: vitest.fn(),
+	state: 'Standby' as any,
+}
+
 vitest.mock("../state-manager", () => ({
-	CodeIndexStateManager: vitest.fn().mockImplementation(() => ({
-		onProgressUpdate: vitest.fn(),
-		getCurrentStatus: vitest.fn(),
-		dispose: vitest.fn(),
-	})),
+	CodeIndexStateManager: vitest.fn().mockImplementation(() => mockStateManager),
 }))
 
 describe("CodeIndexManager - handleExternalSettingsChange regression", () => {
-	let mockContext: any
+	let mockDependencies: any
 	let manager: CodeIndexManager
 
 	beforeEach(() => {
 		// Clear all instances before each test
-		CodeIndexManager.disposeAll()
-
-		mockContext = {
-			subscriptions: [],
-			workspaceState: {} as any,
-			globalState: {} as any,
-			extensionUri: {} as any,
-			extensionPath: "/test/extension",
-			asAbsolutePath: vitest.fn(),
-			storageUri: {} as any,
-			storagePath: "/test/storage",
-			globalStorageUri: {} as any,
-			globalStoragePath: "/test/global-storage",
-			logUri: {} as any,
-			logPath: "/test/log",
-			extensionMode: 3, // vscode.ExtensionMode.Test
-			secrets: {} as any,
-			environmentVariableCollection: {} as any,
-			extension: {} as any,
-			languageModelAccessInformation: {} as any,
+		try {
+			CodeIndexManager.disposeAll()
+		} catch (error) {
+			// Ignore dispose errors in test setup
+			console.warn('Dispose error in test setup:', error)
 		}
 
-		manager = CodeIndexManager.getInstance(mockContext)!
+		// Setup mock dependencies with proper interface
+		mockDependencies = {
+			fileSystem: {
+				readFile: vitest.fn(),
+				writeFile: vitest.fn(),
+				exists: vitest.fn(),
+				mkdir: vitest.fn(),
+				stat: vitest.fn(),
+			},
+			storage: {
+				get: vitest.fn(),
+				set: vitest.fn(),
+				delete: vitest.fn(),
+				clear: vitest.fn(),
+			},
+			eventBus: {
+				on: vitest.fn(),
+				emit: vitest.fn(),
+				once: vitest.fn(),
+			},
+			workspace: {
+				getRootPath: vitest.fn().mockReturnValue("/test/workspace"),
+				getRelativePath: vitest.fn(),
+				getIgnoreRules: vitest.fn().mockReturnValue([]),
+				shouldIgnore: vitest.fn().mockResolvedValue(false),
+				getName: vitest.fn().mockReturnValue("test-workspace"),
+				getWorkspaceFolders: vitest.fn().mockReturnValue([]),
+				findFiles: vitest.fn().mockResolvedValue([]),
+			},
+			pathUtils: {
+				join: vitest.fn(),
+				normalize: vitest.fn(),
+				isAbsolute: vitest.fn(),
+				resolve: vitest.fn(),
+				extname: vitest.fn(),
+			},
+			configProvider: {
+				getConfig: vitest.fn(),
+				getEmbedderConfig: vitest.fn(),
+				getVectorStoreConfig: vitest.fn(),
+				isCodeIndexEnabled: vitest.fn(),
+				getSearchConfig: vitest.fn(),
+				onConfigChange: vitest.fn().mockReturnValue(() => {}),
+			},
+			logger: {
+				debug: vitest.fn(),
+				info: vitest.fn(),
+				warn: vitest.fn(),
+				error: vitest.fn(),
+			},
+		}
+
+		// Ensure workspace is properly mocked before getInstance
+		expect(mockDependencies.workspace).toBeDefined()
+		expect(mockDependencies.workspace.getRootPath).toBeDefined()
+
+		manager = CodeIndexManager.getInstance(mockDependencies)!
+		expect(manager).toBeDefined()
 	})
 
 	afterEach(() => {
-		CodeIndexManager.disposeAll()
+		// Clear all instances, handling potential dispose errors
+		try {
+			CodeIndexManager.disposeAll()
+		} catch (error) {
+			// Ignore dispose errors in tests
+			console.warn('Dispose error in test cleanup:', error)
+		}
 	})
 
 	describe("handleExternalSettingsChange", () => {

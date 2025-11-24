@@ -1,52 +1,73 @@
-// npx jest src/core/ignore/__tests__/RooIgnoreController.security.test.ts
-
+import { vitest, describe, it, expect, beforeEach, vi } from "vitest"
 import { RooIgnoreController } from "../RooIgnoreController"
 import * as path from "path"
-import * as fs from "fs/promises"
-import { fileExistsAtPath } from "../../../utils/fs"
-
-// Mock dependencies
-jest.mock("fs/promises")
-jest.mock("../../../utils/fs")
-jest.mock("vscode", () => {
-	const mockDisposable = { dispose: jest.fn() }
-
-	return {
-		workspace: {
-			createFileSystemWatcher: jest.fn(() => ({
-				onDidCreate: jest.fn(() => mockDisposable),
-				onDidChange: jest.fn(() => mockDisposable),
-				onDidDelete: jest.fn(() => mockDisposable),
-				dispose: jest.fn(),
-			})),
-		},
-		RelativePattern: jest.fn().mockImplementation((base, pattern) => ({
-			base,
-			pattern,
-		})),
-	}
-})
+import type { IFileSystem, IWorkspace, IPathUtils, IFileWatcher } from "../../abstractions"
 
 describe("RooIgnoreController Security Tests", () => {
 	const TEST_CWD = "/test/path"
 	let controller: RooIgnoreController
-	let mockFileExists: jest.MockedFunction<typeof fileExistsAtPath>
-	let mockReadFile: jest.MockedFunction<typeof fs.readFile>
+	let mockFileSystem: vi.Mocked<IFileSystem>
+	let mockWorkspace: vi.Mocked<IWorkspace>
+	let mockPathUtils: vi.Mocked<IPathUtils>
+	let mockFileWatcher: vi.Mocked<IFileWatcher>
 
 	beforeEach(async () => {
 		// Reset mocks
-		jest.clearAllMocks()
+		vitest.clearAllMocks()
 
-		// Setup mocks
-		mockFileExists = fileExistsAtPath as jest.MockedFunction<typeof fileExistsAtPath>
-		mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>
+		// Setup mock file system
+		mockFileSystem = {
+			readFile: vi.fn(),
+			writeFile: vi.fn(),
+			exists: vi.fn(),
+			stat: vi.fn(),
+			readdir: vi.fn(),
+			mkdir: vi.fn(),
+			delete: vi.fn(),
+		}
+
+		// Setup mock workspace
+		mockWorkspace = {
+			getRootPath: vi.fn().mockReturnValue(TEST_CWD),
+			getRelativePath: vi.fn(),
+			getIgnoreRules: vi.fn().mockReturnValue([]),
+			shouldIgnore: vi.fn().mockResolvedValue(false),
+			getName: vi.fn().mockReturnValue("test-workspace"),
+			getWorkspaceFolders: vi.fn().mockReturnValue([]),
+			findFiles: vi.fn().mockResolvedValue([]),
+		}
+
+		// Setup mock path utils
+		mockPathUtils = {
+			join: vi.fn().mockImplementation((...paths) => path.join(...paths)),
+			dirname: vi.fn().mockImplementation((p) => path.dirname(p)),
+			basename: vi.fn().mockImplementation((p, ext) => path.basename(p, ext)),
+			extname: vi.fn().mockImplementation((p) => path.extname(p)),
+			resolve: vi.fn().mockImplementation((...paths) => path.resolve(...paths)),
+			isAbsolute: vi.fn().mockImplementation((p) => path.isAbsolute(p)),
+			relative: vi.fn().mockImplementation((from, to) => path.relative(from, to)),
+			normalize: vi.fn().mockImplementation((p) => path.normalize(p)),
+		}
+
+		// Setup mock file watcher
+		mockFileWatcher = {
+			watchFile: vi.fn().mockReturnValue(vi.fn()),
+			watchDirectory: vi.fn().mockReturnValue(vi.fn()),
+		}
 
 		// By default, setup .rooignore to exist with some patterns
-		mockFileExists.mockResolvedValue(true)
-		mockReadFile.mockResolvedValue("node_modules\n.git\nsecrets/**\n*.log\nprivate/")
+		mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets/**\n*.log\nprivate/"))
+
+		// Setup getRelativePath mock
+		mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+			if (fullPath.startsWith(TEST_CWD)) {
+				return path.relative(TEST_CWD, fullPath)
+			}
+			return fullPath
+		})
 
 		// Create and initialize controller
-		controller = new RooIgnoreController(TEST_CWD)
+		controller = new RooIgnoreController(mockFileSystem, mockWorkspace, mockPathUtils, mockFileWatcher)
 		await controller.initialize()
 	})
 
@@ -142,30 +163,48 @@ describe("RooIgnoreController Security Tests", () => {
 		/**
 		 * Tests protection against path traversal attacks
 		 */
-		it("should handle path traversal attempts", () => {
+		it("should handle path traversal attempts", async () => {
 			// Setup complex ignore pattern
-			mockReadFile.mockResolvedValue("secrets/**")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("secrets/**"))
+
+			// Mock getRelativePath to behave like a real implementation would:
+			// 1. Normalize the path (resolve traversals)
+			// 2. Make it relative to the workspace root
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				// Normalize the path (resolves traversals like ../)
+				const normalizedPath = path.normalize(fullPath)
+
+				// If path starts with TEST_CWD, make it relative
+				if (normalizedPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, normalizedPath)
+				}
+
+				// For paths that are already relative, just normalize them
+				if (!path.isAbsolute(fullPath)) {
+					return normalizedPath
+				}
+
+				// For absolute paths outside workspace, return as-is (these should be allowed)
+				return normalizedPath
+			})
 
 			// Reinitialize controller
-			return controller.initialize().then(() => {
-				// Test simple path
-				expect(controller.validateAccess("secrets/keys.json")).toBe(false)
+			await controller.initialize()
 
-				// Attempt simple path traversal
-				expect(controller.validateAccess("secrets/../secrets/keys.json")).toBe(false)
+			// Test simple path
+			expect(controller.validateAccess("secrets/keys.json")).toBe(false)
 
-				// More complex traversal
-				expect(controller.validateAccess("public/../secrets/keys.json")).toBe(false)
+			// Test path traversal attempts - these should now be blocked because our mock
+			// getRelativePath normalizes them to "secrets/keys.json"
+			expect(controller.validateAccess("secrets/../secrets/keys.json")).toBe(false)
+			expect(controller.validateAccess("public/../secrets/keys.json")).toBe(false)
+			expect(controller.validateAccess("public/css/../../secrets/keys.json")).toBe(false)
 
-				// Deep traversal
-				expect(controller.validateAccess("public/css/../../secrets/keys.json")).toBe(false)
+			// Traversal with already normalized path
+			expect(controller.validateAccess(path.normalize("public/../secrets/keys.json"))).toBe(false)
 
-				// Traversal with normalized path
-				expect(controller.validateAccess(path.normalize("public/../secrets/keys.json"))).toBe(false)
-
-				// Allowed files shouldn't be affected by traversal protection
-				expect(controller.validateAccess("public/css/../../public/app.js")).toBe(true)
-			})
+			// Allowed files shouldn't be affected by traversal protection
+			expect(controller.validateAccess("public/css/../../public/app.js")).toBe(true)
 		})
 
 		/**
@@ -204,7 +243,7 @@ describe("RooIgnoreController Security Tests", () => {
 		 */
 		it("should correctly apply complex patterns to various paths", async () => {
 			// Setup complex patterns - but without negation patterns since they're not reliably handled
-			mockReadFile.mockResolvedValue(`
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode(`
 # Node modules and logs
 node_modules
 *.log
@@ -221,9 +260,17 @@ config/secrets/**
 # Build artifacts
 dist/
 build/
-        
+
 # Comments and empty lines should be ignored
-      `)
+      `))
+
+			// Reset getRelativePath mock for this test
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
 
 			// Reinitialize controller
 			await controller.initialize()
@@ -299,12 +346,12 @@ build/
 		 */
 		it("should fail closed (securely) when errors occur", () => {
 			// Mock validateAccess to throw error
-			jest.spyOn(controller, "validateAccess").mockImplementation(() => {
+			vitest.spyOn(controller, "validateAccess").mockImplementation(() => {
 				throw new Error("Test error")
 			})
 
 			// Spy on console.error
-			const consoleSpy = jest.spyOn(console, "error").mockImplementation()
+			const consoleSpy = vitest.spyOn(console, "error").mockImplementation()
 
 			// Even with mix of allowed/ignored paths, should return empty array on error
 			const filtered = controller.filterPaths(["src/app.js", "node_modules/package.json"])

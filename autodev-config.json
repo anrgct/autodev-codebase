@@ -2,10 +2,16 @@
   "isEnabled": true,
   "isConfigured": true,
   "embedder": {
+    "provider": "openai",
+    "apiKey": "test-key",
+    "model": "text-embedding-3-small",
+    "dimension": 1536
+  },
+  "embedder": {
     "provider": "ollama",
     "model": "qwen3-embedding:0.6b",
     "dimension": 1024,
     "baseUrl": "http://localhost:11434"
   },
-  "embedderProvider": "ollama"
+  "qdrantUrl": "http://localhost:6333"
 }

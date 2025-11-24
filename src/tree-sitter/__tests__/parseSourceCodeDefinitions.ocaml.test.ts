@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import { ocamlQuery } from "../queries"
 import { sampleOCaml } from "./fixtures/sample-ocaml"

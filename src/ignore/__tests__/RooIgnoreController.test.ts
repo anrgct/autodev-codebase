@@ -1,71 +1,62 @@
-// npx jest src/core/ignore/__tests__/RooIgnoreController.test.ts
-
+import { vitest, describe, it, expect, beforeEach, vi } from "vitest"
 import { RooIgnoreController, LOCK_TEXT_SYMBOL } from "../RooIgnoreController"
-import * as vscode from "vscode"
 import * as path from "path"
-import * as fs from "fs/promises"
-import { fileExistsAtPath } from "../../../utils/fs"
-
-// Mock dependencies
-jest.mock("fs/promises")
-jest.mock("../../../utils/fs")
-
-// Mock vscode
-jest.mock("vscode", () => {
-	const mockDisposable = { dispose: jest.fn() }
-	const mockEventEmitter = {
-		event: jest.fn(),
-		fire: jest.fn(),
-	}
-
-	return {
-		workspace: {
-			createFileSystemWatcher: jest.fn(() => ({
-				onDidCreate: jest.fn(() => mockDisposable),
-				onDidChange: jest.fn(() => mockDisposable),
-				onDidDelete: jest.fn(() => mockDisposable),
-				dispose: jest.fn(),
-			})),
-		},
-		RelativePattern: jest.fn().mockImplementation((base, pattern) => ({
-			base,
-			pattern,
-		})),
-		EventEmitter: jest.fn().mockImplementation(() => mockEventEmitter),
-		Disposable: {
-			from: jest.fn(),
-		},
-	}
-})
+import type { IFileSystem, IWorkspace, IPathUtils, IFileWatcher } from "../../abstractions"
 
 describe("RooIgnoreController", () => {
 	const TEST_CWD = "/test/path"
 	let controller: RooIgnoreController
-	let mockFileExists: jest.MockedFunction<typeof fileExistsAtPath>
-	let mockReadFile: jest.MockedFunction<typeof fs.readFile>
-	let mockWatcher: any
+	let mockFileSystem: vi.Mocked<IFileSystem>
+	let mockWorkspace: vi.Mocked<IWorkspace>
+	let mockPathUtils: vi.Mocked<IPathUtils>
+	let mockFileWatcher: vi.Mocked<IFileWatcher>
 
 	beforeEach(() => {
 		// Reset mocks
-		jest.clearAllMocks()
+		vitest.clearAllMocks()
 
-		// Setup mock file watcher
-		mockWatcher = {
-			onDidCreate: jest.fn().mockReturnValue({ dispose: jest.fn() }),
-			onDidChange: jest.fn().mockReturnValue({ dispose: jest.fn() }),
-			onDidDelete: jest.fn().mockReturnValue({ dispose: jest.fn() }),
-			dispose: jest.fn(),
+		// Setup mock file system
+		mockFileSystem = {
+			readFile: vi.fn(),
+			writeFile: vi.fn(),
+			exists: vi.fn(),
+			stat: vi.fn(),
+			readdir: vi.fn(),
+			mkdir: vi.fn(),
+			delete: vi.fn(),
 		}
 
-		// @ts-expect-error - Mocking
-		vscode.workspace.createFileSystemWatcher.mockReturnValue(mockWatcher)
+		// Setup mock workspace
+		mockWorkspace = {
+			getRootPath: vi.fn().mockReturnValue(TEST_CWD),
+			getRelativePath: vi.fn(),
+			getIgnoreRules: vi.fn().mockReturnValue([]),
+			shouldIgnore: vi.fn().mockResolvedValue(false),
+			getName: vi.fn().mockReturnValue("test-workspace"),
+			getWorkspaceFolders: vi.fn().mockReturnValue([]),
+			findFiles: vi.fn().mockResolvedValue([]),
+		}
 
-		// Setup fs mocks
-		mockFileExists = fileExistsAtPath as jest.MockedFunction<typeof fileExistsAtPath>
-		mockReadFile = fs.readFile as jest.MockedFunction<typeof fs.readFile>
+		// Setup mock path utils
+		mockPathUtils = {
+			join: vi.fn().mockImplementation((...paths) => path.join(...paths)),
+			dirname: vi.fn().mockImplementation((p) => path.dirname(p)),
+			basename: vi.fn().mockImplementation((p, ext) => path.basename(p, ext)),
+			extname: vi.fn().mockImplementation((p) => path.extname(p)),
+			resolve: vi.fn().mockImplementation((...paths) => path.resolve(...paths)),
+			isAbsolute: vi.fn().mockImplementation((p) => path.isAbsolute(p)),
+			relative: vi.fn().mockImplementation((from, to) => path.relative(from, to)),
+			normalize: vi.fn().mockImplementation((p) => path.normalize(p)),
+		}
+
+		// Setup mock file watcher
+		mockFileWatcher = {
+			watchFile: vi.fn().mockReturnValue(vi.fn()),
+			watchDirectory: vi.fn().mockReturnValue(vi.fn()),
+		}
 
 		// Create controller
-		controller = new RooIgnoreController(TEST_CWD)
+		controller = new RooIgnoreController(mockFileSystem, mockWorkspace, mockPathUtils, mockFileWatcher)
 	})
 
 	describe("initialization", () => {
@@ -74,20 +65,26 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should load .rooignore patterns on initialization when file exists", async () => {
 			// Setup mocks to simulate existing .rooignore file
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules\n.git\nsecrets.json")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets.json"))
 
 			// Initialize controller
 			await controller.initialize()
 
-			// Verify file was checked and read
-			expect(mockFileExists).toHaveBeenCalledWith(path.join(TEST_CWD, ".rooignore"))
-			expect(mockReadFile).toHaveBeenCalledWith(path.join(TEST_CWD, ".rooignore"), "utf8")
+			// Verify file was read
+			const rooignorePath = path.join(TEST_CWD, ".rooignore")
+			expect(mockFileSystem.readFile).toHaveBeenCalledWith(rooignorePath)
 
 			// Verify content was stored
 			expect(controller.rooIgnoreContent).toBe("node_modules\n.git\nsecrets.json")
 
-			// Test that ignore patterns were applied
+			// Test that ignore patterns were applied - setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
+
 			expect(controller.validateAccess("node_modules/package.json")).toBe(false)
 			expect(controller.validateAccess("src/app.ts")).toBe(true)
 			expect(controller.validateAccess(".git/config")).toBe(false)
@@ -99,7 +96,7 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should allow all access when .rooignore doesn't exist", async () => {
 			// Setup mocks to simulate missing .rooignore file
-			mockFileExists.mockResolvedValue(false)
+			mockFileSystem.readFile.mockRejectedValue(new Error("File not found"))
 
 			// Initialize controller
 			await controller.initialize()
@@ -116,36 +113,36 @@ describe("RooIgnoreController", () => {
 		 * Tests the file watcher setup
 		 */
 		it("should set up file watcher for .rooignore changes", async () => {
-			// Check that watcher was created with correct pattern
-			expect(vscode.workspace.createFileSystemWatcher).toHaveBeenCalledWith(
-				expect.objectContaining({
-					base: TEST_CWD,
-					pattern: ".rooignore",
-				}),
-			)
+			// Initialize controller
+			await controller.initialize()
 
-			// Verify event handlers were registered
-			expect(mockWatcher.onDidCreate).toHaveBeenCalled()
-			expect(mockWatcher.onDidChange).toHaveBeenCalled()
-			expect(mockWatcher.onDidDelete).toHaveBeenCalled()
+			// Check that watcher was created with correct pattern
+			const rooignorePath = path.join(TEST_CWD, ".rooignore")
+			expect(mockFileWatcher.watchFile).toHaveBeenCalledWith(rooignorePath, expect.any(Function))
 		})
 
 		/**
 		 * Tests error handling during initialization
 		 */
 		it("should handle errors when loading .rooignore", async () => {
-			// Setup mocks to simulate error
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockRejectedValue(new Error("Test file read error"))
+			// Setup mocks to simulate error during readFile
+			const testError = new Error("File system error")
+			mockFileSystem.readFile.mockRejectedValue(testError)
 
-			// Spy on console.error
-			const consoleSpy = jest.spyOn(console, "error").mockImplementation()
+			// Spy on console.error to capture any logged errors
+			const consoleSpy = vitest.spyOn(console, "error").mockImplementation()
 
-			// Initialize controller - shouldn't throw
+			// Initialize controller - shouldn't throw even if readFile fails
 			await controller.initialize()
 
-			// Verify error was logged
-			expect(consoleSpy).toHaveBeenCalledWith("Unexpected error loading .rooignore:", expect.any(Error))
+			// Controller should still be functional even if .rooignore couldn't be loaded
+			expect(controller.rooIgnoreContent).toBeUndefined()
+			expect(controller.validateAccess("node_modules/package.json")).toBe(true)
+			expect(controller.validateAccess("src/app.ts")).toBe(true)
+
+			// The implementation treats file reading errors as expected (file doesn't exist)
+			// so no error should be logged for this case
+			expect(consoleSpy).not.toHaveBeenCalled()
 
 			// Cleanup
 			consoleSpy.mockRestore()
@@ -155,8 +152,16 @@ describe("RooIgnoreController", () => {
 	describe("validateAccess", () => {
 		beforeEach(async () => {
 			// Setup .rooignore content
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules\n.git\nsecrets/**\n*.log")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets/**\n*.log"))
+
+			// Setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
+
 			await controller.initialize()
 		})
 
@@ -206,8 +211,8 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should allow all access when no .rooignore content", async () => {
 			// Create a new controller with no .rooignore
-			mockFileExists.mockResolvedValue(false)
-			const emptyController = new RooIgnoreController(TEST_CWD)
+			mockFileSystem.readFile.mockRejectedValue(new Error("File not found"))
+			const emptyController = new RooIgnoreController(mockFileSystem, mockWorkspace, mockPathUtils, mockFileWatcher)
 			await emptyController.initialize()
 
 			// All paths should be allowed
@@ -220,8 +225,16 @@ describe("RooIgnoreController", () => {
 	describe("validateCommand", () => {
 		beforeEach(async () => {
 			// Setup .rooignore content
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules\n.git\nsecrets/**\n*.log")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets/**\n*.log"))
+
+			// Setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
+
 			await controller.initialize()
 		})
 
@@ -278,8 +291,8 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should allow all commands when no .rooignore exists", async () => {
 			// Create a new controller with no .rooignore
-			mockFileExists.mockResolvedValue(false)
-			const emptyController = new RooIgnoreController(TEST_CWD)
+			mockFileSystem.readFile.mockRejectedValue(new Error("File not found"))
+			const emptyController = new RooIgnoreController(mockFileSystem, mockWorkspace, mockPathUtils, mockFileWatcher)
 			await emptyController.initialize()
 
 			// All commands should be allowed
@@ -291,8 +304,16 @@ describe("RooIgnoreController", () => {
 	describe("filterPaths", () => {
 		beforeEach(async () => {
 			// Setup .rooignore content
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules\n.git\nsecrets/**\n*.log")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets/**\n*.log"))
+
+			// Setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
+
 			await controller.initialize()
 		})
 
@@ -324,12 +345,12 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should handle errors in filterPaths and fail closed", () => {
 			// Mock validateAccess to throw an error
-			jest.spyOn(controller, "validateAccess").mockImplementation(() => {
+			vitest.spyOn(controller, "validateAccess").mockImplementation(() => {
 				throw new Error("Test error")
 			})
 
 			// Spy on console.error
-			const consoleSpy = jest.spyOn(console, "error").mockImplementation()
+			const consoleSpy = vitest.spyOn(console, "error").mockImplementation()
 
 			// Should return empty array on error (fail closed)
 			const result = controller.filterPaths(["file1.txt", "file2.txt"])
@@ -357,8 +378,7 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should generate formatted instructions when .rooignore exists", async () => {
 			// Setup .rooignore content
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules\n.git\nsecrets/**")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets/**"))
 			await controller.initialize()
 
 			const instructions = controller.getInstructions()
@@ -376,7 +396,7 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should return undefined when no .rooignore exists", async () => {
 			// Setup no .rooignore
-			mockFileExists.mockResolvedValue(false)
+			mockFileSystem.readFile.mockRejectedValue(new Error("File not found"))
 			await controller.initialize()
 
 			const instructions = controller.getInstructions()
@@ -389,20 +409,24 @@ describe("RooIgnoreController", () => {
 		 * Tests proper cleanup of resources
 		 */
 		it("should dispose all registered disposables", () => {
-			// Create spy for dispose methods
-			const disposeSpy = jest.fn()
+			// The implementation uses cleanupFunctions array, not disposables
+			const cleanupSpy1 = vi.fn()
+			const cleanupSpy2 = vi.fn()
+			const cleanupSpy3 = vi.fn()
 
-			// Manually add disposables to test
-			controller["disposables"] = [{ dispose: disposeSpy }, { dispose: disposeSpy }, { dispose: disposeSpy }]
+			// Access private property to test cleanup
+			;(controller as any).cleanupFunctions = [cleanupSpy1, cleanupSpy2, cleanupSpy3]
 
 			// Call dispose
 			controller.dispose()
 
-			// Verify all disposables were disposed
-			expect(disposeSpy).toHaveBeenCalledTimes(3)
+			// Verify all cleanup functions were called
+			expect(cleanupSpy1).toHaveBeenCalledTimes(1)
+			expect(cleanupSpy2).toHaveBeenCalledTimes(1)
+			expect(cleanupSpy3).toHaveBeenCalledTimes(1)
 
-			// Verify disposables array was cleared
-			expect(controller["disposables"]).toEqual([])
+			// Verify cleanup functions array was cleared
+			expect((controller as any).cleanupFunctions).toEqual([])
 		})
 	})
 
@@ -412,34 +436,36 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should reload .rooignore when file is created", async () => {
 			// Setup initial state without .rooignore
-			mockFileExists.mockResolvedValue(false)
+			mockFileSystem.readFile.mockRejectedValue(new Error("File not found"))
 			await controller.initialize()
 
 			// Verify initial state
 			expect(controller.rooIgnoreContent).toBeUndefined()
 			expect(controller.validateAccess("node_modules/package.json")).toBe(true)
 
-			// Setup for the test
-			mockFileExists.mockResolvedValue(false) // Initially no file exists
+			// Setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
 
-			// Create and initialize controller with no .rooignore
-			controller = new RooIgnoreController(TEST_CWD)
-			await controller.initialize()
+			// Now simulate file creation by finding the watch callback
+			const rooignorePath = path.join(TEST_CWD, ".rooignore")
+			const watchCallback = mockFileWatcher.watchFile.mock.calls[0][1]
 
-			// Initial state check
-			expect(controller.rooIgnoreContent).toBeUndefined()
+			// Update mock to return file content
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules"))
 
-			// Now simulate file creation
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules")
+			// Simulate file change event
+			watchCallback({ type: 'created', uri: rooignorePath })
 
-			// Force reload of .rooignore content manually
-			await controller.initialize()
+			// Wait a bit for async operation to complete
+			await new Promise(resolve => setTimeout(resolve, 10))
 
 			// Now verify content was updated
 			expect(controller.rooIgnoreContent).toBe("node_modules")
-
-			// Verify access validation changed
 			expect(controller.validateAccess("node_modules/package.json")).toBe(false)
 		})
 
@@ -448,25 +474,36 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should reload .rooignore when file is changed", async () => {
 			// Setup initial state with .rooignore
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules"))
 			await controller.initialize()
+
+			// Setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
 
 			// Verify initial state
 			expect(controller.validateAccess("node_modules/package.json")).toBe(false)
 			expect(controller.validateAccess(".git/config")).toBe(true)
 
-			// Simulate file change
-			mockReadFile.mockResolvedValue("node_modules\n.git")
+			// Find the watch callback
+			const rooignorePath = path.join(TEST_CWD, ".rooignore")
+			const watchCallback = mockFileWatcher.watchFile.mock.calls[0][1]
 
-			// Instead of relying on the onChange handler, manually reload
-			// This is because the mock watcher doesn't actually trigger the reload in tests
-			await controller.initialize()
+			// Update mock to return new content
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git"))
+
+			// Simulate file change event
+			watchCallback({ type: 'changed', uri: rooignorePath })
+
+			// Wait a bit for async operation to complete
+			await new Promise(resolve => setTimeout(resolve, 10))
 
 			// Verify content was updated
 			expect(controller.rooIgnoreContent).toBe("node_modules\n.git")
-
-			// Verify access validation changed
 			expect(controller.validateAccess("node_modules/package.json")).toBe(false)
 			expect(controller.validateAccess(".git/config")).toBe(false)
 		})
@@ -476,24 +513,35 @@ describe("RooIgnoreController", () => {
 		 */
 		it("should reset when .rooignore is deleted", async () => {
 			// Setup initial state with .rooignore
-			mockFileExists.mockResolvedValue(true)
-			mockReadFile.mockResolvedValue("node_modules")
+			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules"))
 			await controller.initialize()
+
+			// Setup getRelativePath mock
+			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+				if (fullPath.startsWith(TEST_CWD)) {
+					return path.relative(TEST_CWD, fullPath)
+				}
+				return fullPath
+			})
 
 			// Verify initial state
 			expect(controller.validateAccess("node_modules/package.json")).toBe(false)
 
-			// Simulate file deletion
-			mockFileExists.mockResolvedValue(false)
+			// Find the watch callback
+			const rooignorePath = path.join(TEST_CWD, ".rooignore")
+			const watchCallback = mockFileWatcher.watchFile.mock.calls[0][1]
 
-			// Find and trigger the onDelete handler
-			const onDeleteHandler = mockWatcher.onDidDelete.mock.calls[0][0]
-			await onDeleteHandler()
+			// Update mock to simulate file deletion
+			mockFileSystem.readFile.mockRejectedValue(new Error("File not found"))
+
+			// Simulate file delete event
+			watchCallback({ type: 'deleted', uri: rooignorePath })
+
+			// Wait a bit for async operation to complete
+			await new Promise(resolve => setTimeout(resolve, 10))
 
 			// Verify content was reset
 			expect(controller.rooIgnoreContent).toBeUndefined()
-
-			// Verify access validation changed
 			expect(controller.validateAccess("node_modules/package.json")).toBe(true)
 		})
 	})

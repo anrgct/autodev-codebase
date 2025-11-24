@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import { tomlQuery } from "../queries"
 import { sampleToml } from "./fixtures/sample-toml"

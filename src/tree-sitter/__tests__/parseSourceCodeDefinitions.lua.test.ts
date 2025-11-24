@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import sampleLuaContent from "./fixtures/sample-lua"
 import { luaQuery } from "../queries"

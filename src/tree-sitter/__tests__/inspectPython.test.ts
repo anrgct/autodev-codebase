@@ -1,3 +1,4 @@
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions } from "./helpers"
 import { samplePythonContent } from "./fixtures/sample-python"
 import { pythonQuery } from "../queries"

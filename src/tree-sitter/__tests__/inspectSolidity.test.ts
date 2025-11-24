@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { debugLog, inspectTreeStructure, testParseSourceCodeDefinitions } from "./helpers"
 import { solidityQuery } from "../queries"
 import { sampleSolidity } from "./fixtures/sample-solidity"

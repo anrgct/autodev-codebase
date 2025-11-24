@@ -1,19 +1,21 @@
-import { jest } from "@jest/globals"
 import { parseSourceCodeDefinitionsForFile, setMinComponentLines } from ".."
 import * as fs from "fs/promises"
 import * as path from "path"
 import Parser from "web-tree-sitter"
 import tsxQuery from "../queries/tsx"
-// Mock setup
-jest.mock("fs/promises")
-export const mockedFs = jest.mocked(fs)
+import { vi } from "vitest"
 
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+// Mock setup
+vi.mock("fs/promises")
+export const mockedFs = vi.mocked(fs)
+
+vi.mock("../../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
-jest.mock("../languageParser", () => ({
-	loadRequiredLanguageParsers: jest.fn(),
+vi.mock("../languageParser", () => ({
+	loadRequiredLanguageParsers: vi.fn(),
+	LanguageParser: vi.fn(),
 }))
 
 // Global debug flag - read from environment variable or default to 0
@@ -44,7 +46,7 @@ export async function initializeTreeSitter() {
 // Function to initialize a working parser with correct WASM path
 // DO NOT CHANGE THIS FUNCTION
 export async function initializeWorkingParser() {
-	const TreeSitter = jest.requireActual("web-tree-sitter") as any
+	const TreeSitter = Parser
 
 	// Initialize directly using the default export or the module itself
 	const ParserConstructor = TreeSitter.default || TreeSitter
@@ -54,7 +56,7 @@ export async function initializeWorkingParser() {
 	const originalLoad = TreeSitter.Language.load
 	TreeSitter.Language.load = async (wasmPath: string) => {
 		const filename = path.basename(wasmPath)
-		const correctPath = path.join(process.cwd(), "dist", filename)
+		const correctPath = path.join(process.cwd(), "dist/tree-sitter", filename)
 		// console.log(`Redirecting WASM load from ${wasmPath} to ${correctPath}`)
 		return originalLoad(correctPath)
 	}
@@ -82,20 +84,20 @@ export async function testParseSourceCodeDefinitions(
 	const extKey = options.extKey || "tsx"
 
 	// Clear any previous mocks and set up fs mock
-	jest.clearAllMocks()
-	jest.mock("fs/promises")
-	const mockedFs = require("fs/promises") as jest.Mocked<typeof import("fs/promises")>
-	mockedFs.readFile.mockResolvedValue(content)
+	vi.clearAllMocks()
+	// Use the mocked fs that was already set up at the top
+	mockedFs.readFile.mockResolvedValue(new TextEncoder().encode(content))
 
 	// Get the mock function
-	const mockedLoadRequiredLanguageParsers = require("../languageParser").loadRequiredLanguageParsers
+	const languageParserModule = await import("../languageParser")
+	const mockedLoadRequiredLanguageParsers = languageParserModule.loadRequiredLanguageParsers
 
 	// Initialize TreeSitter and create a real parser
 	const TreeSitter = await initializeTreeSitter()
 	const parser = new TreeSitter()
 
 	// Load language and configure parser
-	const wasmPath = path.join(process.cwd(), `dist/${wasmFile}`)
+	const wasmPath = path.join(process.cwd(), `dist/tree-sitter/${wasmFile}`)
 	const lang = await TreeSitter.Language.load(wasmPath)
 	parser.setLanguage(lang)
 
@@ -109,8 +111,29 @@ export async function testParseSourceCodeDefinitions(
 	// Configure the mock to return our parser
 	mockedLoadRequiredLanguageParsers.mockResolvedValue(mockLanguageParser)
 
-	// Call the function under test
-	const result = await parseSourceCodeDefinitionsForFile(testFilePath)
+	// Call the function under test with mock dependencies
+	const mockDependencies = {
+		fileSystem: {
+			...mockedFs,
+			exists: vi.fn().mockResolvedValue(true),
+		},
+		workspace: {
+			getRootPath: vi.fn().mockReturnValue(process.cwd()),
+			shouldIgnore: vi.fn().mockResolvedValue(false),
+		},
+		pathUtils: {
+			extname: vi.fn().mockImplementation((filePath: string) => {
+				// Extract the actual extension from the file path
+				const match = filePath.match(/\.([^.]+)$/)
+				return match ? `.${match[1]}` : ''
+			}),
+			basename: vi.fn().mockImplementation((filePath: string) => {
+				// Extract the actual basename from the file path
+				return filePath.split('/').pop() || filePath
+			}),
+		},
+	}
+	const result = await parseSourceCodeDefinitionsForFile(testFilePath, mockDependencies as any)
 
 	// Verify loadRequiredLanguageParsers was called with the expected file path
 	expect(mockedLoadRequiredLanguageParsers).toHaveBeenCalledWith([testFilePath])

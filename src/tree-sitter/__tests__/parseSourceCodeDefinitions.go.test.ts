@@ -17,7 +17,7 @@ TODO: The following structures can be parsed by tree-sitter but lack query suppo
    - Would enable capturing pointer type definitions
 */
 
-import { describe, it, expect, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import sampleGoContent from "./fixtures/sample-go"
 import { testParseSourceCodeDefinitions } from "./helpers"
 import goQuery from "../queries/go"

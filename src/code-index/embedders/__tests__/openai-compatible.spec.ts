@@ -42,20 +42,28 @@ describe("OpenAICompatibleEmbedder", () => {
 		it("should create embedder with valid configuration", () => {
 			embedder = new OpenAICompatibleEmbedder(testBaseUrl, testApiKey, testModelId)
 
-			expect(MockedOpenAI).toHaveBeenCalledWith({
-				baseURL: testBaseUrl,
-				apiKey: testApiKey,
-			})
+			expect(MockedOpenAI).toHaveBeenCalledWith(
+				expect.objectContaining({
+					baseURL: testBaseUrl,
+					apiKey: testApiKey,
+					dangerouslyAllowBrowser: true,
+					fetch: expect.any(Function),
+				}),
+			)
 			expect(embedder).toBeDefined()
 		})
 
 		it("should use default model when modelId is not provided", () => {
 			embedder = new OpenAICompatibleEmbedder(testBaseUrl, testApiKey)
 
-			expect(MockedOpenAI).toHaveBeenCalledWith({
-				baseURL: testBaseUrl,
-				apiKey: testApiKey,
-			})
+			expect(MockedOpenAI).toHaveBeenCalledWith(
+				expect.objectContaining({
+					baseURL: testBaseUrl,
+					apiKey: testApiKey,
+					dangerouslyAllowBrowser: true,
+					fetch: expect.any(Function),
+				}),
+			)
 			expect(embedder).toBeDefined()
 		})
 

@@ -3,6 +3,7 @@ import { OpenAICompatibleEmbedder } from '../code-index/embedders/openai-compati
 import { JinaEmbedder } from '../code-index/embedders/jina-embedder'
 import { IEmbedder } from '../code-index/interfaces/embedder'
 import { EmbedderConfig } from '../code-index/interfaces/config'
+import { JinaEmbedderConfig } from '../code-index/interfaces/config'
 
 export interface VectorDocument {
   id: string
@@ -34,9 +35,10 @@ export class MemoryVectorSearch {
           config.model
         )
       } else if (config.provider === 'jina') {
+        const jinaConfig = config as JinaEmbedderConfig
         this.embedder = new JinaEmbedder(
-          (config as any).apiKey,
-          config.model
+          jinaConfig.apiKey,
+          jinaConfig.model
         )
       } else {
         // 默认使用 Ollama

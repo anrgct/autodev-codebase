@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions } from "./helpers"
 import { kotlinQuery } from "../queries"
 import sampleKotlinContent from "./fixtures/sample-kotlin"

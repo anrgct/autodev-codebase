@@ -22,7 +22,7 @@ TODO: The following C++ structures can be parsed by tree-sitter but lack query s
    Example: using size_type = std::size_t;
 */
 
-import { describe, it, expect, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import { cppQuery } from "../queries"
 import sampleCppContent from "./fixtures/sample-cpp"

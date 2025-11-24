@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import sampleRustContent from "./fixtures/sample-rust"
 import { rustQuery } from "../queries"

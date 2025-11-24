@@ -1,4 +1,4 @@
-import { describe, it, expect } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import { rustQuery } from "../queries"
 import sampleRustContent from "./fixtures/sample-rust"

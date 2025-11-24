@@ -1,23 +1,66 @@
+/// <reference types="../../types/vitest" />
+
 import * as fs from "fs/promises"
+import { vi } from "vitest"
 
-import { describe, expect, it, jest, beforeEach } from "@jest/globals"
+import { parseSourceCodeDefinitionsForFile, TreeSitterDependencies } from "../index"
+import { IFileSystem, IWorkspace, IPathUtils } from "../../abstractions"
 
-import { parseSourceCodeDefinitionsForFile } from "../index"
+// Create mock dependencies for testing
+const createMockDependencies = (): TreeSitterDependencies => ({
+	fileSystem: {
+		exists: vi.fn().mockResolvedValue(true),
+		readFile: vi.fn().mockResolvedValue(new TextEncoder().encode("mock content")),
+		writeFile: vi.fn(),
+		stat: vi.fn(),
+		readdir: vi.fn(),
+		mkdir: vi.fn(),
+		delete: vi.fn(),
+	} as IFileSystem,
+	workspace: {
+		getRootPath: () => "/test/path",
+		getRelativePath: (path: string) => path.replace("/test/path/", ""),
+		getIgnoreRules: () => [],
+		shouldIgnore: vi.fn().mockResolvedValue(false),
+		getName: () => "test-workspace",
+		getWorkspaceFolders: () => [],
+		findFiles: vi.fn().mockResolvedValue([]),
+	} as IWorkspace,
+	pathUtils: {
+		join: (...paths: string[]) => paths.join("/"),
+		dirname: (path: string) => path.split("/").slice(0, -1).join("/"),
+		basename: (path: string, ext?: string) => {
+			const base = path.split("/").pop() || ""
+			return ext ? base.replace(ext, "") : base
+		},
+		extname: (path: string) => {
+			const parts = path.split(".")
+			return parts.length > 1 ? `.${parts.pop()}` : ""
+		},
+		resolve: (...paths: string[]) => paths.join("/"),
+		isAbsolute: (path: string) => path.startsWith("/"),
+		relative: (from: string, to: string) => to.replace(from + "/", ""),
+		normalize: (path: string) => path.replace(/\\/g, "/"),
+	} as IPathUtils,
+})
 
 // Mock fs.readFile
-jest.mock("fs/promises", () => ({
-	readFile: jest.fn().mockImplementation(() => Promise.resolve("")),
-	stat: jest.fn().mockImplementation(() => Promise.resolve({ isDirectory: () => false })),
+vi.mock("fs/promises", () => ({
+	readFile: vi.fn().mockImplementation(() => Promise.resolve("")),
+	stat: vi.fn().mockImplementation(() => Promise.resolve({ isDirectory: () => false })),
 }))
 
 // Mock fileExistsAtPath
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+vi.mock("../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
 describe("Markdown Integration Tests", () => {
+	let mockDependencies: TreeSitterDependencies
+
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
+		mockDependencies = createMockDependencies()
 	})
 
 	it("should parse markdown files and extract headers", async () => {
@@ -26,13 +69,13 @@ describe("Markdown Integration Tests", () => {
 			"# Main Header\n\nThis is some content under the main header.\nIt spans multiple lines to meet the minimum section length.\n\n## Section 1\n\nThis is content for section 1.\nIt also spans multiple lines.\n\n### Subsection 1.1\n\nThis is a subsection with enough lines\nto meet the minimum section length requirement.\n\n## Section 2\n\nFinal section content.\nWith multiple lines.\n"
 
 		// Mock fs.readFile to return our markdown content
-		;(fs.readFile as jest.Mock).mockImplementation(() => Promise.resolve(markdownContent))
+		vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(markdownContent))
 
 		// Call the function with a markdown file path
-		const result = await parseSourceCodeDefinitionsForFile("test.md")
+		const result = await parseSourceCodeDefinitionsForFile("test.md", mockDependencies)
 
-		// Verify fs.readFile was called with the correct path
-		expect(fs.readFile).toHaveBeenCalledWith("test.md", "utf8")
+		// Verify mockDependencies.fileSystem.readFile was called with the correct path
+		expect(mockDependencies.fileSystem.readFile).toHaveBeenCalledWith("test.md")
 
 		// Check the result
 		expect(result).toBeDefined()
@@ -48,13 +91,13 @@ describe("Markdown Integration Tests", () => {
 		const markdownContent = "This is just some text.\nNo headers here.\nJust plain text."
 
 		// Mock fs.readFile to return our markdown content
-		;(fs.readFile as jest.Mock).mockImplementation(() => Promise.resolve(markdownContent))
+		vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(markdownContent))
 
 		// Call the function with a markdown file path
-		const result = await parseSourceCodeDefinitionsForFile("no-headers.md")
+		const result = await parseSourceCodeDefinitionsForFile("no-headers.md", mockDependencies)
 
-		// Verify fs.readFile was called with the correct path
-		expect(fs.readFile).toHaveBeenCalledWith("no-headers.md", "utf8")
+		// Verify mockDependencies.fileSystem.readFile was called with the correct path
+		expect(mockDependencies.fileSystem.readFile).toHaveBeenCalledWith("no-headers.md")
 
 		// Check the result
 		expect(result).toBeUndefined()
@@ -65,13 +108,13 @@ describe("Markdown Integration Tests", () => {
 		const markdownContent = "# Header 1\nShort section\n\n# Header 2\nAnother short section"
 
 		// Mock fs.readFile to return our markdown content
-		;(fs.readFile as jest.Mock).mockImplementation(() => Promise.resolve(markdownContent))
+		vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(markdownContent))
 
 		// Call the function with a markdown file path
-		const result = await parseSourceCodeDefinitionsForFile("short-sections.md")
+		const result = await parseSourceCodeDefinitionsForFile("short-sections.md", mockDependencies)
 
-		// Verify fs.readFile was called with the correct path
-		expect(fs.readFile).toHaveBeenCalledWith("short-sections.md", "utf8")
+		// Verify mockDependencies.fileSystem.readFile was called with the correct path
+		expect(mockDependencies.fileSystem.readFile).toHaveBeenCalledWith("short-sections.md")
 
 		// Check the result - should be undefined since no sections meet the minimum length
 		expect(result).toBeUndefined()
@@ -83,13 +126,13 @@ describe("Markdown Integration Tests", () => {
 			"# ATX Header\nThis is content under an ATX header.\nIt spans multiple lines to meet the minimum section length.\n\nSetext Header\n============\nThis is content under a setext header.\nIt also spans multiple lines to meet the minimum section length.\n"
 
 		// Mock fs.readFile to return our markdown content
-		;(fs.readFile as jest.Mock).mockImplementation(() => Promise.resolve(markdownContent))
+		vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(markdownContent))
 
 		// Call the function with a markdown file path
-		const result = await parseSourceCodeDefinitionsForFile("mixed-headers.md")
+		const result = await parseSourceCodeDefinitionsForFile("mixed-headers.md", mockDependencies)
 
-		// Verify fs.readFile was called with the correct path
-		expect(fs.readFile).toHaveBeenCalledWith("mixed-headers.md", "utf8")
+		// Verify mockDependencies.fileSystem.readFile was called with the correct path
+		expect(mockDependencies.fileSystem.readFile).toHaveBeenCalledWith("mixed-headers.md")
 
 		// Check the result
 		expect(result).toBeDefined()

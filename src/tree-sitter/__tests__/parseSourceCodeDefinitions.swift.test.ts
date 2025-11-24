@@ -1,4 +1,4 @@
-import { describe, expect, it, jest, beforeEach, beforeAll } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { swiftQuery } from "../queries"
 import { testParseSourceCodeDefinitions } from "./helpers"
 import sampleSwiftContent from "./fixtures/sample-swift"
@@ -12,16 +12,16 @@ const testOptions = {
 }
 
 // Mock fs module
-jest.mock("fs/promises")
+vi.mock("fs/promises")
 
 // Mock languageParser module
-jest.mock("../languageParser", () => ({
-	loadRequiredLanguageParsers: jest.fn(),
+vi.mock("../languageParser", () => ({
+	loadRequiredLanguageParsers: vi.fn(),
 }))
 
 // Mock file existence check
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+vi.mock("../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
 describe("parseSourceCodeDefinitionsForFile with Swift", () => {
@@ -35,7 +35,7 @@ describe("parseSourceCodeDefinitionsForFile with Swift", () => {
 	})
 
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
 	})
 
 	// Single test for class declarations (standard, final, open, and inheriting classes)

@@ -4,7 +4,8 @@ import {
   EmbedderConfig as NewEmbedderConfig,
   OllamaEmbedderConfig,
   OpenAIEmbedderConfig,
-  OpenAICompatibleEmbedderConfig
+  OpenAICompatibleEmbedderConfig,
+  JinaEmbedderConfig
 } from '../code-index/interfaces/config'
 
 // Temporary placeholder for ApiHandlerOptions - will be properly defined later
@@ -91,7 +92,8 @@ export type {
   NewEmbedderConfig,
   OllamaEmbedderConfig,
   OpenAIEmbedderConfig,
-  OpenAICompatibleEmbedderConfig
+  OpenAICompatibleEmbedderConfig,
+  JinaEmbedderConfig
 }
 
 /**

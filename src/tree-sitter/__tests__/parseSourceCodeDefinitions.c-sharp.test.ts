@@ -5,7 +5,7 @@ TODO: The following structures can be parsed by tree-sitter but lack query suppo
    (using_directive) - Can be parsed by tree-sitter but not appearing in output despite query pattern
 */
 
-import { describe, expect, it, jest, beforeEach } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { csharpQuery } from "../queries"
 import { testParseSourceCodeDefinitions } from "./helpers"
 import sampleCSharpContent from "./fixtures/sample-c-sharp"
@@ -19,16 +19,16 @@ const csharpOptions = {
 }
 
 // Mock file system operations
-jest.mock("fs/promises")
+vi.mock("fs/promises")
 
 // Mock loadRequiredLanguageParsers
-jest.mock("../languageParser", () => ({
-	loadRequiredLanguageParsers: jest.fn(),
+vi.mock("../languageParser", () => ({
+	loadRequiredLanguageParsers: vi.fn(),
 }))
 
 // Mock fileExistsAtPath to return true for our test paths
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+vi.mock("../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
 describe("parseSourceCodeDefinitionsForFile with C#", () => {
@@ -44,7 +44,7 @@ describe("parseSourceCodeDefinitionsForFile with C#", () => {
 	})
 
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
 		expect(parseResult).toBeDefined()
 	})
 

@@ -3,14 +3,14 @@ import { QdrantVectorStore } from "../qdrant-client"
 import { QdrantClient } from "@qdrant/js-client-rest"
 import { createHash } from "crypto"
 import * as path from "path"
-import { getWorkspacePath } from "../../../../utils/path"
+import { getWorkspacePath } from "../../../utils/path"
 import { MAX_SEARCH_RESULTS, SEARCH_MIN_SCORE } from "../../constants"
 import { Payload, VectorStoreSearchResult } from "../../interfaces"
 
 // Mocks
 vitest.mock("@qdrant/js-client-rest")
 vitest.mock("crypto")
-vitest.mock("../../../../utils/path")
+vitest.mock("../../../utils/path")
 vitest.mock("path", () => ({
 	...vitest.importActual("path"),
 	sep: "/",
@@ -122,13 +122,11 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.deleteCollection).not.toHaveBeenCalled()
 
 			// Verify payload index creation
-			for (let i = 0; i <= 4; i++) {
-				expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
-					field_name: `pathSegments.${i}`,
-					field_schema: "keyword",
-				})
-			}
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(5)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
+				field_name: "filePath",
+				field_schema: "keyword",
+			})
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(1)
 		})
 		it("should not create a new collection if one exists with matching vectorSize and return false", async () => {
 			// Mock getCollection to return existing collection info with matching vector size
@@ -152,13 +150,11 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.deleteCollection).not.toHaveBeenCalled()
 
 			// Verify payload index creation still happens
-			for (let i = 0; i <= 4; i++) {
-				expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
-					field_name: `pathSegments.${i}`,
-					field_schema: "keyword",
-				})
-			}
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(5)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
+				field_name: "filePath",
+				field_schema: "keyword",
+			})
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(1)
 		})
 		it("should recreate collection if it exists but vectorSize mismatches and return true", async () => {
 			const differentVectorSize = 768
@@ -193,13 +189,11 @@ describe("QdrantVectorStore", () => {
 			})
 
 			// Verify payload index creation
-			for (let i = 0; i <= 4; i++) {
-				expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
-					field_name: `pathSegments.${i}`,
-					field_schema: "keyword",
-				})
-			}
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(5)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
+				field_name: "filePath",
+				field_schema: "keyword",
+			})
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(1)
 			;(console.warn as any).mockRestore() // Restore console.warn
 		})
 		it("should log warning for non-404 errors but still create collection", async () => {
@@ -213,7 +207,7 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.getCollection).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.deleteCollection).not.toHaveBeenCalled()
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(5)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(1)
 			expect(console.warn).toHaveBeenCalledWith(
 				expect.stringContaining(`Warning during getCollectionInfo for "${expectedCollectionName}"`),
 				genericError.message,
@@ -258,16 +252,14 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledTimes(1)
 
 			// Verify all payload index creations were attempted
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(5)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(1)
 
 			// Verify warnings were logged for each failed index
-			expect(console.warn).toHaveBeenCalledTimes(5)
-			for (let i = 0; i <= 4; i++) {
-				expect(console.warn).toHaveBeenCalledWith(
-					expect.stringContaining(`Could not create payload index for pathSegments.${i}`),
-					indexError.message,
-				)
-			}
+			expect(console.warn).toHaveBeenCalledTimes(1)
+			expect(console.warn).toHaveBeenCalledWith(
+				expect.stringContaining(`Could not create payload index for filePath`),
+				indexError.message,
+			)
 
 			;(console.warn as any).mockRestore()
 		})
@@ -606,15 +598,13 @@ describe("QdrantVectorStore", () => {
 					hnsw_ef: 128,
 					exact: false,
 				},
-				with_payload: {
-					include: ["filePath", "codeChunk", "startLine", "endLine", "pathSegments"],
-				},
+				with_payload: true,
 			})
 
 			expect(results).toEqual(mockQdrantResults.points)
 		})
 
-		it("should apply filePathPrefix filter correctly", async () => {
+		it("should apply pathFilters correctly", async () => {
 			const queryVector = [0.1, 0.2, 0.3]
 			const directoryPrefix = "src/components"
 			const mockQdrantResults = {
@@ -635,19 +625,15 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			const results = await vectorStore.search(queryVector, directoryPrefix)
+			const results = await vectorStore.search(queryVector, { pathFilters: [directoryPrefix] })
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
 				filter: {
-					must: [
+					should: [
 						{
-							key: "pathSegments.0",
-							match: { value: "src" },
-						},
-						{
-							key: "pathSegments.1",
-							match: { value: "components" },
+							key: "filePath",
+							match: { text: directoryPrefix },
 						},
 					],
 				},
@@ -657,9 +643,7 @@ describe("QdrantVectorStore", () => {
 					hnsw_ef: 128,
 					exact: false,
 				},
-				with_payload: {
-					include: ["filePath", "codeChunk", "startLine", "endLine", "pathSegments"],
-				},
+				with_payload: true,
 			})
 
 			expect(results).toEqual(mockQdrantResults.points)
@@ -672,7 +656,7 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, undefined, customMinScore)
+			await vectorStore.search(queryVector, { minScore: customMinScore })
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
@@ -683,9 +667,7 @@ describe("QdrantVectorStore", () => {
 					hnsw_ef: 128,
 					exact: false,
 				},
-				with_payload: {
-					include: ["filePath", "codeChunk", "startLine", "endLine", "pathSegments"],
-				},
+				with_payload: true,
 			})
 		})
 
@@ -800,27 +782,15 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, directoryPrefix)
+			await vectorStore.search(queryVector, { pathFilters: [directoryPrefix] })
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
 				filter: {
-					must: [
+					should: [
 						{
-							key: "pathSegments.0",
-							match: { value: "src" },
-						},
-						{
-							key: "pathSegments.1",
-							match: { value: "components" },
-						},
-						{
-							key: "pathSegments.2",
-							match: { value: "ui" },
-						},
-						{
-							key: "pathSegments.3",
-							match: { value: "forms" },
+							key: "filePath",
+							match: { text: directoryPrefix },
 						},
 					],
 				},
@@ -830,9 +800,7 @@ describe("QdrantVectorStore", () => {
 					hnsw_ef: 128,
 					exact: false,
 				},
-				with_payload: {
-					include: ["filePath", "codeChunk", "startLine", "endLine", "pathSegments"],
-				},
+				with_payload: true,
 			})
 		})
 

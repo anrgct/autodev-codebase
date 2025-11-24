@@ -1,4 +1,4 @@
-import { describe, expect, it, jest, beforeAll, beforeEach } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { scalaQuery } from "../queries"
 import { initializeTreeSitter, testParseSourceCodeDefinitions } from "./helpers"
 import { sampleScala as sampleScalaContent } from "./fixtures/sample-scala"
@@ -12,16 +12,16 @@ const scalaOptions = {
 }
 
 // Mock file system operations
-jest.mock("fs/promises")
+vi.mock("fs/promises")
 
 // Mock loadRequiredLanguageParsers
-jest.mock("../languageParser", () => ({
-	loadRequiredLanguageParsers: jest.fn(),
+vi.mock("../languageParser", () => ({
+	loadRequiredLanguageParsers: vi.fn(),
 }))
 
 // Mock fileExistsAtPath to return true for our test paths
-jest.mock("../../../utils/fs", () => ({
-	fileExistsAtPath: jest.fn().mockImplementation(() => Promise.resolve(true)),
+vi.mock("../../utils/fs", () => ({
+	fileExistsAtPath: vi.fn().mockImplementation(() => Promise.resolve(true)),
 }))
 
 describe("parseSourceCodeDefinitionsForFile with Scala", () => {

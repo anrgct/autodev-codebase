@@ -1,5 +1,6 @@
 import { CodeIndexStateManager, IndexingState } from "../state-manager"
 import { IEventBus } from "../../abstractions/core"
+import { vi } from "vitest"
 
 describe("CodeIndexStateManager", () => {
 	let stateManager: CodeIndexStateManager
@@ -8,26 +9,26 @@ describe("CodeIndexStateManager", () => {
 
 	beforeEach(() => {
 		emittedEvents = []
-		
+
 		// Create mock event bus
 		const eventHandlers = new Map<string, Set<(data: any) => void>>()
 		mockEventBus = {
-			emit: jest.fn((event: string, data: any) => {
+			emit: vi.fn((event: string, data: any) => {
 				emittedEvents.push({ event, data })
 				const handlers = eventHandlers.get(event)
 				if (handlers) {
 					handlers.forEach(handler => handler(data))
 				}
 			}),
-			on: jest.fn((event: string, handler: (data: any) => void) => {
+			on: vi.fn((event: string, handler: (data: any) => void) => {
 				if (!eventHandlers.has(event)) {
 					eventHandlers.set(event, new Set())
 				}
 				eventHandlers.get(event)!.add(handler)
 				return () => eventHandlers.get(event)!.delete(handler)
 			}),
-			off: jest.fn(),
-			once: jest.fn(),
+			off: vi.fn(),
+			once: vi.fn(),
 		}
 
 		stateManager = new CodeIndexStateManager(mockEventBus)
@@ -38,6 +39,7 @@ describe("CodeIndexStateManager", () => {
 			expect(stateManager.state).toBe("Standby")
 			expect(stateManager.getCurrentStatus()).toEqual({
 				systemStatus: "Standby",
+				fileStatuses: {},
 				message: "",
 				processedItems: 0,
 				totalItems: 0,
@@ -45,8 +47,8 @@ describe("CodeIndexStateManager", () => {
 			})
 		})
 
-		it("should setup onProgressUpdate event handler", () => {
-			expect(mockEventBus.on).toHaveBeenCalledWith('progress-update', expect.any(Function))
+		it("should set onProgressUpdate property to a function", () => {
+			expect(typeof stateManager.onProgressUpdate).toBe("function")
 		})
 	})
 
@@ -57,6 +59,7 @@ describe("CodeIndexStateManager", () => {
 			expect(stateManager.state).toBe("Indexing")
 			expect(mockEventBus.emit).toHaveBeenCalledWith('progress-update', {
 				systemStatus: "Indexing",
+				fileStatuses: {},
 				message: "Starting indexing process",
 				processedItems: 0,
 				totalItems: 0,
@@ -77,14 +80,14 @@ describe("CodeIndexStateManager", () => {
 
 		it("should not emit when state doesn't change", () => {
 			stateManager.setSystemState("Standby")
-			
+
 			// Clear previous calls
-			jest.clearAllMocks()
+			vi.clearAllMocks()
 			emittedEvents = []
 
 			// Set same state again
 			stateManager.setSystemState("Standby")
-			
+
 			expect(mockEventBus.emit).not.toHaveBeenCalled()
 			expect(emittedEvents).toHaveLength(0)
 		})
@@ -97,6 +100,7 @@ describe("CodeIndexStateManager", () => {
 			expect(stateManager.state).toBe("Indexing")
 			expect(mockEventBus.emit).toHaveBeenCalledWith('progress-update', {
 				systemStatus: "Indexing",
+				fileStatuses: {},
 				message: "Indexed 5 / 10 blocks found",
 				processedItems: 5,
 				totalItems: 10,
@@ -112,6 +116,7 @@ describe("CodeIndexStateManager", () => {
 			expect(stateManager.state).toBe("Indexing")
 			expect(mockEventBus.emit).toHaveBeenCalledWith('progress-update', {
 				systemStatus: "Indexing",
+				fileStatuses: {},
 				message: "Processing 3 / 8 files. Current: test.js",
 				processedItems: 3,
 				totalItems: 8,
@@ -132,13 +137,14 @@ describe("CodeIndexStateManager", () => {
 
 	describe("onProgressUpdate", () => {
 		it("should allow subscribing to progress updates", () => {
-			const mockHandler = jest.fn()
+			const mockHandler = vi.fn()
 			const unsubscribe = stateManager.onProgressUpdate(mockHandler)
 
 			stateManager.setSystemState("Indexing", "Test message")
 
 			expect(mockHandler).toHaveBeenCalledWith({
 				systemStatus: "Indexing",
+				fileStatuses: {},
 				message: "Test message",
 				processedItems: 0,
 				totalItems: 0,

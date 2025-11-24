@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions } from "./helpers"
 import { javascriptQuery } from "../queries"
 import sampleJavaScriptContent from "./fixtures/sample-javascript"

@@ -1,4 +1,4 @@
-import { describe, it, beforeAll, beforeEach } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import { cssQuery } from "../queries"
 import sampleCSSContent from "./fixtures/sample-css"
@@ -24,7 +24,7 @@ describe("parseSourceCodeDefinitionsForFile with CSS", () => {
 	})
 
 	beforeEach(() => {
-		jest.clearAllMocks()
+		vi.clearAllMocks()
 	})
 
 	it("should parse CSS variable declarations", () => {

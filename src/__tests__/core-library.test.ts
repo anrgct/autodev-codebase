@@ -12,6 +12,8 @@ import { CodeIndexStateManager } from '../code-index/state-manager'
 import { CodeIndexConfigManager } from '../code-index/config-manager'
 import { DirectoryScanner } from '../code-index/processors/scanner'
 import { EmbedderProvider } from '../code-index/interfaces/manager'
+import ignore from 'ignore'
+import type { ICodeParser } from '../code-index/interfaces'
 
 describe('Core Library Integration', () => {
   let tempDir: string
@@ -141,28 +143,33 @@ describe('Core Library Integration', () => {
     it('should initialize with default configuration', async () => {
       await configManager.initialize()
 
-      const config = configManager.getConfig()
+      const config = await configManager.getConfig()
       expect(config).toBeDefined()
-      expect(config.embedderProvider).toBe("openai")
+      expect(config.embedder.provider).toBe("ollama") // Default is ollama in NodeConfigProvider
     })
 
     it('should detect configuration changes', async () => {
       await configManager.initialize()
 
-      const initialConfig = configManager.getConfig()
+      const initialConfig = await configManager.getConfig()
 
-      // Simulate configuration change
+      // Simulate configuration change using the new config structure
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
-        embedderProvider: "ollama"
+        embedder: {
+          provider: "openai",
+          apiKey: "test-api-key",
+          model: "text-embedding-3-small",
+          dimension: 1536
+        }
       })
 
       await configManager.initialize() // Reload config
-      const newConfig = configManager.getConfig()
+      const newConfig = await configManager.getConfig()
 
       expect(newConfig.isEnabled).toBe(true)
-      expect(newConfig.embedderProvider).toBe("ollama")
-      expect(newConfig.embedderProvider).not.toBe(initialConfig.embedderProvider)
+      expect(newConfig.embedder.provider).toBe("openai")
+      expect(newConfig.embedder.provider).not.toBe(initialConfig.embedder.provider)
     })
   })
 
@@ -196,6 +203,7 @@ describe('Core Library Integration', () => {
       }
 
       // Initialize scanner with dependencies
+      const ignoreInstance = ignore()
       scanner = new DirectoryScanner({
         fileSystem: dependencies.fileSystem,
         workspace: dependencies.workspace,
@@ -203,12 +211,13 @@ describe('Core Library Integration', () => {
         logger: dependencies.logger,
         embedder: null as any, // Mock embedder for testing
         qdrantClient: null as any, // Mock qdrant client for testing
+        codeParser: null as any, // Mock code parser for testing
         cacheManager: new CacheManager(
           dependencies.fileSystem,
           dependencies.storage,
           workspacePath
         ),
-        eventBus: dependencies.eventBus
+        ignoreInstance // ignore() creates a proper instance with .ignores method
       })
     })
 

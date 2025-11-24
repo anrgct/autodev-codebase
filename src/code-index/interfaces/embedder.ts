@@ -21,7 +21,7 @@ export interface EmbeddingResponse {
 	}
 }
 
-export type AvailableEmbedders = "openai" | "ollama" | "openai-compatible"
+export type AvailableEmbedders = "openai" | "ollama" | "openai-compatible" | "jina"
 
 export interface EmbedderInfo {
 	name: AvailableEmbedders

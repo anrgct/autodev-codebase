@@ -1,4 +1,4 @@
-import { describe, it } from "@jest/globals"
+/// <reference types="../../types/vitest" />
 import { inspectTreeStructure, testParseSourceCodeDefinitions, debugLog } from "./helpers"
 import { scalaQuery } from "../queries"
 import { sampleScala } from "./fixtures/sample-scala"
