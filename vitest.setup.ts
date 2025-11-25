@@ -49,7 +49,8 @@ vi.mock('vscode', () => ({
 }))
 
 // Suppress network error logs in tests to reduce noise
-vi.stubGlobal('fetch', vi.fn())
+// NOTE: Do NOT mock fetch for E2E tests - they need real network access
+// vi.stubGlobal('fetch', vi.fn())
 
 // Setup global error handlers for tests
 process.on('unhandledRejection', (reason) => {

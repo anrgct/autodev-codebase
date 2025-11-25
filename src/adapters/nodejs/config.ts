@@ -40,6 +40,10 @@ export class NodeConfigProvider implements IConfigProvider {
   private configLoaded: boolean = false
   private changeCallbacks: Array<(config: CodeIndexConfig) => void> = []
   private cliOverrides: NodeConfigOptions['cliOverrides']
+  // Global state storage for CodeIndexConfigManager compatibility
+  private globalState: Map<string, any> = new Map()
+  // Secrets storage for CodeIndexConfigManager compatibility
+  private secrets: Map<string, string> = new Map()
 
   constructor(
     private fileSystem: IFileSystem,
@@ -55,6 +59,89 @@ export class NodeConfigProvider implements IConfigProvider {
       ...DEFAULT_CONFIG,
       ...options.defaultConfig
     }
+  }
+
+  /**
+   * Get global state value (for CodeIndexConfigManager compatibility)
+   * Maps to the loaded configuration
+   */
+  getGlobalState(key: string): any {
+    // Return from globalState if explicitly set
+    if (this.globalState.has(key)) {
+      return this.globalState.get(key)
+    }
+
+    // For codebaseIndexConfig, return a compatible format
+    if (key === "codebaseIndexConfig" && this.config) {
+      return {
+        codebaseIndexEnabled: this.config.isEnabled ?? true,
+        codebaseIndexQdrantUrl: this.config.qdrantUrl ?? "http://localhost:6333",
+        codebaseIndexEmbedderProvider: this.config.embedderProvider ?? "ollama",
+        codebaseIndexEmbedderBaseUrl: this.config.ollamaOptions?.ollamaBaseUrl ?? "",
+        codebaseIndexEmbedderModelId: this.config.modelId ?? "",
+        codebaseIndexEmbedderModelDimension: this.config.modelDimension,
+        codebaseIndexSearchMinScore: this.config.searchMinScore,
+        codebaseIndexSearchMaxResults: undefined,
+        codebaseIndexOpenAiCompatibleBaseUrl: this.config.openAiCompatibleOptions?.baseUrl ?? "",
+      }
+    }
+
+    return undefined
+  }
+
+  /**
+   * Set global state value (for CodeIndexConfigManager compatibility)
+   */
+  setGlobalState(key: string, value: any): void {
+    this.globalState.set(key, value)
+  }
+
+  /**
+   * Get secret value (for CodeIndexConfigManager compatibility)
+   * Returns empty string for secrets in Node.js environment
+   */
+  async getSecret(key: string): Promise<string> {
+    // Return from secrets if explicitly set
+    if (this.secrets.has(key)) {
+      return this.secrets.get(key) ?? ""
+    }
+
+    // Map secrets to config values where applicable
+    if (this.config) {
+      switch (key) {
+        case "codeIndexOpenAiKey":
+          return this.config.openAiOptions?.openAiNativeApiKey ?? ""
+        case "codeIndexQdrantApiKey":
+          return this.config.qdrantApiKey ?? ""
+        case "codebaseIndexOpenAiCompatibleApiKey":
+          return this.config.openAiCompatibleOptions?.apiKey ?? ""
+        case "codebaseIndexGeminiApiKey":
+          return this.config.geminiOptions?.apiKey ?? ""
+        case "codebaseIndexMistralApiKey":
+          return this.config.mistralOptions?.apiKey ?? ""
+        case "codebaseIndexVercelAiGatewayApiKey":
+          return this.config.vercelAiGatewayOptions?.apiKey ?? ""
+        case "codebaseIndexOpenRouterApiKey":
+          return this.config.openRouterOptions?.apiKey ?? ""
+      }
+    }
+
+    return ""
+  }
+
+  /**
+   * Set secret value (for CodeIndexConfigManager compatibility)
+   */
+  setSecret(key: string, value: string): void {
+    this.secrets.set(key, value)
+  }
+
+  /**
+   * Refresh secrets from storage (for CodeIndexConfigManager compatibility)
+   * In Node.js environment, this reloads config from file
+   */
+  async refreshSecrets(): Promise<void> {
+    await this.reloadConfig()
   }
 
   async getEmbedderConfig(): Promise<EmbedderConfig> {
