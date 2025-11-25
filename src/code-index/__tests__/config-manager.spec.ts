@@ -1,6 +1,6 @@
 import { vitest, describe, it, expect, beforeEach } from "vitest"
 import { CodeIndexConfigManager } from "../config-manager"
-import { IConfigProvider, CodeIndexConfig } from "../../../abstractions/config"
+import { CodeIndexConfig } from "../interfaces/config"
 
 describe("CodeIndexConfigManager", () => {
 	let mockConfigProvider: any
@@ -9,13 +9,34 @@ describe("CodeIndexConfigManager", () => {
 	beforeEach(() => {
 		// Setup mock IConfigProvider with all required methods
 		mockConfigProvider = {
-			getConfig: vitest.fn(),
-			getEmbedderConfig: vitest.fn(),
-			getVectorStoreConfig: vitest.fn(),
-			isCodeIndexEnabled: vitest.fn(),
-			getSearchConfig: vitest.fn(),
-			onConfigChange: vitest.fn().mockReturnValue(() => {}),
+			getGlobalState: vitest.fn(),
+			getSecret: vitest.fn(),
+			refreshSecrets: vitest.fn(),
 		}
+
+		// Mock default state
+		mockConfigProvider.getGlobalState.mockReturnValue({
+			codebaseIndexEnabled: true,
+			codebaseIndexQdrantUrl: "http://localhost:6333",
+			codebaseIndexEmbedderProvider: "openai",
+			codebaseIndexEmbedderBaseUrl: "",
+			codebaseIndexEmbedderModelId: "",
+			codebaseIndexSearchMinScore: undefined,
+			codebaseIndexSearchMaxResults: undefined,
+		})
+
+		mockConfigProvider.getSecret.mockImplementation((key: string) => {
+			const secrets: Record<string, string> = {
+				codeIndexOpenAiKey: "",
+				codeIndexQdrantApiKey: "",
+				codeIndexOpenAiCompatibleApiKey: "",
+				codeIndexGeminiApiKey: "",
+				codeIndexMistralApiKey: "",
+				codeIndexVercelAiGatewayApiKey: "",
+				codeIndexOpenRouterApiKey: "",
+			}
+			return Promise.resolve(secrets[key] || "")
+		})
 
 		configManager = new CodeIndexConfigManager(mockConfigProvider)
 	})

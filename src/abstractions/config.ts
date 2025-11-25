@@ -1,11 +1,16 @@
 // Import the new configuration interfaces
-import { 
+import {
   CodeIndexConfig,
   EmbedderConfig as NewEmbedderConfig,
   OllamaEmbedderConfig,
   OpenAIEmbedderConfig,
   OpenAICompatibleEmbedderConfig,
-  JinaEmbedderConfig
+  JinaEmbedderConfig,
+  GeminiEmbedderConfig,
+  MistralEmbedderConfig,
+  VercelAiGatewayEmbedderConfig,
+  OpenRouterEmbedderConfig,
+  EmbedderProvider
 } from '../code-index/interfaces/config'
 
 // Temporary placeholder for ApiHandlerOptions - will be properly defined later
@@ -18,7 +23,6 @@ export interface ApiHandlerOptions {
   ollamaBaseUrl?: string
   [key: string]: any
 }
-import { EmbedderProvider } from "../code-index/interfaces/manager"
 
 /**
  * Configuration provider abstraction for platform-agnostic configuration access
@@ -56,11 +60,13 @@ export interface IConfigProvider {
 }
 
 /**
- * Embedder configuration
+ * Embedder configuration (legacy for backwards compatibility)
+ * @deprecated Use NewEmbedderConfig from code-index/interfaces/config instead
  */
 export interface EmbedderConfig {
   provider: EmbedderProvider
   modelId?: string
+  dimension?: number // Added dimension property
   openAiOptions?: ApiHandlerOptions
   ollamaOptions?: ApiHandlerOptions
   openAiCompatibleOptions?: {
@@ -68,6 +74,10 @@ export interface EmbedderConfig {
     apiKey: string
     modelDimension?: number
   }
+  geminiOptions?: { apiKey: string }
+  mistralOptions?: { apiKey: string }
+  vercelAiGatewayOptions?: { apiKey: string }
+  openRouterOptions?: { apiKey: string }
 }
 
 /**
@@ -87,14 +97,21 @@ export interface SearchConfig {
 }
 
 // Re-export the new configuration interfaces for external use
-export type { 
+export type {
   CodeIndexConfig,
   NewEmbedderConfig,
   OllamaEmbedderConfig,
   OpenAIEmbedderConfig,
   OpenAICompatibleEmbedderConfig,
-  JinaEmbedderConfig
+  JinaEmbedderConfig,
+  GeminiEmbedderConfig,
+  MistralEmbedderConfig,
+  VercelAiGatewayEmbedderConfig,
+  OpenRouterEmbedderConfig
 }
+
+// Re-export EmbedderProvider for external use
+export { EmbedderProvider }
 
 /**
  * Configuration snapshot for restart detection
@@ -105,11 +122,16 @@ export interface ConfigSnapshot {
   configured: boolean
   embedderProvider: EmbedderProvider
   modelId?: string
+  dimension?: number // Add dimension property
   openAiKey?: string
   ollamaBaseUrl?: string
   openAiCompatibleBaseUrl?: string
   openAiCompatibleApiKey?: string
   openAiCompatibleModelDimension?: number
+  geminiApiKey?: string
+  mistralApiKey?: string
+  vercelAiGatewayApiKey?: string
+  openRouterApiKey?: string
   qdrantUrl?: string
   qdrantApiKey?: string
 }

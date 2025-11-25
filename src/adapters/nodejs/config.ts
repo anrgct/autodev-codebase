@@ -24,11 +24,11 @@ export interface NodeConfigOptions {
 const DEFAULT_CONFIG: CodeIndexConfig = {
   isEnabled: true,
   isConfigured: true,
-  embedder: {
-    provider: "ollama",
-    model: "dengcao/Qwen3-Embedding-0.6B:Q8_0",
-    dimension: 1024,
-    baseUrl: "http://localhost:11434",
+  embedderProvider: "ollama",
+  modelId: "nomic-embed-text",
+  modelDimension: 768,
+  ollamaOptions: {
+    ollamaBaseUrl: "http://localhost:11434",
   }
 }
 
@@ -60,39 +60,35 @@ export class NodeConfigProvider implements IConfigProvider {
   async getEmbedderConfig(): Promise<EmbedderConfig> {
     const config = await this.ensureConfigLoaded()
     // Convert new config structure to legacy format for compatibility
-    if (config.embedder.provider === "openai") {
+    if (config.embedderProvider === "openai") {
       return {
         provider: "openai",
-        modelId: config.embedder.model,
-        openAiOptions: {
-          apiKey: config.embedder.apiKey,
-          openAiNativeApiKey: config.embedder.apiKey
-        }
+        modelId: config.modelId,
+        dimension: config.modelDimension,
+        openAiOptions: config.openAiOptions
       }
-    } else if (config.embedder.provider === "ollama") {
+    } else if (config.embedderProvider === "ollama") {
       return {
         provider: "ollama",
-        modelId: config.embedder.model,
-        ollamaOptions: {
-          ollamaBaseUrl: config.embedder.baseUrl
-        }
+        modelId: config.modelId,
+        dimension: config.modelDimension,
+        ollamaOptions: config.ollamaOptions
       }
-    } else if (config.embedder.provider === "openai-compatible") {
+    } else if (config.embedderProvider === "openai-compatible") {
       return {
         provider: "openai-compatible",
-        modelId: config.embedder.model,
-        openAiCompatibleOptions: {
-          baseUrl: config.embedder.baseUrl,
-          apiKey: config.embedder.apiKey,
-          modelDimension: config.embedder.dimension
-        }
+        modelId: config.modelId,
+        dimension: config.modelDimension,
+        openAiCompatibleOptions: config.openAiCompatibleOptions
       }
     }
-    
+
     // Fallback
     return {
       provider: "ollama",
-      modelId: DEFAULT_CONFIG.embedder.model
+      modelId: DEFAULT_CONFIG.modelId,
+      dimension: DEFAULT_CONFIG.modelDimension,
+      ollamaOptions: DEFAULT_CONFIG.ollamaOptions
     }
   }
 
@@ -195,11 +191,11 @@ export class NodeConfigProvider implements IConfigProvider {
 
     // 3. Apply CLI overrides (highest priority)
     if (this.cliOverrides && this.config) {
-      if (this.cliOverrides.ollamaUrl && 'baseUrl' in this.config.embedder) {
-        this.config.embedder.baseUrl = this.cliOverrides.ollamaUrl
+      if (this.cliOverrides.ollamaUrl && this.config.ollamaOptions) {
+        this.config.ollamaOptions.ollamaBaseUrl = this.cliOverrides.ollamaUrl
       }
       if (this.cliOverrides.model && this.cliOverrides.model.trim()) {
-        this.config.embedder.model = this.cliOverrides.model
+        this.config.modelId = this.cliOverrides.model
       }
       if (this.cliOverrides.qdrantUrl) {
         this.config.qdrantUrl = this.cliOverrides.qdrantUrl
@@ -282,19 +278,21 @@ export class NodeConfigProvider implements IConfigProvider {
       return false
     }
 
-    const { embedder, qdrantUrl } = this.config
+    const { embedderProvider, qdrantUrl } = this.config
 
     // Check embedder configuration
-    if (embedder.provider === "openai") {
-      if (!embedder.apiKey || !embedder.model || !embedder.dimension) {
+    if (embedderProvider === "openai") {
+      if (!this.config.openAiOptions?.openAiNativeApiKey || !this.config.modelId) {
         return false
       }
-    } else if (embedder.provider === "ollama") {
-      if (!embedder.baseUrl || !embedder.model || !embedder.dimension) {
+    } else if (embedderProvider === "ollama") {
+      if (!this.config.ollamaOptions?.ollamaBaseUrl || !this.config.modelId) {
         return false
       }
-    } else if (embedder.provider === "openai-compatible") {
-      if (!embedder.baseUrl || !embedder.apiKey || !embedder.model || !embedder.dimension) {
+    } else if (embedderProvider === "openai-compatible") {
+      if (!this.config.openAiCompatibleOptions?.baseUrl ||
+          !this.config.openAiCompatibleOptions?.apiKey ||
+          !this.config.modelId) {
         return false
       }
     }
@@ -319,41 +317,41 @@ export class NodeConfigProvider implements IConfigProvider {
     }
 
     // Validate embedder configuration
-    const { embedder } = config
-    switch (embedder.provider) {
+    const { embedderProvider } = config
+    switch (embedderProvider) {
       case "openai":
-        if (!embedder.apiKey) {
+        if (!config.openAiOptions?.openAiNativeApiKey) {
           errors.push('OpenAI API key is required')
         }
-        if (!embedder.model) {
+        if (!config.modelId) {
           errors.push('OpenAI model is required')
         }
-        if (!embedder.dimension || embedder.dimension <= 0) {
+        if (!config.modelDimension || config.modelDimension <= 0) {
           errors.push('OpenAI model dimension is required and must be positive')
         }
         break
       case "ollama":
-        if (!embedder.baseUrl) {
+        if (!config.ollamaOptions?.ollamaBaseUrl) {
           errors.push('Ollama base URL is required')
         }
-        if (!embedder.model) {
+        if (!config.modelId) {
           errors.push('Ollama model is required')
         }
-        if (!embedder.dimension || embedder.dimension <= 0) {
+        if (!config.modelDimension || config.modelDimension <= 0) {
           errors.push('Ollama model dimension is required and must be positive')
         }
         break
       case "openai-compatible":
-        if (!embedder.baseUrl) {
+        if (!config.openAiCompatibleOptions?.baseUrl) {
           errors.push('OpenAI Compatible base URL is required')
         }
-        if (!embedder.apiKey) {
+        if (!config.openAiCompatibleOptions?.apiKey) {
           errors.push('OpenAI Compatible API key is required')
         }
-        if (!embedder.model) {
+        if (!config.modelId) {
           errors.push('OpenAI Compatible model is required')
         }
-        if (!embedder.dimension || embedder.dimension <= 0) {
+        if (!config.modelDimension || config.modelDimension <= 0) {
           errors.push('OpenAI Compatible model dimension is required and must be positive')
         }
         break

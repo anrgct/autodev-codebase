@@ -24,6 +24,7 @@ import {
 import { BatchProcessor, BatchProcessorOptions } from "./batch-processor"
 import { codeParser } from "./parser"
 import { CacheManager } from "../cache-manager"
+import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
 import { IEventBus, IFileSystem } from "../../abstractions/core"
 import { IWorkspace, IPathUtils } from "../../abstractions/workspace"
 
@@ -38,6 +39,7 @@ export class FileWatcher implements ICodeFileWatcher {
 	private batchProcessDebounceTimer?: NodeJS.Timeout
 	private readonly BATCH_DEBOUNCE_DELAY_MS = 500
 	private readonly FILE_PROCESSING_CONCURRENCY_LIMIT = 10
+	private readonly batchSegmentThreshold: number
 
 	private eventBus: IEventBus
 	private fileSystem: IFileSystem
@@ -92,6 +94,7 @@ export class FileWatcher implements ICodeFileWatcher {
 		private vectorStore?: IVectorStore,
 		ignoreInstance?: Ignore,
 		ignoreController?: RooIgnoreController,
+		batchSegmentThreshold?: number,
 	) {
 		this.eventBus = eventBus
 		this.fileSystem = fileSystem
@@ -101,6 +104,15 @@ export class FileWatcher implements ICodeFileWatcher {
 		this.batchProcessor = new BatchProcessor()
 		if (ignoreInstance) {
 			this.ignoreInstance = ignoreInstance
+		}
+
+		// Get the configurable batch size from VSCode settings, fallback to default
+		// If not provided in constructor, use default value
+		if (batchSegmentThreshold !== undefined) {
+			this.batchSegmentThreshold = batchSegmentThreshold
+		} else {
+			// In this environment, we don't have VSCode settings, so use default
+			this.batchSegmentThreshold = BATCH_SEGMENT_THRESHOLD
 		}
 
 		// Initialize event handlers
@@ -240,12 +252,15 @@ export class FileWatcher implements ICodeFileWatcher {
 						content,
 						newHash
 					})
-				} catch (error) {
+				} catch (error: any) {
+					const errorStatus = error?.status || error?.response?.status || error?.statusCode
+					const errorMessage = error instanceof Error ? error.message : String(error)
+
 					console.error(`[FileWatcher] Failed to read file ${event.filePath}:`, error)
 					batchResults.push({
 						path: event.filePath,
 						status: "error",
-						error: error as Error
+						error: error instanceof Error ? error : new Error(errorMessage)
 					})
 				}
 			}
@@ -306,25 +321,31 @@ export class FileWatcher implements ICodeFileWatcher {
 			// Process deletions first (count each deleted file as 1 block)
 			if (filesToDelete.length > 0) {
 				const relativeDeletePaths = filesToDelete.map(path => this.workspace.getRelativePath(path))
+				let overallBatchError: Error | undefined = undefined
+
 				try {
 					await this.vectorStore.deletePointsByMultipleFilePaths(relativeDeletePaths)
 					for (const filePath of filesToDelete) {
 						this.cacheManager.deleteHash(filePath)
 						batchResults.push({ path: filePath, status: "success" })
 						processedBlocksInBatch++
-						
+
 						// Report progress after each deleted file (counted as 1 block)
 						this.eventBus.emit('batch-progress-blocks', {
 							processedBlocks: processedBlocksInBatch,
 							totalBlocks: totalBlocksInBatch,
 						})
 					}
-				} catch (error) {
-					console.error("[FileWatcher] Error deleting points for files:", filesToDelete, error)
-					for (const filePath of filesToDelete) {
-						batchResults.push({ path: filePath, status: "error", error: error as Error })
+				} catch (error: any) {
+					const errorStatus = error?.status || error?.response?.status || error?.statusCode
+					const errorMessage = error instanceof Error ? error.message : String(error)
+
+					// Mark all paths as error
+					overallBatchError = error instanceof Error ? error : new Error(errorMessage)
+					for (const path of filesToDelete) {
+						batchResults.push({ path, status: "error", error: overallBatchError })
 						processedBlocksInBatch++
-						
+
 						// Report progress even for failed files
 						this.eventBus.emit('batch-progress-blocks', {
 							processedBlocks: processedBlocksInBatch,
@@ -351,7 +372,7 @@ export class FileWatcher implements ICodeFileWatcher {
 
 					itemToPoint: (block, embedding) => {
 						// Use the same logic as DirectoryScanner
-						const normalizedAbsolutePath = this.pathUtils.normalize(this.pathUtils.resolve(block.file_path))
+						const normalizedAbsolutePath = generateNormalizedAbsolutePath(block.file_path, this.workspacePath)
 						const stableName = `${normalizedAbsolutePath}:${block.start_line}`
 						const pointId = uuidv5(stableName, QDRANT_CODE_BLOCK_NAMESPACE)
 
@@ -359,7 +380,7 @@ export class FileWatcher implements ICodeFileWatcher {
 							id: pointId,
 							vector: embedding,
 							payload: {
-								filePath: this.workspace.getRelativePath(normalizedAbsolutePath),
+								filePath: generateRelativeFilePath(normalizedAbsolutePath, this.workspacePath),
 								codeChunk: block.content,
 								startLine: block.start_line,
 								endLine: block.end_line,
@@ -468,7 +489,7 @@ export class FileWatcher implements ICodeFileWatcher {
 	async processFile(filePath: string): Promise<FileProcessingResult> {
 		try {
 			// Check if file should be ignored
-			const relativeFilePath = this.workspace.getRelativePath(filePath)
+			const relativeFilePath = generateRelativeFilePath(filePath, this.workspacePath)
 			if (
 				!this.ignoreController.validateAccess(filePath) ||
 				(this.ignoreInstance && this.ignoreInstance.ignores(relativeFilePath))
@@ -516,7 +537,7 @@ export class FileWatcher implements ICodeFileWatcher {
 				const { embeddings } = await this.embedder.createEmbeddings(texts)
 
 				pointsToUpsert = blocks.map((block, index) => {
-					const normalizedAbsolutePath = this.pathUtils.normalize(this.pathUtils.resolve(block.file_path))
+					const normalizedAbsolutePath = generateNormalizedAbsolutePath(block.file_path, this.workspacePath)
 					const stableName = `${normalizedAbsolutePath}:${block.start_line}`
 					const pointId = uuidv5(stableName, QDRANT_CODE_BLOCK_NAMESPACE)
 
@@ -524,10 +545,15 @@ export class FileWatcher implements ICodeFileWatcher {
 						id: pointId,
 						vector: embeddings[index],
 						payload: {
-							filePath: this.workspace.getRelativePath(normalizedAbsolutePath),
+							filePath: generateRelativeFilePath(normalizedAbsolutePath, this.workspacePath),
 							codeChunk: block.content,
 							startLine: block.start_line,
 							endLine: block.end_line,
+							chunkSource: block.chunkSource,
+							type: block.type,
+							identifier: block.identifier,
+							parentChain: block.parentChain,
+							hierarchyDisplay: block.hierarchyDisplay,
 						},
 					}
 				})

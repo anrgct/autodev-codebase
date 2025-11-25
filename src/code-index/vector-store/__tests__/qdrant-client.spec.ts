@@ -625,7 +625,7 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			const results = await vectorStore.search(queryVector, { pathFilters: [directoryPrefix] })
+			const results = await vectorStore.search(queryVector, directoryPrefix)
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
@@ -656,7 +656,7 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, { minScore: customMinScore })
+			await vectorStore.search(queryVector, undefined, customMinScore)
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
@@ -782,7 +782,7 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, { pathFilters: [directoryPrefix] })
+			await vectorStore.search(queryVector, directoryPrefix)
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,

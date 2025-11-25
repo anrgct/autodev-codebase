@@ -145,7 +145,7 @@ describe('Core Library Integration', () => {
 
       const config = await configManager.getConfig()
       expect(config).toBeDefined()
-      expect(config.embedder.provider).toBe("ollama") // Default is ollama in NodeConfigProvider
+      expect(config.embedderProvider).toBe("ollama") // Default is ollama in NodeConfigProvider
     })
 
     it('should detect configuration changes', async () => {
@@ -156,20 +156,18 @@ describe('Core Library Integration', () => {
       // Simulate configuration change using the new config structure
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
-        embedder: {
-          provider: "openai",
-          apiKey: "test-api-key",
-          model: "text-embedding-3-small",
-          dimension: 1536
-        }
+        embedderProvider: "openai",
+        modelId: "text-embedding-3-small",
+        modelDimension: 1536,
+        openAiOptions: { openAiNativeApiKey: "test-api-key" }
       })
 
       await configManager.initialize() // Reload config
       const newConfig = await configManager.getConfig()
 
       expect(newConfig.isEnabled).toBe(true)
-      expect(newConfig.embedder.provider).toBe("openai")
-      expect(newConfig.embedder.provider).not.toBe(initialConfig.embedder.provider)
+      expect(newConfig.embedderProvider).toBe("openai")
+      expect(newConfig.embedderProvider).not.toBe(initialConfig.embedderProvider)
     })
   })
 

@@ -38,10 +38,6 @@ export interface IDirectoryScanner {
 		onFileParsed?: (fileBlockCount: number) => void,
 	): Promise<{
 		codeBlocks: CodeBlock[]
-		stats: {
-			processed: number
-			skipped: number
-		}
 		totalBlockCount: number
 	}>
 
@@ -138,7 +134,7 @@ export interface CodeBlock {
 	content: string
 	fileHash: string
 	segmentHash: string
-	chunkSource: 'tree-sitter' | 'fallback' | 'line-segment'
+	chunkSource: 'tree-sitter' | 'fallback' | 'line-segment' | 'markdown'
 	parentChain: ParentContainer[]
 	hierarchyDisplay: string | null
 }

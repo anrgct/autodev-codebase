@@ -7,6 +7,9 @@ import {
 	MAX_BATCH_RETRIES as MAX_RETRIES,
 	INITIAL_RETRY_DELAY_MS as INITIAL_DELAY_MS,
 } from "../constants"
+import { getModelQueryPrefix } from "../../shared/embeddingModels"
+import { withValidationErrorHandling, formatEmbeddingError, HttpError } from "../shared/validation-helpers"
+import { handleOpenAIError } from "../shared/openai-error-handler"
 import { fetch, ProxyAgent } from "undici"
 
 /**
@@ -23,43 +26,47 @@ export class OpenAiEmbedder implements IEmbedder {
 	constructor(options: ApiHandlerOptions & { openAiEmbeddingModelId?: string }) {
 		const apiKey = options.openAiNativeApiKey ?? "not-provided"
 
-		// 检查环境变量中的代理设置
-		const httpsProxy = process.env['HTTPS_PROXY'] || process.env['https_proxy']
-		const httpProxy = process.env['HTTP_PROXY'] || process.env['http_proxy']
+		// Wrap OpenAI client creation to handle invalid API key characters
+		try {
+			// 检查环境变量中的代理设置
+			const httpsProxy = process.env['HTTPS_PROXY'] || process.env['https_proxy']
+			const httpProxy = process.env['HTTP_PROXY'] || process.env['http_proxy']
 
-		// OpenAI API 使用 HTTPS，所以优先使用 HTTPS 代理
-		const proxyUrl = httpsProxy || httpProxy
+			// OpenAI API 使用 HTTPS，所以优先使用 HTTPS 代理
+			const proxyUrl = httpsProxy || httpProxy
 
-		let dispatcher: any = undefined
-		if (proxyUrl) {
-			try {
-				dispatcher = new ProxyAgent(proxyUrl)
-				console.log('✓ OpenAI using undici ProxyAgent:', proxyUrl)
-			} catch (error) {
-				console.error('✗ Failed to create undici ProxyAgent for OpenAI:', error)
+			let dispatcher: any = undefined
+			if (proxyUrl) {
+				try {
+					dispatcher = new ProxyAgent(proxyUrl)
+					console.log('✓ OpenAI using undici ProxyAgent:', proxyUrl)
+				} catch (error) {
+					console.error('✗ Failed to create undici ProxyAgent for OpenAI:', error)
+				}
 			}
-		} else {
-			// console.log('ℹ No proxy configured for OpenAI')
-		}
 
-		const clientConfig: any = {
-			apiKey,
-			dangerouslyAllowBrowser: true,
-		}
-		if (dispatcher) {
-			clientConfig.fetch = (url: string, init?: any) => {
-				return fetch(url, {
-					...init,
-					dispatcher
-				})
+			const clientConfig: any = {
+				apiKey,
+				dangerouslyAllowBrowser: true,
 			}
-			console.log('📝 调试: OpenAI客户端将使用 undici ProxyAgent 代理')
-		} else {
-			clientConfig.fetch = fetch
-			// console.log('📝 调试: OpenAI客户端不使用代理 (undici)')
+			if (dispatcher) {
+				clientConfig.fetch = (url: string, init?: any) => {
+					return fetch(url, {
+						...init,
+						dispatcher
+					})
+				}
+				console.log('📝 调试: OpenAI客户端将使用 undici ProxyAgent 代理')
+			} else {
+				clientConfig.fetch = fetch
+			}
+
+			this.embeddingsClient = new OpenAI(clientConfig)
+		} catch (error) {
+			// Use the error handler to transform ByteString conversion errors
+			throw handleOpenAIError(error, "OpenAI")
 		}
 
-		this.embeddingsClient = new OpenAI(clientConfig)
 		this.defaultModelId = options.openAiEmbeddingModelId || "text-embedding-3-small"
 	}
 
@@ -71,9 +78,31 @@ export class OpenAiEmbedder implements IEmbedder {
 	 */
 	async createEmbeddings(texts: string[], model?: string): Promise<EmbeddingResponse> {
 		const modelToUse = model || this.defaultModelId
+
+		// Apply model-specific query prefix if required
+		const queryPrefix = getModelQueryPrefix("openai", modelToUse)
+		const processedTexts = queryPrefix
+			? texts.map((text, index) => {
+					// Prevent double-prefixing
+					if (text.startsWith(queryPrefix)) {
+						return text
+					}
+					const prefixedText = `${queryPrefix}${text}`
+					const estimatedTokens = Math.ceil(prefixedText.length / 4)
+					if (estimatedTokens > MAX_ITEM_TOKENS) {
+						console.warn(
+							`Text at index ${index} with prefix exceeds token limit (${estimatedTokens} > ${MAX_ITEM_TOKENS}). Using original text.`,
+						)
+						// Return original text if adding prefix would exceed limit
+						return text
+					}
+					return prefixedText
+				})
+			: texts
+
 		const allEmbeddings: number[][] = []
 		const usage = { promptTokens: 0, totalTokens: 0 }
-		const remainingTexts = [...texts]
+		const remainingTexts = [...processedTexts]
 
 		while (remainingTexts.length > 0) {
 			const currentBatch: string[] = []
@@ -86,7 +115,7 @@ export class OpenAiEmbedder implements IEmbedder {
 
 				if (itemTokens > MAX_ITEM_TOKENS) {
 					console.warn(
-						`Text at index ${i} exceeds maximum token limit (${itemTokens} > ${MAX_ITEM_TOKENS}). Skipping.`,
+						`Text at index ${i} exceeds token limit (${itemTokens} > ${MAX_ITEM_TOKENS}). Skipping.`,
 					)
 					processedIndices.push(i)
 					continue
@@ -107,15 +136,10 @@ export class OpenAiEmbedder implements IEmbedder {
 			}
 
 			if (currentBatch.length > 0) {
-				try {
-					const batchResult = await this._embedBatchWithRetries(currentBatch, modelToUse)
-					allEmbeddings.push(...batchResult.embeddings)
-					usage.promptTokens += batchResult.usage.promptTokens
-					usage.totalTokens += batchResult.usage.totalTokens
-				} catch (error) {
-					console.error("Failed to process batch:", error)
-					throw new Error("Failed to create embeddings: batch processing error")
-				}
+				const batchResult = await this._embedBatchWithRetries(currentBatch, modelToUse)
+				allEmbeddings.push(...batchResult.embeddings)
+				usage.promptTokens += batchResult.usage.promptTokens
+				usage.totalTokens += batchResult.usage.totalTokens
 			}
 		}
 
@@ -137,30 +161,84 @@ export class OpenAiEmbedder implements IEmbedder {
 				const response = await this.embeddingsClient.embeddings.create({
 					input: batchTexts,
 					model: model,
+					// OpenAI package (as of v4.78.1) has a parsing issue that truncates embedding dimensions to 256
+					// when processing numeric arrays, which breaks compatibility with models using larger dimensions.
+					// By requesting base64 encoding, we bypass the package's parser and handle decoding ourselves.
+					encoding_format: "base64",
+				})
+
+				// Convert base64 embeddings to float32 arrays
+				const processedEmbeddings = response.data.map((item) => {
+					if (typeof item.embedding === "string") {
+						const buffer = Buffer.from(item.embedding, "base64")
+						const float32Array = new Float32Array(buffer.buffer, buffer.byteOffset, buffer.byteLength / 4)
+						return Array.from(float32Array)
+					}
+					return item.embedding
 				})
 
 				return {
-					embeddings: response.data.map((item) => item.embedding),
+					embeddings: processedEmbeddings,
 					usage: {
 						promptTokens: response.usage?.prompt_tokens || 0,
 						totalTokens: response.usage?.total_tokens || 0,
 					},
 				}
 			} catch (error: any) {
-				const isRateLimitError = error?.status === 429
+				// TelemetryService calls removed as per requirements
+
 				const hasMoreAttempts = attempts < MAX_RETRIES - 1
 
-				if (isRateLimitError && hasMoreAttempts) {
+				// Check if it's a rate limit error
+				const httpError = error as HttpError
+				if (httpError?.status === 429 && hasMoreAttempts) {
 					const delayMs = INITIAL_DELAY_MS * Math.pow(2, attempts)
+					console.warn(
+						`Rate limit hit. Retrying in ${delayMs}ms (attempt ${attempts + 1}/${MAX_RETRIES})`,
+					)
 					await new Promise((resolve) => setTimeout(resolve, delayMs))
 					continue
 				}
 
-				throw error
+				// Log the error for debugging
+				console.error(`OpenAI embedder error (attempt ${attempts + 1}/${MAX_RETRIES}):`, error)
+
+				// Format and throw the error
+				throw formatEmbeddingError(error, MAX_RETRIES)
 			}
 		}
 
-		throw new Error(`Failed to create embeddings after ${MAX_RETRIES} attempts`)
+		throw new Error(`Failed to generate embeddings after ${MAX_RETRIES} attempts`)
+	}
+
+	/**
+	 * Validates the OpenAI embedder configuration by attempting a minimal embedding request
+	 * @returns Promise resolving to validation result with success status and optional error message
+	 */
+	async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
+		return withValidationErrorHandling(async () => {
+			try {
+				// Test with a minimal embedding request
+				const response = await this.embeddingsClient.embeddings.create({
+					input: ["test"],
+					model: this.defaultModelId,
+					encoding_format: "base64",
+				})
+
+				// Check if we got a valid response
+				if (!response.data || response.data.length === 0) {
+					return {
+						valid: false,
+						error: "Invalid response format from OpenAI API",
+					}
+				}
+
+				return { valid: true }
+			} catch (error) {
+				// TelemetryService calls removed as per requirements
+				throw error
+			}
+		}, "openai")
 	}
 
 	get embedderInfo(): EmbedderInfo {

@@ -72,7 +72,15 @@ export interface ICodeIndexManager {
 	dispose(): void
 }
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina"
+export type EmbedderProvider =
+	| "openai"
+	| "ollama"
+	| "openai-compatible"
+	| "jina"
+	| "gemini"
+	| "mistral"
+	| "vercel-ai-gateway"
+	| "openrouter"
 
 export interface IndexProgressUpdate {
 	systemStatus: IndexingState

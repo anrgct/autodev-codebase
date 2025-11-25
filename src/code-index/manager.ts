@@ -9,7 +9,9 @@ import { CacheManager } from "./cache-manager"
 import { IConfigProvider } from "../abstractions/config"
 import { IFileSystem, IStorage, IEventBus, ILogger } from "../abstractions/core"
 import { IWorkspace, IPathUtils } from "../abstractions/workspace"
+import fs from "fs/promises"
 import ignore from "ignore"
+import path from "path"
 
 export interface CodeIndexManagerDependencies {
 	fileSystem: IFileSystem
@@ -33,8 +35,14 @@ export class CodeIndexManager implements ICodeIndexManager {
 	private _searchService: CodeIndexSearchService | undefined
 	private _cacheManager: CacheManager | undefined
 
-	public static getInstance(dependencies: CodeIndexManagerDependencies): CodeIndexManager | undefined {
-		const workspacePath = dependencies.workspace.getRootPath()
+	// Flag to prevent race conditions during error recovery
+	private _isRecoveringFromError = false
+
+	public static getInstance(dependencies: CodeIndexManagerDependencies, workspacePath?: string): CodeIndexManager | undefined {
+		// If workspacePath is not provided, try to get it from the workspace
+		if (!workspacePath) {
+			workspacePath = dependencies.workspace.getRootPath()
+		}
 
 		if (!workspacePath) {
 			return undefined
@@ -124,92 +132,35 @@ export class CodeIndexManager implements ICodeIndexManager {
 			if (this._orchestrator) {
 				this._orchestrator.stopWatcher()
 			}
+			this._stateManager.setSystemState("Standby", "Code indexing is disabled")
 			return { requiresRestart }
 		}
 
-		// 3. CacheManager Initialization
+		// 3. Check if workspace is available
+		const workspacePath = this.workspacePath
+		if (!workspacePath) {
+			this._stateManager.setSystemState("Standby", "No workspace folder open")
+			return { requiresRestart }
+		}
+
+		// 4. CacheManager Initialization
 		if (!this._cacheManager) {
 			this._cacheManager = new CacheManager(
-				this.dependencies.fileSystem, 
-				this.dependencies.storage, 
+				this.dependencies.fileSystem,
+				this.dependencies.storage,
 				this.workspacePath
 			)
 			await this._cacheManager.initialize()
 		}
-		// console.log(`[CodeIndexManager] Cache initialized at ${this._cacheManager.getCachePath}`)
-		// 4. Determine if Core Services Need Recreation
+
+		// 5. Determine if Core Services Need Recreation
 		const needsServiceRecreation = !this._serviceFactory || requiresRestart
 
 		if (needsServiceRecreation) {
-			// Stop watcher if it exists
-			if (this._orchestrator) {
-				this.stopWatcher()
-			}
-
-			// (Re)Initialize service factory
-			this._serviceFactory = new CodeIndexServiceFactory(
-				this._configManager,
-				this.workspacePath,
-				this._cacheManager,
-				this.dependencies.logger,
-			)
-
-			const ignoreInstance = ignore()
-			const ignoreRules = this.dependencies.workspace.getIgnoreRules()
-			ignoreInstance.add(ignoreRules)
-
-			// (Re)Create shared service instances  
-			const { embedder, vectorStore, scanner, fileWatcher } = await this._serviceFactory.createServices(
-				this.dependencies.fileSystem,
-				this.dependencies.eventBus,
-				this._cacheManager,
-				ignoreInstance,
-				this.dependencies.workspace,
-				this.dependencies.pathUtils
-			)
-
-			// (Re)Initialize orchestrator
-			this._orchestrator = new CodeIndexOrchestrator(
-				this._configManager,
-				this._stateManager,
-				this.workspacePath,
-				this._cacheManager,
-				vectorStore,
-				scanner,
-				fileWatcher,
-				this.dependencies.logger,
-			)
-
-			// (Re)Initialize search service
-			this._searchService = new CodeIndexSearchService(
-				this._configManager,
-				this._stateManager,
-				embedder,
-				vectorStore,
-			)
-
-			// Handle force clearing before reconciliation
-			if (options?.force) {
-				this.dependencies.logger?.info("Force mode enabled, clearing index data before reconciliation...")
-				
-				// Clear vector store
-				if (this.isFeatureConfigured) {
-					await vectorStore.deleteCollection()
-					await new Promise(resolve => setTimeout(resolve, 500))
-					await vectorStore.initialize()
-				}
-				
-				// Clear cache
-				await this._cacheManager.clearCacheFile()
-				
-				this.dependencies.logger?.info("Force clear completed, proceeding with reconciliation...")
-			}
-
-			// Add the new reconciliation step
-			await this.reconcileIndex(vectorStore, scanner)
+			await this._recreateServices()
 		}
 
-		// 5. Handle Indexing Start/Restart
+		// 6. Handle Indexing Start/Restart
 		// The enhanced vectorStore.initialize() in startIndexing() now handles dimension changes automatically
 		// by detecting incompatible collections and recreating them, so we rely on that for dimension changes
 		const shouldStartOrRestartIndexing =
@@ -234,12 +185,26 @@ export class CodeIndexManager implements ICodeIndexManager {
 
 	/**
 	 * Initiates the indexing process (initial scan and starts watcher).
+	 * Automatically recovers from error state if needed before starting.
+	 *
+	 * @important This method should NEVER be awaited as it starts a long-running background process.
+	 * The indexing will continue asynchronously and progress will be reported through events.
 	 */
-
 	public async startIndexing(): Promise<void> {
 		if (!this.isFeatureEnabled) {
 			return
 		}
+
+		// Check if we're in error state and recover if needed
+		const currentStatus = this.getCurrentStatus()
+		if (currentStatus.systemStatus === "Error") {
+			await this.recoverFromError()
+
+			// After recovery, we need to reinitialize since recoverFromError clears all services
+			// This will be handled by the caller checking isInitialized
+			return
+		}
+
 		this.assertInitialized()
 		await this._orchestrator!.startIndexing()
 	}
@@ -253,6 +218,46 @@ export class CodeIndexManager implements ICodeIndexManager {
 		}
 		if (this._orchestrator) {
 			this._orchestrator.stopWatcher()
+		}
+	}
+
+	/**
+	 * Recovers from error state by clearing the error and resetting internal state.
+	 * This allows the manager to be re-initialized after a recoverable error.
+	 *
+	 * This method clears all service instances (configManager, serviceFactory, orchestrator, searchService)
+	 * to force a complete re-initialization on the next operation. This ensures a clean slate
+	 * after recovering from errors such as network failures or configuration issues.
+	 *
+	 * @remarks
+	 * - Safe to call even when not in error state (idempotent)
+	 * - Does not restart indexing automatically - call initialize() after recovery
+	 * - Service instances will be recreated on next initialize() call
+	 * - Prevents race conditions from multiple concurrent recovery attempts
+	 */
+	public async recoverFromError(): Promise<void> {
+		// Prevent race conditions from multiple rapid recovery attempts
+		if (this._isRecoveringFromError) {
+			return
+		}
+
+		this._isRecoveringFromError = true
+		try {
+			// Clear error state
+			this._stateManager.setSystemState("Standby", "")
+		} catch (error) {
+			// Log error but continue with recovery - clearing service instances is more important
+			console.error("Failed to clear error state during recovery:", error)
+		} finally {
+			// Force re-initialization by clearing service instances
+			// This ensures a clean slate even if state update failed
+			this._configManager = undefined
+			this._serviceFactory = undefined
+			this._orchestrator = undefined
+			this._searchService = undefined
+
+			// Reset the flag after recovery is complete
+			this._isRecoveringFromError = false
 		}
 	}
 
@@ -282,7 +287,11 @@ export class CodeIndexManager implements ICodeIndexManager {
 	// --- Private Helpers ---
 
 	public getCurrentStatus() {
-		return this._stateManager.getCurrentStatus()
+		const status = this._stateManager.getCurrentStatus()
+		return {
+			...status,
+			workspacePath: this.workspacePath,
+		}
 	}
 
 	private async reconcileIndex(vectorStore: IVectorStore, scanner: IDirectoryScanner) {
@@ -330,22 +339,128 @@ export class CodeIndexManager implements ICodeIndexManager {
 	}
 
 	/**
-	 * Handles external settings changes by reloading configuration.
-	 * This method should be called when API provider settings are updated
+	 * Private helper method to recreate services with current configuration.
+	 * Used by both initialize() and handleSettingsChange().
+	 */
+	private async _recreateServices(): Promise<void> {
+		// Stop watcher if it exists
+		if (this._orchestrator) {
+			this.stopWatcher()
+		}
+		// Clear existing services to ensure clean state
+		this._orchestrator = undefined
+		this._searchService = undefined
+
+		// (Re)Initialize service factory
+		this._serviceFactory = new CodeIndexServiceFactory(
+			this._configManager!,
+			this.workspacePath,
+			this._cacheManager!,
+			this.dependencies.logger,
+		)
+
+		const ignoreInstance = ignore()
+		const workspacePath = this.workspacePath
+
+		if (!workspacePath) {
+			this._stateManager.setSystemState("Standby", "")
+			return
+		}
+
+		// Create .gitignore instance
+		const ignoreRules = this.dependencies.workspace.getIgnoreRules()
+		ignoreInstance.add(ignoreRules)
+
+		// (Re)Create shared service instances
+		const { embedder, vectorStore, scanner, fileWatcher } = await this._serviceFactory.createServices(
+			this.dependencies.fileSystem,
+			this.dependencies.eventBus,
+			this._cacheManager!,
+			ignoreInstance,
+			this.dependencies.workspace,
+			this.dependencies.pathUtils
+		)
+
+		// Validate embedder configuration before proceeding
+		const validationResult = await this._serviceFactory.validateEmbedder(embedder)
+		if (!validationResult.valid) {
+			const errorMessage = validationResult.error || "Embedder configuration validation failed"
+			this._stateManager.setSystemState("Error", errorMessage)
+			throw new Error(errorMessage)
+		}
+
+		// (Re)Initialize orchestrator
+		this._orchestrator = new CodeIndexOrchestrator(
+			this._configManager!,
+			this._stateManager,
+			this.workspacePath,
+			this._cacheManager!,
+			vectorStore,
+			scanner,
+			fileWatcher,
+			this.dependencies.logger,
+		)
+
+		// (Re)Initialize search service
+		this._searchService = new CodeIndexSearchService(
+			this._configManager!,
+			this._stateManager,
+			embedder,
+			vectorStore,
+		)
+
+		// Clear any error state after successful recreation
+		this._stateManager.setSystemState("Standby", "")
+
+		// Add the new reconciliation step
+		await this.reconcileIndex(vectorStore, scanner)
+	}
+
+	/**
+	 * Handle code index settings changes.
+	 * This method should be called when code index settings are updated
 	 * to ensure the CodeIndexConfigManager picks up the new configuration.
 	 * If the configuration changes require a restart, the service will be restarted.
 	 */
-	public async handleExternalSettingsChange(): Promise<void> {
+	public async handleSettingsChange(): Promise<void> {
 		if (this._configManager) {
 			const { requiresRestart } = await this._configManager.loadConfiguration()
 
 			const isFeatureEnabled = this.isFeatureEnabled
 			const isFeatureConfigured = this.isFeatureConfigured
 
-			// If configuration changes require a restart and the manager is initialized, restart the service
-			if (requiresRestart && isFeatureEnabled && isFeatureConfigured && this.isInitialized) {
-				this.stopWatcher()
-				await this.startIndexing()
+			// If feature is disabled, stop the service
+			if (!isFeatureEnabled) {
+				// Stop the orchestrator if it exists
+				if (this._orchestrator) {
+					this._orchestrator.stopWatcher()
+				}
+
+				// Set state to indicate service is disabled
+				this._stateManager.setSystemState("Standby", "Code indexing is disabled")
+				return
+			}
+
+			if (requiresRestart && isFeatureEnabled && isFeatureConfigured) {
+				try {
+					// Ensure cacheManager is initialized before recreating services
+					if (!this._cacheManager) {
+						this._cacheManager = new CacheManager(
+							this.dependencies.fileSystem,
+							this.dependencies.storage,
+							this.workspacePath
+						)
+						await this._cacheManager.initialize()
+					}
+
+					// Recreate services with new configuration
+					await this._recreateServices()
+				} catch (error) {
+					// Error state already set in _recreateServices
+					console.error("Failed to recreate services:", error)
+					// Re-throw the error so the caller knows validation failed
+					throw error
+				}
 			}
 		}
 	}

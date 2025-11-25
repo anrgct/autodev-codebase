@@ -2,7 +2,7 @@
  * Defines profiles for different embedding models, including their dimensions.
  */
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" // Add other providers as needed
+export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway"
 
 export interface EmbeddingModelProfile {
 	dimension: number
@@ -40,6 +40,23 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
 		"jina-code-embeddings-0.5b": { dimension: 896 },
 		"jina-code-embeddings-1.5b": { dimension: 1536 },
 		"jina-embeddings-v4": { dimension: 2048 },
+	},
+	gemini: {
+		"text-embedding-004": { dimension: 768 },
+		"gemini-embedding-001": { dimension: 2048 },
+	},
+	mistral: {
+		"codestral-embed-2505": { dimension: 1536 },
+	},
+	openrouter: {
+		"openai/text-embedding-3-small": { dimension: 1536 },
+		"openai/text-embedding-3-large": { dimension: 3072 },
+		"openai/text-embedding-ada-002": { dimension: 1536 },
+	},
+	"vercel-ai-gateway": {
+		"text-embedding-3-small": { dimension: 1536 },
+		"text-embedding-3-large": { dimension: 3072 },
+		"text-embedding-ada-002": { dimension: 1536 },
 	},
 }
 
@@ -102,9 +119,68 @@ export function getDefaultModelId(provider: EmbedderProvider): string {
 			console.warn("No default Jina model found in profiles.")
 			return "jina-embeddings-v2-base-code"
 		}
+		case "gemini":
+			return "gemini-embedding-001"
+		case "mistral":
+			return "codestral-embed-2505"
+		case "openrouter":
+			return "openai/text-embedding-3-large"
+		case "vercel-ai-gateway":
+			return "text-embedding-3-small"
 		default:
 			// Fallback for unknown providers
 			console.warn(`Unknown provider for default model ID: ${provider}. Falling back to OpenAI default.`)
 			return "text-embedding-3-small"
 	}
+}
+
+/**
+ * Gets model-specific query prefix for embedding models that require it
+ * Currently, no models require prefixes, but this function is kept for future extensibility
+ * @param provider The embedder provider
+ * @param modelId The model ID
+ * @returns Query prefix string or null if no prefix is required
+ */
+export function getModelQueryPrefix(provider: EmbedderProvider, modelId: string): string | null {
+	// Currently no models require prefixes
+	// This function is kept for future compatibility
+	return null
+}
+
+/**
+ * Gets model-specific score threshold for semantic search
+ * Returns undefined if no specific threshold is defined for the model
+ * @param provider The embedder provider
+ * @param modelId The model ID
+ * @returns Model-specific score threshold or undefined
+ */
+export function getModelScoreThreshold(provider: EmbedderProvider, modelId: string): number | undefined {
+	// Define model-specific thresholds based on empirical testing
+	// These values represent the minimum similarity score for reliable matches
+	const modelThresholds: { [key: string]: number } = {
+		// OpenAI models - generally high quality, can use lower threshold
+		"text-embedding-3-small": 0.35,
+		"text-embedding-3-large": 0.30,
+		"text-embedding-ada-002": 0.40,
+
+		// Ollama models - vary in quality, generally need higher threshold
+		"nomic-embed-text": 0.45,
+		"mxbai-embed-large": 0.40,
+		"all-minilm": 0.50,
+
+		// Gemini models
+		"text-embedding-004": 0.45,
+		"gemini-embedding-001": 0.40,
+
+		// Mistral
+		"codestral-embed-2505": 0.35,
+
+		// Jina models - generally good for code
+		"jina-embeddings-v2-base-code": 0.40,
+		"jina-code-embeddings-0.5b": 0.45,
+		"jina-code-embeddings-1.5b": 0.35,
+		"jina-embeddings-v4": 0.30,
+	}
+
+	return modelThresholds[modelId]
 }

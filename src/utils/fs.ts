@@ -45,3 +45,23 @@ export async function fileExistsAtPath(filePath: string): Promise<boolean> {
 		return false
 	}
 }
+
+/**
+ * Safely writes JSON data to a file, creating directories if needed
+ *
+ * @param filePath - The file path to write to
+ * @param data - The JSON data to write
+ * @returns A promise that resolves when the file is written
+ */
+export async function safeWriteJson(filePath: string, data: any): Promise<void> {
+	try {
+		// Ensure directory exists
+		await createDirectoriesForFile(filePath)
+
+		// Write JSON data with proper formatting
+		const jsonString = JSON.stringify(data, null, 2)
+		await fs.writeFile(filePath, jsonString, 'utf8')
+	} catch (error) {
+		throw new Error(`Failed to write JSON to ${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+	}
+}

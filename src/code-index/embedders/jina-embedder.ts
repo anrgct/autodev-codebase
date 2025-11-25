@@ -159,6 +159,49 @@ export class JinaEmbedder implements IEmbedder {
 	}
 
 	/**
+	 * Validates the embedder configuration by testing API connectivity
+	 */
+	async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
+		try {
+			const testText = "test"
+			const response = await fetch(`${this.baseUrl}/embeddings`, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Authorization': `Bearer ${this.apiKey}`,
+				},
+				body: JSON.stringify({
+					model: this.modelId,
+					input: [testText],
+				}),
+			})
+
+			if (!response.ok) {
+				const errorText = await response.text()
+				return {
+					valid: false,
+					error: `HTTP ${response.status}: ${errorText}`
+				}
+			}
+
+			const result = await response.json()
+			if (!result.data || !Array.isArray(result.data) || result.data.length === 0) {
+				return {
+					valid: false,
+					error: 'Invalid response format from Jina API'
+				}
+			}
+
+			return { valid: true }
+		} catch (error: any) {
+			return {
+				valid: false,
+				error: error.message || 'Failed to connect to Jina API'
+			}
+		}
+	}
+
+	/**
 	 * Returns information about this embedder
 	 */
 	get embedderInfo(): EmbedderInfo {

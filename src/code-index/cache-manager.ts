@@ -2,6 +2,7 @@ import { createHash } from "crypto"
 import { ICacheManager } from "./interfaces/cache"
 import { IFileSystem, IStorage } from "../abstractions"
 import debounce from "lodash.debounce"
+import { safeWriteJson } from "../utils/fs"
 
 /**
  * Manages the cache for code indexing
@@ -54,8 +55,7 @@ export class CacheManager implements ICacheManager {
 	 */
 	private async _performSave(): Promise<void> {
 		try {
-			const content = new TextEncoder().encode(JSON.stringify(this.fileHashes, null, 2))
-			await this.fileSystem.writeFile(this.cachePath, content)
+			await safeWriteJson(this.cachePath, this.fileHashes)
 		} catch (error) {
 			console.error("Failed to save cache:", error)
 		}
@@ -66,8 +66,7 @@ export class CacheManager implements ICacheManager {
 	 */
 	async clearCacheFile(): Promise<void> {
 		try {
-			const content = new TextEncoder().encode("{}")
-			await this.fileSystem.writeFile(this.cachePath, content)
+			await safeWriteJson(this.cachePath, {})
 			this.fileHashes = {}
 		} catch (error) {
 			console.error("Failed to clear cache file:", error, this.cachePath)

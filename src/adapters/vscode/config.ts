@@ -92,14 +92,41 @@ export class VSCodeConfigProvider implements IConfigProvider {
 
     const isConfigured = this.isConfigured(embedderConfig, vectorStoreConfig)
 
-    return {
+      // Convert from specific embedder config to generic CodeIndexConfig structure
+    const embedderProvider = embedderConfig.provider
+    let configData: any = {
       isEnabled: this.isCodeIndexEnabled(),
       isConfigured,
-      embedder: embedderConfig,
+      embedderProvider,
+      modelId: embedderConfig.model,
+      modelDimension: embedderConfig.dimension,
       qdrantUrl: vectorStoreConfig.qdrantUrl,
       qdrantApiKey: vectorStoreConfig.qdrantApiKey,
       searchMinScore: searchConfig.minScore
     }
+
+    // Add provider-specific options
+    switch (embedderProvider) {
+      case 'openai':
+        configData.openAiOptions = {
+          openAiNativeApiKey: (embedderConfig as OpenAIEmbedderConfig).apiKey
+        }
+        break
+      case 'ollama':
+        configData.ollamaOptions = {
+          ollamaBaseUrl: (embedderConfig as OllamaEmbedderConfig).baseUrl
+        }
+        break
+      case 'openai-compatible':
+        const compatibleConfig = embedderConfig as OpenAICompatibleEmbedderConfig
+        configData.openAiCompatibleOptions = {
+          baseUrl: compatibleConfig.baseUrl,
+          apiKey: compatibleConfig.apiKey
+        }
+        break
+    }
+
+    return configData
   }
 
   /**
@@ -107,27 +134,27 @@ export class VSCodeConfigProvider implements IConfigProvider {
    */
   async getConfigSnapshot(): Promise<ConfigSnapshot> {
     const config = await this.getFullConfig()
-    
+
     const snapshot: ConfigSnapshot = {
       enabled: config.isEnabled,
       configured: config.isConfigured,
-      embedderProvider: config.embedder.provider,
-      modelId: config.embedder.model,
+      embedderProvider: config.embedderProvider,
+      modelId: config.modelId,
+      dimension: config.modelDimension,
       qdrantUrl: config.qdrantUrl,
       qdrantApiKey: config.qdrantApiKey
     }
 
-    if (config.embedder.provider === 'openai') {
-      snapshot.openAiKey = (config.embedder as OpenAIEmbedderConfig).apiKey
-    } else if (config.embedder.provider === 'ollama') {
-      snapshot.ollamaBaseUrl = (config.embedder as OllamaEmbedderConfig).baseUrl
-    } else if (config.embedder.provider === 'openai-compatible') {
-      const compatibleConfig = config.embedder as OpenAICompatibleEmbedderConfig
-      snapshot.openAiCompatibleBaseUrl = compatibleConfig.baseUrl
-      snapshot.openAiCompatibleApiKey = compatibleConfig.apiKey
-      snapshot.openAiCompatibleModelDimension = compatibleConfig.dimension
+    if (config.embedderProvider === 'openai') {
+      snapshot.openAiKey = config.openAiOptions?.openAiNativeApiKey
+    } else if (config.embedderProvider === 'ollama') {
+      snapshot.ollamaBaseUrl = config.ollamaOptions?.ollamaBaseUrl
+    } else if (config.embedderProvider === 'openai-compatible') {
+      snapshot.openAiCompatibleBaseUrl = config.openAiCompatibleOptions?.baseUrl
+      snapshot.openAiCompatibleApiKey = config.openAiCompatibleOptions?.apiKey
+      snapshot.openAiCompatibleModelDimension = config.modelDimension
     }
-    
+
     return snapshot
   }
 

@@ -36,12 +36,10 @@ async function main() {
         defaultConfig: {
           isEnabled: false, // Disable to avoid requiring external services
           isConfigured: false,
-          embedder: {
-            provider: "openai",
-            apiKey: '',
-            model: 'text-embedding-3-small',
-            dimension: 1536,
-          }
+          embedderProvider: "openai",
+          modelId: 'text-embedding-3-small',
+          modelDimension: 1536,
+          openAiOptions: { openAiNativeApiKey: '' }
         }
       }
     })

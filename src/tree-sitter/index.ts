@@ -95,6 +95,8 @@ const extensions = [
 	// Embedded Template
 	"ejs",
 	"erb",
+	// Visual Basic .NET
+	"vb",
 ].map((e) => `.${e}`)
 
 export { extensions }

@@ -26,7 +26,12 @@ export interface IVectorStore {
 	 * @param filter Search filter options
 	 * @returns Promise resolving to search results
 	 */
-	search(queryVector: number[], filter?: SearchFilter): Promise<VectorStoreSearchResult[]>
+	search(
+	queryVector: number[],
+	directoryPrefix?: string,
+	minScore?: number,
+	maxResults?: number,
+): Promise<VectorStoreSearchResult[]>
 
 	/**
 	 * Deletes points by file path
@@ -61,6 +66,24 @@ export interface IVectorStore {
 	 * @returns Promise resolving to an array of file paths
 	 */
 	getAllFilePaths(): Promise<string[]>
+
+/**
+ * Checks if the collection exists and has indexed points
+ * @returns Promise resolving to boolean indicating if the collection exists and has points
+ */
+hasIndexedData(): Promise<boolean>
+
+/**
+ * Marks the indexing process as complete by storing metadata
+ * Should be called after a successful full workspace scan or incremental scan
+ */
+markIndexingComplete(): Promise<void>
+
+/**
+ * Marks the indexing process as incomplete by storing metadata
+ * Should be called at the start of indexing to indicate work in progress
+ */
+markIndexingIncomplete(): Promise<void>
 }
 
 export interface SearchFilter {

@@ -37,12 +37,10 @@ export async function basicUsageExample() {
   await dependencies.configProvider.saveConfig({
     isEnabled: true,
     isConfigured: true,
-    embedder: {
-      provider: "openai",
-      apiKey: process.env['OPENAI_API_KEY'] || 'your-api-key-here',
-      model: 'text-embedding-3-small',
-      dimension: 1536,
-    },
+    embedderProvider: "openai",
+    modelId: 'text-embedding-3-small',
+    modelDimension: 1536,
+    openAiOptions: { openAiNativeApiKey: process.env['OPENAI_API_KEY'] || 'your-api-key-here' },
     qdrantUrl: 'http://localhost:6333'
   })
 
@@ -73,12 +71,10 @@ export async function advancedUsageExample() {
       configPath: path.join(workspacePath, '.autodev-config.json'),
       defaultConfig: {
         isEnabled: true,
-        embedder: {
-          provider: "ollama",
-          baseUrl: 'http://localhost:11434',
-          model: 'nomic-embed-text',
-          dimension: 768,
-        }
+        embedderProvider: "ollama",
+        modelId: 'nomic-embed-text',
+        modelDimension: 768,
+        ollamaOptions: { ollamaBaseUrl: 'http://localhost:11434' }
       }
     }
   })
@@ -210,12 +206,10 @@ export async function cliExample() {
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
         isConfigured: false,
-        embedder: {
-          provider: "ollama",
-          baseUrl: 'http://localhost:11434',
-          model: 'nomic-embed-text',
-          dimension: 768,
-        }
+        embedderProvider: "ollama",
+        modelId: 'nomic-embed-text',
+        modelDimension: 768,
+        ollamaOptions: { ollamaBaseUrl: 'http://localhost:11434' }
       })
       console.log('Configuration initialized')
       break
@@ -225,7 +219,7 @@ export async function cliExample() {
       console.log('Code Index Status:')
       console.log('  Enabled:', config.isEnabled)
       console.log('  Configured:', config.isConfigured)
-      console.log('  Provider:', config.embedder.provider)
+      console.log('  Provider:', config.embedderProvider)
       break
 
     case 'files':

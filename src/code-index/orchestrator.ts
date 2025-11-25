@@ -6,6 +6,33 @@ import { DirectoryScanner } from "./processors"
 import { CacheManager } from "./cache-manager"
 import { ILogger } from "../abstractions"
 
+// Hardcoded internationalization functions (replacing t() calls)
+const t = (key: string, params?: Record<string, string>): string => {
+	const translations: Record<string, string> = {
+		"embeddings:orchestrator.indexingRequiresWorkspace": "Indexing requires a workspace folder to be open.",
+		"embeddings:orchestrator.fileWatcherStarted": "File watcher started. Monitoring for changes...",
+		"embeddings:orchestrator.indexingFailedNoBlocks": "Indexing failed: No code blocks were successfully indexed. This usually indicates an embedder configuration issue.",
+		"embeddings:orchestrator.indexingFailedCritical": "Indexing failed critically: No blocks were indexed despite finding content to process.",
+		"embeddings:orchestrator.fileWatcherStopped": "File watcher stopped.",
+		"embeddings:orchestrator.failedDuringInitialScan": "Failed during initial scan: {errorMessage}",
+		"embeddings:orchestrator.unknownError": "Unknown error",
+		"embeddings:orchestrator.clearingIndexData": "Clearing index data...",
+		"embeddings:orchestrator.indexDataCleared": "Index data cleared successfully.",
+		"embeddings:orchestrator.servicesReady": "Services ready. Starting workspace scan...",
+		"embeddings:orchestrator.checkingForChanges": "Checking for new or modified files...",
+		"embeddings:orchestrator.noNewFiles": "No new or changed files found",
+		"embeddings:orchestrator.incrementalScanCompleted": "Incremental scan completed: {blocksIndexed} blocks indexed from new/changed files",
+	}
+
+	let message = translations[key] || key
+	if (params) {
+		for (const [param, value] of Object.entries(params)) {
+			message = message.replace(`{${param}}`, value)
+		}
+	}
+	return message
+}
+
 /**
  * Manages the code indexing workflow, coordinating between different services and managers.
  */
@@ -99,13 +126,16 @@ export class CodeIndexOrchestrator {
 	}
 
 	/**
-	 * Updates the status of a file in the state manager.
-	 */
-
-	/**
 	 * Initiates the indexing process (initial scan and starts watcher).
 	 */
 	public async startIndexing(): Promise<void> {
+		// Check if workspace is available first
+		if (!this.workspacePath) {
+			this.stateManager.setSystemState("Error", t("embeddings:orchestrator.indexingRequiresWorkspace"))
+			this.warn("[CodeIndexOrchestrator] Start rejected: No workspace folder open.")
+			return
+		}
+
 		if (!this.configManager.isFeatureConfigured) {
 			this.stateManager.setSystemState("Standby", "Missing configuration. Save your settings to start indexing.")
 			this.warn("[CodeIndexOrchestrator] Start rejected: Missing configuration.")
@@ -126,85 +156,197 @@ export class CodeIndexOrchestrator {
 
 		this._isProcessing = true
 		this.stateManager.setSystemState("Indexing", "Initializing services...")
-		this.info('[CodeIndexOrchestrator] 🚀 开始索引进程...')
+
+		// Track whether we successfully connected to vector store and started indexing
+		// This helps us decide whether to preserve cache on error
+		let indexingStarted = false
 
 		try {
-			this.info('[CodeIndexOrchestrator] 💾 初始化向量存储...')
+			this.info("[CodeIndexOrchestrator] Initializing vector store...")
 			const collectionCreated = await this.vectorStore.initialize()
-			this.info('[CodeIndexOrchestrator] ✅ 向量存储初始化完成, 新集合创建:', collectionCreated)
+
+			// Successfully connected to vector store
+			indexingStarted = true
 
 			if (collectionCreated) {
-				this.info('[CodeIndexOrchestrator] 🗑️ 清理缓存文件...')
+				this.info("[CodeIndexOrchestrator] New collection created, clearing cache...")
 				await this.cacheManager.clearCacheFile()
-				this.info('[CodeIndexOrchestrator] ✅ 缓存文件已清理')
 			}
 
-			this.stateManager.setSystemState("Indexing", "Services ready. Starting workspace scan...")
-			this.info('[CodeIndexOrchestrator] 📁 开始扫描工作区:', this.workspacePath)
+			// Check if the collection already has indexed data
+			// If it does, we can skip the full scan and just start the watcher
+			const hasExistingData = await this.vectorStore.hasIndexedData()
 
-			let cumulativeBlocksIndexed = 0
-			let cumulativeBlocksFoundSoFar = 0
+			if (hasExistingData && !collectionCreated) {
+				// Collection exists with data - run incremental scan to catch any new/changed files
+				// This handles files added while workspace was closed or vector store was inactive
+				this.info(
+					"[CodeIndexOrchestrator] Collection already has indexed data. Running incremental scan for new/changed files...",
+				)
+				this.stateManager.setSystemState("Indexing", t("embeddings:orchestrator.checkingForChanges"))
 
-			const handleFileParsed = (fileBlockCount: number) => {
-				cumulativeBlocksFoundSoFar += fileBlockCount
-				this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
-			}
+				// Mark as incomplete at the start of incremental scan
+				await this.vectorStore.markIndexingIncomplete()
 
-			const handleBlocksIndexed = (indexedCount: number) => {
-				cumulativeBlocksIndexed += indexedCount
-				this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
-			}
+				let cumulativeBlocksIndexed = 0
+				let cumulativeBlocksFoundSoFar = 0
+				let batchErrors: Error[] = []
 
-			this.info('[CodeIndexOrchestrator] 🔍 开始扫描目录...')
-			const result = await this.scanner.scanDirectory(
-				this.workspacePath,
-				(batchError: Error) => {
-					this.error(
-						`[CodeIndexOrchestrator] ❌ 扫描批次错误: ${batchError.message}`,
-						batchError,
+				const handleFileParsed = (fileBlockCount: number) => {
+					cumulativeBlocksFoundSoFar += fileBlockCount
+					this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
+				}
+
+				const handleBlocksIndexed = (indexedCount: number) => {
+					cumulativeBlocksIndexed += indexedCount
+					this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
+				}
+
+				// Run incremental scan - scanner will skip unchanged files using cache
+				const result = await this.scanner.scanDirectory(
+					this.workspacePath,
+					(batchError: Error) => {
+						this.error(
+							`[CodeIndexOrchestrator] Error during incremental scan batch: ${batchError.message}`,
+							batchError,
+						)
+						batchErrors.push(batchError)
+					},
+					handleBlocksIndexed,
+					handleFileParsed,
+				)
+
+				if (!result) {
+					throw new Error("Incremental scan failed, is scanner initialized?")
+				}
+
+				// If new files were found and indexed, log the results
+				if (cumulativeBlocksFoundSoFar > 0) {
+					this.info(
+						`[CodeIndexOrchestrator] Incremental scan completed: ${cumulativeBlocksIndexed} blocks indexed from new/changed files`,
 					)
-				},
-				handleBlocksIndexed,
-				handleFileParsed,
-			)
-			this.info('[CodeIndexOrchestrator] ✅ 目录扫描完成')
+				} else {
+					this.info("[CodeIndexOrchestrator] No new or changed files found")
+				}
 
-			if (!result) {
-				this.error('[CodeIndexOrchestrator] ❌ 扫描结果为空')
-				throw new Error("Scan failed, is scanner initialized?")
+				await this._startWatcher()
+
+				// Mark indexing as complete after successful incremental scan
+				await this.vectorStore.markIndexingComplete()
+
+				this.stateManager.setSystemState("Indexed", t("embeddings:orchestrator.fileWatcherStarted"))
+			} else {
+				// No existing data or collection was just created - do a full scan
+				this.stateManager.setSystemState("Indexing", t("embeddings:orchestrator.servicesReady"))
+
+				// Mark as incomplete at the start of full scan
+				await this.vectorStore.markIndexingIncomplete()
+
+				let cumulativeBlocksIndexed = 0
+				let cumulativeBlocksFoundSoFar = 0
+				let batchErrors: Error[] = []
+
+				const handleFileParsed = (fileBlockCount: number) => {
+					cumulativeBlocksFoundSoFar += fileBlockCount
+					this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
+				}
+
+				const handleBlocksIndexed = (indexedCount: number) => {
+					cumulativeBlocksIndexed += indexedCount
+					this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
+				}
+
+				this.info("[CodeIndexOrchestrator] Starting full scan...")
+				const result = await this.scanner.scanDirectory(
+					this.workspacePath,
+					(batchError: Error) => {
+						this.error(
+							`[CodeIndexOrchestrator] Error during full scan batch: ${batchError.message}`,
+							batchError,
+						)
+						batchErrors.push(batchError)
+					},
+					handleBlocksIndexed,
+					handleFileParsed,
+				)
+
+				if (!result) {
+					throw new Error("Full scan failed, is scanner initialized?")
+				}
+
+				// Enhanced error detection and reporting
+				if (batchErrors.length > 0) {
+					const firstError = batchErrors[0]
+					throw new Error(`Indexing failed: ${firstError.message}`)
+				} else {
+					// Check for critical failure scenarios
+					if (cumulativeBlocksFoundSoFar > 0 && cumulativeBlocksIndexed === 0) {
+						throw new Error(t("embeddings:orchestrator.indexingFailedCritical"))
+					}
+				}
+
+				// Check for partial failures - if a significant portion of blocks failed
+				const failureRate = (cumulativeBlocksFoundSoFar - cumulativeBlocksIndexed) / cumulativeBlocksFoundSoFar
+				if (batchErrors.length > 0 && failureRate > 0.1) {
+					// More than 10% of blocks failed to index
+					const firstError = batchErrors[0]
+					throw new Error(
+						`Indexing partially failed: Only ${cumulativeBlocksIndexed} of ${cumulativeBlocksFoundSoFar} blocks were indexed. ${firstError.message}`,
+					)
+				}
+
+				// CRITICAL: If there were ANY batch errors and NO blocks were successfully indexed,
+				// this is a complete failure regardless of the failure rate calculation
+				if (batchErrors.length > 0 && cumulativeBlocksIndexed === 0) {
+					const firstError = batchErrors[0]
+					throw new Error(`Indexing failed completely: ${firstError.message}`)
+				}
+
+				// Final sanity check: If we found blocks but indexed none and somehow no errors were reported,
+				// this is still a failure
+				if (cumulativeBlocksFoundSoFar > 0 && cumulativeBlocksIndexed === 0) {
+					throw new Error(t("embeddings:orchestrator.indexingFailedCritical"))
+				}
+
+				await this._startWatcher()
+
+				// Mark indexing as complete after successful full scan
+				await this.vectorStore.markIndexingComplete()
+
+				this.stateManager.setSystemState("Indexed", t("embeddings:orchestrator.fileWatcherStarted"))
 			}
-
-			const { stats } = result
-			this.info('[CodeIndexOrchestrator] 📊 扫描统计:', stats)
-
-			// 提供更详细的状态消息
-			let statusMessage = "File watcher started."
-			if (stats.processed === 0 && stats.skipped > 0) {
-				statusMessage = `All files cached (${stats.skipped} files skipped). Index up-to-date.`
-			} else if (stats.processed > 0 && stats.skipped > 0) {
-				statusMessage = `Indexed ${stats.processed} new/changed files, ${stats.skipped} cached files skipped.`
-			} else if (stats.processed > 0) {
-				statusMessage = `Indexed ${stats.processed} files.`
-			}
-
-			this.info('[CodeIndexOrchestrator] 👀 开始文件监控...')
-			await this._startWatcher()
-			this.info('[CodeIndexOrchestrator] ✅ 文件监控已启动')
-
-			this.stateManager.setSystemState("Indexed", statusMessage)
-			this.info('[CodeIndexOrchestrator] ✨ 索引进程全部完成!')
 		} catch (error: any) {
-			this.error("[CodeIndexOrchestrator] ❌ 索引过程中发生错误:", error)
-			this.error("[CodeIndexOrchestrator] ❌ 错误堆栈:", error.stack)
-			try {
-				await this.vectorStore.clearCollection()
-			} catch (cleanupError) {
-				this.error("[CodeIndexOrchestrator] Failed to clean up after error:", cleanupError)
+			this.error("[CodeIndexOrchestrator] Error during indexing:", error)
+
+			if (indexingStarted) {
+				try {
+					await this.vectorStore.clearCollection()
+				} catch (cleanupError) {
+					this.error("[CodeIndexOrchestrator] Failed to clean up after error:", cleanupError)
+				}
 			}
 
-			await this.cacheManager.clearCacheFile()
+			// Only clear cache if indexing had started (vector store connection succeeded)
+			// If we never connected to vector store, preserve cache for incremental scan when it comes back
+			if (indexingStarted) {
+				// Indexing started but failed mid-way - clear cache to avoid cache-vector store mismatch
+				await this.cacheManager.clearCacheFile()
+				this.info(
+					"[CodeIndexOrchestrator] Indexing failed after starting. Clearing cache to avoid inconsistency.",
+				)
+			} else {
+				// Never connected to vector store - preserve cache for future incremental scan
+				this.info(
+					"[CodeIndexOrchestrator] Failed to connect to vector store. Preserving cache for future incremental scan.",
+				)
+			}
 
-			this.stateManager.setSystemState("Error", `Failed during initial scan: ${error.message || "Unknown error"}`)
+			this.stateManager.setSystemState(
+				"Error",
+				t("embeddings:orchestrator.failedDuringInitialScan", {
+					errorMessage: error.message || t("embeddings:orchestrator.unknownError"),
+				}),
+			)
 			this.stopWatcher()
 		} finally {
 			this._isProcessing = false
@@ -216,11 +358,10 @@ export class CodeIndexOrchestrator {
 	 */
 	public stopWatcher(): void {
 		this.fileWatcher.dispose()
-		this._fileWatcherSubscriptions.forEach((unsubscribe) => unsubscribe())
 		this._fileWatcherSubscriptions = []
 
 		if (this.stateManager.state !== "Error") {
-			this.stateManager.setSystemState("Standby", "File watcher stopped.")
+			this.stateManager.setSystemState("Standby", t("embeddings:orchestrator.fileWatcherStopped"))
 		}
 		this._isProcessing = false
 	}
@@ -238,11 +379,11 @@ export class CodeIndexOrchestrator {
 			try {
 				if (this.configManager.isFeatureConfigured) {
 					await this.vectorStore.deleteCollection()
-					
-					// Add a small delay to ensure deletion is fully completed in Qdrant
+
+					// Add a small delay to ensure deletion is fully completed in vector store
 					await new Promise(resolve => setTimeout(resolve, 500))
 					this.info("[CodeIndexOrchestrator] Collection deletion completed, waiting for propagation...")
-					
+
 					// Immediately reinitialize the vector store to recreate the collection
 					// This prevents any timing window where the collection doesn't exist
 					this.info("[CodeIndexOrchestrator] Reinitializing vector store after deletion...")
@@ -259,7 +400,7 @@ export class CodeIndexOrchestrator {
 			await this.cacheManager.clearCacheFile()
 
 			if (this.stateManager.state !== "Error") {
-				this.stateManager.setSystemState("Standby", "Index data cleared successfully.")
+				this.stateManager.setSystemState("Standby", t("embeddings:orchestrator.indexDataCleared"))
 			}
 		} finally {
 			this._isProcessing = false

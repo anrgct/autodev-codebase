@@ -1,5 +1,6 @@
 import { listFiles } from "../../glob/list-files"
 import { Ignore } from "ignore"
+import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
 import { scannerExtensions } from "../shared/supported-extensions"
 import { CodeBlock, ICodeParser, IEmbedder, IVectorStore, IDirectoryScanner } from "../interfaces"
 import { BatchProcessor, BatchProcessorOptions } from "./batch-processor"
@@ -13,12 +14,13 @@ import { CacheManager } from "../cache-manager"
 import {
 	QDRANT_CODE_BLOCK_NAMESPACE,
 	MAX_FILE_SIZE_BYTES,
-	MAX_LIST_FILES_LIMIT,
+	MAX_LIST_FILES_LIMIT_CODE_INDEX,
 	BATCH_SEGMENT_THRESHOLD,
 	MAX_BATCH_RETRIES,
 	INITIAL_RETRY_DELAY_MS,
 	PARSING_CONCURRENCY,
 	BATCH_PROCESSING_CONCURRENCY,
+	MAX_PENDING_BATCHES,
 } from "../constants"
 
 export interface DirectoryScannerDependencies {
@@ -35,9 +37,19 @@ export interface DirectoryScannerDependencies {
 
 export class DirectoryScanner implements IDirectoryScanner {
 	private batchProcessor: BatchProcessor<CodeBlock>
-	
-	constructor(private readonly deps: DirectoryScannerDependencies) {
+	private readonly batchSegmentThreshold: number
+
+	constructor(private readonly deps: DirectoryScannerDependencies, batchSegmentThreshold?: number) {
 		this.batchProcessor = new BatchProcessor()
+
+		// Get the configurable batch size from settings, fallback to default
+		// If not provided in constructor, use default value
+		if (batchSegmentThreshold !== undefined) {
+			this.batchSegmentThreshold = batchSegmentThreshold
+		} else {
+			// In this environment, we don't have VSCode settings, so use default
+			this.batchSegmentThreshold = BATCH_SEGMENT_THRESHOLD
+		}
 	}
 
 	/**
@@ -62,9 +74,11 @@ export class DirectoryScanner implements IDirectoryScanner {
 		onFileParsed?: (fileBlockCount: number) => void,
 	): Promise<{ codeBlocks: CodeBlock[]; stats: { processed: number; skipped: number }; totalBlockCount: number }> {
 		const directoryPath = directory
-		this.debug(`[Scanner] Scanning directory: ${directoryPath}`)
+		// Capture workspace context at scan start
+		const scanWorkspace = this.deps.workspace.getRootPath()
+		this.debug(`[Scanner] Scanning directory: ${directoryPath}, workspace: ${scanWorkspace}`)
 		// Get all files recursively (handles .gitignore automatically)
-		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })
+		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT_CODE_INDEX, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })
 		this.debug(`[Scanner] Found ${allPaths.length} paths from listFiles:`, allPaths.slice(0, 10))
 
 		// Filter out directories (marked with trailing '/')
@@ -110,7 +124,8 @@ export class DirectoryScanner implements IDirectoryScanner {
 		let currentBatchBlocks: CodeBlock[] = []
 		let currentBatchTexts: string[] = []
 		let currentBatchFileInfos: { filePath: string; fileHash: string; isNew: boolean }[] = []
-		const activeBatchPromises: Promise<void>[] = []
+		const activeBatchPromises = new Set<Promise<void>>()
+		let pendingBatchCount = 0
 
 		// Initialize block counter
 		let totalBlockCount = 0
@@ -179,7 +194,13 @@ export class DirectoryScanner implements IDirectoryScanner {
 									}
 
 									// Check if batch threshold is met
-									if (currentBatchBlocks.length >= BATCH_SEGMENT_THRESHOLD) {
+									if (currentBatchBlocks.length >= this.batchSegmentThreshold) {
+										// Wait if we've reached the maximum pending batches
+										while (pendingBatchCount >= MAX_PENDING_BATCHES) {
+											// Wait for at least one batch to complete
+											await Promise.race(activeBatchPromises)
+										}
+
 										// Copy current batch data and clear accumulators
 										const batchBlocks = [...currentBatchBlocks]
 										const batchTexts = [...currentBatchTexts]
@@ -188,16 +209,26 @@ export class DirectoryScanner implements IDirectoryScanner {
 										currentBatchTexts = []
 										currentBatchFileInfos = []
 
+										// Increment pending batch count
+										pendingBatchCount++
+
 										// Queue batch processing
 										const batchPromise = batchLimiter(() =>
 											this.processBatch(
 												batchBlocks,
 												batchFileInfos,
+												scanWorkspace,
 												onError,
 												onBlocksIndexed,
 											),
 										)
-										activeBatchPromises.push(batchPromise)
+										activeBatchPromises.add(batchPromise)
+
+										// Clean up completed promises to prevent memory accumulation
+										batchPromise.finally(() => {
+											activeBatchPromises.delete(batchPromise)
+											pendingBatchCount--
+										})
 									}
 								} finally {
 									release()
@@ -208,10 +239,15 @@ export class DirectoryScanner implements IDirectoryScanner {
 						// Only update hash if not being processed in a batch
 						await this.deps.cacheManager.updateHash(filePath, currentFileHash)
 					}
-				} catch (error) {
-					console.error(`Error processing file ${filePath}:`, error)
+				} catch (error: any) {
+					const errorMessage = error instanceof Error ? error.message : String(error)
+					console.error(`Error processing file ${filePath} in workspace ${scanWorkspace}:`, error)
 					if (onError) {
-						onError(error instanceof Error ? error : new Error(`Unknown error processing file ${filePath}`))
+						onError(
+							error instanceof Error
+								? new Error(`${error.message} (Workspace: ${scanWorkspace}, File: ${filePath})`)
+								: new Error(`Unknown error processing file ${filePath} (Workspace: ${scanWorkspace})`),
+						)
 					}
 				}
 			}),
@@ -232,11 +268,20 @@ export class DirectoryScanner implements IDirectoryScanner {
 				currentBatchTexts = []
 				currentBatchFileInfos = []
 
+				// Increment pending batch count for final batch
+				pendingBatchCount++
+
 				// Queue final batch processing
 				const batchPromise = batchLimiter(() =>
-					this.processBatch(batchBlocks, batchFileInfos, onError, onBlocksIndexed),
+					this.processBatch(batchBlocks, batchFileInfos, scanWorkspace, onError, onBlocksIndexed),
 				)
-				activeBatchPromises.push(batchPromise)
+				activeBatchPromises.add(batchPromise)
+
+				// Clean up completed promises to prevent memory accumulation
+				batchPromise.finally(() => {
+					activeBatchPromises.delete(batchPromise)
+					pendingBatchCount--
+				})
 			} finally {
 				release()
 			}
@@ -254,16 +299,29 @@ export class DirectoryScanner implements IDirectoryScanner {
 					try {
 						await this.deps.qdrantClient.deletePointsByFilePath(cachedFilePath)
 						await this.deps.cacheManager.deleteHash(cachedFilePath)
-					} catch (error) {
-						console.error(`[DirectoryScanner] Failed to delete points for ${cachedFilePath}:`, error)
+					} catch (error: any) {
+						const errorStatus = error?.status || error?.response?.status || error?.statusCode
+						const errorMessage = error instanceof Error ? error.message : String(error)
+
+						console.error(
+							`[DirectoryScanner] Failed to delete points for ${cachedFilePath} in workspace ${scanWorkspace}:`,
+							error,
+						)
+
 						if (onError) {
+							// Report error to error handler
 							onError(
 								error instanceof Error
-									? error
-									: new Error(`Unknown error deleting points for ${cachedFilePath}`),
+									? new Error(
+											`${error.message} (Workspace: ${scanWorkspace}, File: ${cachedFilePath})`,
+										)
+									: new Error(
+											`Unknown error deleting points for ${cachedFilePath} (Workspace: ${scanWorkspace})`,
+									),
 							)
 						}
-						// Decide if we should re-throw or just log
+						// Log error and continue processing instead of re-throwing
+						console.error(`Failed to delete points for removed file: ${cachedFilePath}`, error)
 					}
 				}
 			}
@@ -284,6 +342,7 @@ export class DirectoryScanner implements IDirectoryScanner {
 	private async processBatch(
 		batchBlocks: CodeBlock[],
 		batchFileInfos: { filePath: string; fileHash: string; isNew: boolean }[],
+		scanWorkspace: string,
 		onError?: (error: Error) => void,
 		onBlocksIndexed?: (indexedCount: number) => void,
 	): Promise<void> {
@@ -304,15 +363,16 @@ export class DirectoryScanner implements IDirectoryScanner {
 			},
 			
 			itemToPoint: (block, embedding) => {
-				const normalizedAbsolutePath = this.deps.pathUtils.normalize(this.deps.pathUtils.resolve(block.file_path))
-				const stableName = `${normalizedAbsolutePath}:${block.start_line}`
-				const pointId = uuidv5(stableName, QDRANT_CODE_BLOCK_NAMESPACE)
+				const normalizedAbsolutePath = generateNormalizedAbsolutePath(block.file_path, scanWorkspace)
+
+				// Use segmentHash for unique ID generation to handle multiple segments from same line
+				const pointId = uuidv5(block.segmentHash, QDRANT_CODE_BLOCK_NAMESPACE)
 
 				return {
 					id: pointId,
 					vector: embedding,
 					payload: {
-						filePath: this.deps.workspace.getRelativePath(normalizedAbsolutePath),
+						filePath: generateRelativeFilePath(normalizedAbsolutePath, scanWorkspace),
 						codeChunk: block.content,
 						startLine: block.start_line,
 						endLine: block.end_line,
@@ -321,6 +381,7 @@ export class DirectoryScanner implements IDirectoryScanner {
 						identifier: block.identifier,
 						parentChain: block.parentChain,
 						hierarchyDisplay: block.hierarchyDisplay,
+						segmentHash: block.segmentHash,
 					},
 				}
 			},
@@ -330,7 +391,7 @@ export class DirectoryScanner implements IDirectoryScanner {
 				const uniqueFilePaths = Array.from(new Set(
 					batchFileInfos
 						.filter((info) => !info.isNew) // Only modified files (not new)
-						.map((info) => info.filePath),
+						.map((info) => generateRelativeFilePath(info.filePath, scanWorkspace)),
 				))
 				return uniqueFilePaths
 			},
@@ -342,7 +403,12 @@ export class DirectoryScanner implements IDirectoryScanner {
 			onError: (error) => {
 				console.error("[DirectoryScanner] Batch processing error:", error)
 				onError?.(error)
-			}
+			},
+
+			// Path converter for cache deletion (relative -> absolute)
+			relativeCachePathToAbsolute: (relativePath: string) => {
+				return this.deps.pathUtils.resolve(scanWorkspace, relativePath)
+			},
 		}
 
 		const result = await this.batchProcessor.processBatch(batchBlocks, options)
@@ -362,7 +428,7 @@ export class DirectoryScanner implements IDirectoryScanner {
 		const directoryPath = directory
 		this.debug(`[Scanner] Getting all file paths for: ${directoryPath}`)
 		// Get all files recursively (handles .gitignore automatically)
-		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })
+		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT_CODE_INDEX, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })
 		this.debug(`[Scanner] Found ${allPaths.length} paths from listFiles:`)
 
 		// Filter out directories (marked with trailing '/')

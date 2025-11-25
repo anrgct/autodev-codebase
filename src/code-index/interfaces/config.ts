@@ -1,4 +1,14 @@
-import { EmbedderProvider } from "./manager"
+import { ApiHandlerOptions } from "../../shared/api"
+
+export type EmbedderProvider =
+	| "openai"
+	| "ollama"
+	| "openai-compatible"
+	| "jina"
+	| "gemini"
+	| "mistral"
+	| "vercel-ai-gateway"
+	| "openrouter"
 
 /**
  * Ollama embedder configuration
@@ -42,9 +52,57 @@ export interface JinaEmbedderConfig {
 }
 
 /**
+ * Gemini embedder configuration
+ */
+export interface GeminiEmbedderConfig {
+	provider: "gemini"
+	apiKey: string
+	model: string
+	dimension: number
+}
+
+/**
+ * Mistral embedder configuration
+ */
+export interface MistralEmbedderConfig {
+	provider: "mistral"
+	apiKey: string
+	model: string
+	dimension: number
+}
+
+/**
+ * Vercel AI Gateway embedder configuration
+ */
+export interface VercelAiGatewayEmbedderConfig {
+	provider: "vercel-ai-gateway"
+	apiKey: string
+	model: string
+	dimension: number
+}
+
+/**
+ * OpenRouter embedder configuration
+ */
+export interface OpenRouterEmbedderConfig {
+	provider: "openrouter"
+	apiKey: string
+	model: string
+	dimension: number
+}
+
+/**
  * Union type for all embedder configurations
  */
-export type EmbedderConfig = OllamaEmbedderConfig | OpenAIEmbedderConfig | OpenAICompatibleEmbedderConfig | JinaEmbedderConfig
+export type EmbedderConfig =
+	| OllamaEmbedderConfig
+	| OpenAIEmbedderConfig
+	| OpenAICompatibleEmbedderConfig
+	| JinaEmbedderConfig
+	| GeminiEmbedderConfig
+	| MistralEmbedderConfig
+	| VercelAiGatewayEmbedderConfig
+	| OpenRouterEmbedderConfig
 
 /**
  * Configuration state for the code indexing feature
@@ -52,10 +110,20 @@ export type EmbedderConfig = OllamaEmbedderConfig | OpenAIEmbedderConfig | OpenA
 export interface CodeIndexConfig {
 	isEnabled: boolean
 	isConfigured: boolean
-	embedder: EmbedderConfig
+	embedderProvider: EmbedderProvider
+	modelId?: string
+	modelDimension?: number // Generic dimension property for all providers
+	openAiOptions?: ApiHandlerOptions
+	ollamaOptions?: ApiHandlerOptions
+	openAiCompatibleOptions?: { baseUrl: string; apiKey: string }
+	geminiOptions?: { apiKey: string }
+	mistralOptions?: { apiKey: string }
+	vercelAiGatewayOptions?: { apiKey: string }
+	openRouterOptions?: { apiKey: string }
 	qdrantUrl?: string
 	qdrantApiKey?: string
 	searchMinScore?: number
+	searchMaxResults?: number
 }
 
 /**
@@ -65,7 +133,16 @@ export type PreviousConfigSnapshot = {
 	enabled: boolean
 	configured: boolean
 	embedderProvider: EmbedderProvider
-	embedderConfig: string // JSON string of embedder config for comparison
+	modelId?: string
+	modelDimension?: number // Generic dimension property
+	openAiKey?: string
+	ollamaBaseUrl?: string
+	openAiCompatibleBaseUrl?: string
+	openAiCompatibleApiKey?: string
+	geminiApiKey?: string
+	mistralApiKey?: string
+	vercelAiGatewayApiKey?: string
+	openRouterApiKey?: string
 	qdrantUrl?: string
 	qdrantApiKey?: string
 }

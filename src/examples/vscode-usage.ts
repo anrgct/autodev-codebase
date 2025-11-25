@@ -93,11 +93,15 @@ export function deactivate() {
  * Example of how to use the adapters in a test environment
  */
 export function createTestDependencies(): IPlatformDependencies {
+  // Create a mock ExtensionContext with just the required property
+  const mockContext = {
+    globalStorageUri: vscode.Uri.file('/tmp/test-storage'),
+    subscriptions: []
+  } as vscode.ExtensionContext
+
   return {
     fileSystem: new VSCodeFileSystem(),
-    storage: new VSCodeStorage({
-      globalStorageUri: vscode.Uri.file('/tmp/test-storage')
-    } as vscode.ExtensionContext),
+    storage: new VSCodeStorage(mockContext),
     eventBus: new VSCodeEventBus(),
     logger: new VSCodeLogger('Test Logger'),
     fileWatcher: new VSCodeFileWatcher()
