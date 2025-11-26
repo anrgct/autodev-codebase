@@ -154,17 +154,38 @@ export class CodeParser implements ICodeParser {
 		
 		// Extract identifiers from captures
 		for (const capture of captures) {
-			if (capture.name === 'name' || capture.name === 'property.name.definition') {
-				// Find the corresponding definition node for this name
-				const definitionCapture = captures.find(c => 
-					c.name.includes('definition') && 
-					c.node.startPosition.row <= capture.node.startPosition.row &&
-					c.node.endPosition.row >= capture.node.endPosition.row
-				)
-				if (definitionCapture) {
+			if (capture.name === "name" || capture.name === "property.name.definition") {
+				// Find the *closest* definition node that fully contains this name node.
+				// When multiple definition nodes match (e.g. class + method), we prefer the
+				// one with the smallest span so that method names don't get attached to
+				// the outer class/container.
+				const candidateDefinitions = captures.filter((c) => {
+					if (!c.name.includes("definition")) return false
+					const defNode = c.node
+					const nameNode = capture.node
+					if (!defNode || !nameNode) return false
+					return (
+						defNode.startPosition.row <= nameNode.startPosition.row &&
+						defNode.endPosition.row >= nameNode.endPosition.row
+					)
+				})
+
+				if (candidateDefinitions.length > 0) {
+					const definitionCapture = candidateDefinitions.reduce((best, current) => {
+						const bestSpan =
+							best.node.endPosition.row - best.node.startPosition.row
+						const currentSpan =
+							current.node.endPosition.row - current.node.startPosition.row
+						return currentSpan < bestSpan ? current : best
+					})
+
 					// For JSON properties, remove quotes from the identifier
 					let identifier = capture.node.text
-					if (capture.name === 'property.name.definition' && identifier.startsWith('"') && identifier.endsWith('"')) {
+					if (
+						capture.name === "property.name.definition" &&
+						identifier.startsWith("\"") &&
+						identifier.endsWith("\"")
+					) {
 						identifier = identifier.slice(1, -1)
 					}
 					nodeIdentifierMap.set(definitionCapture.node, identifier)

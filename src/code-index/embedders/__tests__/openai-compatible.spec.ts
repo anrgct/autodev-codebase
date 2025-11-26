@@ -312,7 +312,9 @@ describe("OpenAICompatibleEmbedder", () => {
 				await embedder.createEmbeddings(testTexts)
 
 				// Should warn about oversized text
-				expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("exceeds maximum token limit"))
+				expect(console.warn).toHaveBeenCalledWith(
+					"Text at index 1 exceeds token limit (10239 > 8191). Skipping.",
+				)
 
 				// Should only process normal texts (1 call for 2 normal texts batched together)
 				expect(mockEmbeddingsCreate).toHaveBeenCalledTimes(1)
@@ -372,7 +374,7 @@ describe("OpenAICompatibleEmbedder", () => {
 				const result = await resultPromise
 
 				expect(mockEmbeddingsCreate).toHaveBeenCalledTimes(3)
-				expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Rate limit hit, retrying in"))
+				expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("Rate limit hit."))
 				expect(result).toEqual({
 					embeddings: [[0.25, 0.5, 0.75]],
 					usage: { promptTokens: 10, totalTokens: 15 },
@@ -387,7 +389,7 @@ describe("OpenAICompatibleEmbedder", () => {
 				mockEmbeddingsCreate.mockRejectedValue(authError)
 
 				await expect(embedder.createEmbeddings(testTexts)).rejects.toThrow(
-					"Failed to create embeddings: batch processing error",
+					"Authentication failed. Please check your API key.",
 				)
 
 				expect(mockEmbeddingsCreate).toHaveBeenCalledTimes(1)
@@ -402,7 +404,7 @@ describe("OpenAICompatibleEmbedder", () => {
 				mockEmbeddingsCreate.mockRejectedValue(serverError)
 
 				await expect(embedder.createEmbeddings(testTexts)).rejects.toThrow(
-					"Failed to create embeddings: batch processing error",
+					"Embedding generation failed after 3 attempts with status 500: Internal server error",
 				)
 
 				expect(mockEmbeddingsCreate).toHaveBeenCalledTimes(1)
@@ -420,12 +422,12 @@ describe("OpenAICompatibleEmbedder", () => {
 				mockEmbeddingsCreate.mockRejectedValue(apiError)
 
 				await expect(embedder.createEmbeddings(testTexts)).rejects.toThrow(
-					"Failed to create embeddings: batch processing error",
+					"Embedding generation failed after 3 attempts with error: API connection failed",
 				)
 
 				expect(console.error).toHaveBeenCalledWith(
-					expect.stringContaining("Failed to process batch"),
-					expect.any(Error),
+					"OpenAI Compatible embedder error (attempt 1/3):",
+					apiError,
 				)
 			})
 
@@ -436,10 +438,13 @@ describe("OpenAICompatibleEmbedder", () => {
 				mockEmbeddingsCreate.mockRejectedValue(batchError)
 
 				await expect(embedder.createEmbeddings(testTexts)).rejects.toThrow(
-					"Failed to create embeddings: batch processing error",
+					"Embedding generation failed after 3 attempts with error: Batch processing failed",
 				)
 
-				expect(console.error).toHaveBeenCalledWith("Failed to process batch:", batchError)
+				expect(console.error).toHaveBeenCalledWith(
+					"OpenAI Compatible embedder error (attempt 1/3):",
+					batchError,
+				)
 			})
 
 			it("should handle empty text arrays", async () => {

@@ -29,7 +29,7 @@ export interface IDirectoryScanner {
 	 * Scans a directory for code blocks
 	 * @param directoryPath Path to the directory to scan
 	 * @param options Optional scanning options
-	 * @returns Promise resolving to scan results
+	 * @returns Promise resolving to scan results and processing statistics
 	 */
 	scanDirectory(
 		directory: string,
@@ -38,6 +38,10 @@ export interface IDirectoryScanner {
 		onFileParsed?: (fileBlockCount: number) => void,
 	): Promise<{
 		codeBlocks: CodeBlock[]
+		stats: {
+			processed: number
+			skipped: number
+		}
 		totalBlockCount: number
 	}>
 

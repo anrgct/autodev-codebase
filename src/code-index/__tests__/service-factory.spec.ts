@@ -1,358 +1,217 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import type { MockedClass, MockedFunction } from "vitest"
+import type { MockedClass } from "vitest"
 import { CodeIndexServiceFactory } from "../service-factory"
 import { CodeIndexConfigManager } from "../config-manager"
 import { CacheManager } from "../cache-manager"
 
-// Mock the embedders and vector store with factory functions that return proper mocks
+// Mock embedders
 vi.mock("../embedders/openai", () => {
 	class MockOpenAiEmbedder {
-		async createEmbeddings(texts: string[], model?: string) {
-			return {
-				embeddings: [[0.1, 0.2, 0.3]],
-				usage: { promptTokens: 10, totalTokens: 10 },
-			}
-		}
-
+		createEmbeddings = vi.fn()
+		validateConfiguration = vi.fn().mockResolvedValue({ valid: true })
 		get embedderInfo() {
-			return {
-				name: "openai",
-			}
+			return { name: "openai" }
 		}
 	}
-
-	return {
-		OpenAiEmbedder: MockOpenAiEmbedder,
-	}
+	return { OpenAiEmbedder: vi.fn().mockImplementation((opts) => new MockOpenAiEmbedder()) }
 })
+
 vi.mock("../embedders/ollama", () => {
 	class MockOllamaEmbedder {
-		async createEmbeddings(texts: string[], model?: string) {
-			return {
-				embeddings: [[0.1, 0.2, 0.3]],
-				usage: { promptTokens: 10, totalTokens: 10 },
-			}
-		}
-
+		createEmbeddings = vi.fn()
+		validateConfiguration = vi.fn().mockResolvedValue({ valid: true })
 		get embedderInfo() {
-			return {
-				name: "ollama",
-			}
+			return { name: "ollama" }
 		}
 	}
-
-	return {
-		CodeIndexOllamaEmbedder: MockOllamaEmbedder,
-	}
+	return { CodeIndexOllamaEmbedder: vi.fn().mockImplementation(() => new MockOllamaEmbedder()) }
 })
+
 vi.mock("../embedders/openai-compatible", () => {
 	class MockOpenAICompatibleEmbedder {
-		async createEmbeddings(texts: string[], model?: string) {
-			return {
-				embeddings: [[0.1, 0.2, 0.3]],
-				usage: { promptTokens: 10, totalTokens: 10 },
-			}
-		}
-
+		createEmbeddings = vi.fn()
+		validateConfiguration = vi.fn().mockResolvedValue({ valid: true })
 		get embedderInfo() {
-			return {
-				name: "openai-compatible",
-			}
+			return { name: "openai-compatible" }
 		}
 	}
-
-	return {
-		OpenAICompatibleEmbedder: MockOpenAICompatibleEmbedder,
-	}
+	return { OpenAICompatibleEmbedder: vi.fn().mockImplementation(() => new MockOpenAICompatibleEmbedder()) }
 })
+
+// Mock vector store
 vi.mock("../vector-store/qdrant-client", () => {
 	const createMockVectorStore = () => ({
-		addEmbeddings: vi.fn().mockResolvedValue({}),
-		search: vi.fn().mockResolvedValue([
-			{ id: "1", score: 0.9, metadata: { file: "test.ts" } },
-		]),
-		ensureCollection: vi.fn().mockResolvedValue(true),
-		deleteCollection: vi.fn().mockResolvedValue(true),
-		getCollectionInfo: vi.fn().mockResolvedValue({ vectors_count: 0 }),
+		addEmbeddings: vi.fn(),
+		search: vi.fn(),
+		ensureCollection: vi.fn(),
+		deleteCollection: vi.fn(),
+		getCollectionInfo: vi.fn(),
 	})
-
 	return {
 		QdrantVectorStore: vi.fn().mockImplementation(createMockVectorStore),
 	}
 })
 
-// Mock the embedding models module
-vi.mock("../../../shared/embeddingModels", () => ({
+// Mock embedding models helpers
+vi.mock("../shared/embeddingModels", () => ({
 	getDefaultModelId: vi.fn().mockReturnValue("text-embedding-3-small"),
 	getModelDimension: vi.fn().mockReturnValue(1536),
 }))
 
-// Import the mocked modules after mocking to get proper typing
+// Import mocked modules for type-safe access
 import { OpenAiEmbedder } from "../embedders/openai"
 import { CodeIndexOllamaEmbedder } from "../embedders/ollama"
 import { OpenAICompatibleEmbedder } from "../embedders/openai-compatible"
 import { QdrantVectorStore } from "../vector-store/qdrant-client"
-import { getDefaultModelId, getModelDimension } from "../../../shared/embeddingModels"
+import { getDefaultModelId, getModelDimension } from "../../shared/embeddingModels"
 
-// Type casting for better IntelliSense and type checking - only for QdrantVectorStore since it's still mocked with vi.fn()
-const MockedQdrantVectorStore = QdrantVectorStore as any
+const MockedOpenAiEmbedder = OpenAiEmbedder as unknown as MockedClass<typeof OpenAiEmbedder>
+const MockedCodeIndexOllamaEmbedder = CodeIndexOllamaEmbedder as unknown as MockedClass<
+	typeof CodeIndexOllamaEmbedder
+>
+const MockedOpenAICompatibleEmbedder = OpenAICompatibleEmbedder as unknown as MockedClass<
+	typeof OpenAICompatibleEmbedder
+>
+const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<typeof QdrantVectorStore>
 
-describe("CodeIndexServiceFactory", () => {
+	describe("CodeIndexServiceFactory", () => {
 	let factory: CodeIndexServiceFactory
 	let mockConfigManager: any
-	let mockCacheManager: any
+	let mockCacheManager: CacheManager
 
 	beforeEach(() => {
 		vi.clearAllMocks()
 
 		mockConfigManager = {
 			getConfig: vi.fn(),
-		}
+			isFeatureConfigured: true,
+		} as any
 
-		mockCacheManager = {}
+		mockCacheManager = {} as CacheManager
 
 		factory = new CodeIndexServiceFactory(mockConfigManager, "/test/workspace", mockCacheManager)
 	})
 
 	describe("createEmbedder", () => {
-		it("should pass model ID to OpenAI embedder when using OpenAI provider", async () => {
-			// Arrange
-			const testModelId = "text-embedding-3-large"
-			const testConfig = {
-				embedder: {
-					provider: "openai",
-					apiKey: "test-api-key",
-					model: testModelId,
-					dimension: 3072,
+		it("should create OpenAI embedder with correct configuration", () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "text-embedding-3-large",
+				openAiOptions: {
+					openAiNativeApiKey: "test-api-key",
 				},
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act
-			const result = await factory.createEmbedder()
+			const embedder = factory.createEmbedder()
 
-			// Assert - check that an embedder was created with expected methods
-			expect(result).toBeDefined()
-			expect(result).toHaveProperty('createEmbeddings')
-			expect(result).toHaveProperty('embedderInfo')
-			// Note: Cannot test constructor calls due to Vitest mocking limitations
+			expect(embedder).toBeDefined()
+			expect(MockedOpenAiEmbedder).toHaveBeenCalledWith(
+				expect.objectContaining({
+					openAiNativeApiKey: "test-api-key",
+					openAiEmbeddingModelId: "text-embedding-3-large",
+				}),
+			)
 		})
 
-		it("should pass model ID to Ollama embedder when using Ollama provider", async () => {
-			// Arrange
-			const testModelId = "nomic-embed-text:latest"
-			const testConfig = {
-				embedder: {
-					provider: "ollama",
-					baseUrl: "http://localhost:11434",
-					model: testModelId,
-					dimension: 768,
+		it("should create Ollama embedder with correct configuration", () => {
+			const config = {
+				embedderProvider: "ollama",
+				modelId: "nomic-embed-text",
+				ollamaOptions: {
+					ollamaBaseUrl: "http://localhost:11434",
 				},
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act
-			const result = await factory.createEmbedder()
+			const embedder = factory.createEmbedder()
 
-			// Assert - check that an embedder was created with expected methods
-			expect(result).toBeDefined()
-			expect(result).toHaveProperty('createEmbeddings')
-			expect(result).toHaveProperty('embedderInfo')
+			expect(embedder).toBeDefined()
+			expect(MockedCodeIndexOllamaEmbedder).toHaveBeenCalledWith(
+				expect.objectContaining({
+					ollamaBaseUrl: "http://localhost:11434",
+					ollamaModelId: "nomic-embed-text",
+				}),
+			)
 		})
 
-		it("should handle undefined model ID for OpenAI embedder", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai",
-					apiKey: "test-api-key",
-					model: undefined,
-					dimension: 3072,
-				},
-				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
-			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
-
-			// Act
-			const result = await factory.createEmbedder()
-
-			// Assert - check that an embedder was created with expected methods
-			expect(result).toBeDefined()
-			expect(result).toHaveProperty('createEmbeddings')
-			expect(result).toHaveProperty('embedderInfo')
-		})
-
-		it("should handle undefined model ID for Ollama embedder", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "ollama",
-					baseUrl: "http://localhost:11434",
-					model: undefined,
-					dimension: 768,
-				},
-				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
-			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
-
-			// Act
-			const result = await factory.createEmbedder()
-
-			// Assert - check that an embedder was created with expected methods
-			expect(result).toBeDefined()
-			expect(result).toHaveProperty('createEmbeddings')
-			expect(result).toHaveProperty('embedderInfo')
-		})
-
-		it("should throw error when OpenAI API key is missing", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai",
-					apiKey: undefined,
-					model: "text-embedding-3-large",
-					dimension: 3072,
-				},
-				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
-			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
-
-			// Act & Assert
-			await expect(factory.createEmbedder()).rejects.toThrow("OpenAI API key missing for embedder creation")
-		})
-
-		it("should throw error when Ollama base URL is missing", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "ollama",
-					baseUrl: undefined,
-					model: "nomic-embed-text:latest",
-					dimension: 768,
-				},
-				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
-			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
-
-			// Act & Assert
-			await expect(factory.createEmbedder()).rejects.toThrow("Ollama base URL missing for embedder creation")
-		})
-
-		it("should pass model ID to OpenAI Compatible embedder when using OpenAI Compatible provider", async () => {
-			// Arrange
-			const testModelId = "text-embedding-3-large"
-			const testConfig = {
-				embedder: {
-					provider: "openai-compatible",
+		it("should create OpenAI Compatible embedder with correct configuration", () => {
+			const config = {
+				embedderProvider: "openai-compatible",
+				modelId: "text-embedding-3-large",
+				openAiCompatibleOptions: {
 					baseUrl: "https://api.example.com/v1",
 					apiKey: "test-api-key",
-					model: testModelId,
-					dimension: 3072,
 				},
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act
-			const result = await factory.createEmbedder()
+			const embedder = factory.createEmbedder()
 
-			// Assert
-			expect(result).toBeDefined()
-			expect(result).toHaveProperty('createEmbeddings')
-			expect(result).toHaveProperty('embedderInfo')
+			expect(embedder).toBeDefined()
+			expect(MockedOpenAICompatibleEmbedder).toHaveBeenCalledWith(
+				"https://api.example.com/v1",
+				"test-api-key",
+				"text-embedding-3-large",
+			)
 		})
 
-		it("should handle undefined model ID for OpenAI Compatible embedder", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai-compatible",
-					baseUrl: "https://api.example.com/v1",
-					apiKey: "test-api-key",
-					model: undefined,
-					dimension: 3072,
-				},
+		it("should throw when OpenAI API key is missing", () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "text-embedding-3-small",
+				openAiOptions: {},
 				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act
-			const result = await factory.createEmbedder()
-
-			// Assert
-			expect(result).toBeDefined()
-			expect(result).toHaveProperty('createEmbeddings')
-			expect(result).toHaveProperty('embedderInfo')
+			expect(() => factory.createEmbedder()).toThrow("OpenAI API key missing for embedder creation")
 		})
 
-		it("should throw error when OpenAI Compatible base URL is missing", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai-compatible",
-					baseUrl: undefined,
-					apiKey: "test-api-key",
-					model: "text-embedding-3-large",
-					dimension: 3072,
+		it("should throw when Ollama base URL is missing", () => {
+			const config = {
+				embedderProvider: "ollama",
+				modelId: "nomic-embed-text",
+				ollamaOptions: {},
+				qdrantUrl: "http://localhost:6333",
+			}
+			mockConfigManager.getConfig.mockReturnValue(config)
+
+			expect(() => factory.createEmbedder()).toThrow("Ollama base URL missing for embedder creation")
+		})
+
+		it("should throw when OpenAI Compatible base URL or API key is missing", () => {
+			const config = {
+				embedderProvider: "openai-compatible",
+				modelId: "text-embedding-3-large",
+				openAiCompatibleOptions: {
+					baseUrl: "",
+					apiKey: "",
 				},
 				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act & Assert
-			await expect(factory.createEmbedder()).rejects.toThrow(
+			expect(() => factory.createEmbedder()).toThrow(
 				"OpenAI Compatible base URL and API key missing for embedder creation",
 			)
 		})
 
-		it("should throw error when OpenAI Compatible API key is missing", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai-compatible",
-					baseUrl: "https://api.example.com/v1",
-					apiKey: undefined,
-					model: "text-embedding-3-large",
-					dimension: 3072,
-				},
+		it("should throw for invalid embedder provider", () => {
+			const config = {
+				embedderProvider: "invalid-provider",
+				modelId: "some-model",
 				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act & Assert
-			await expect(factory.createEmbedder()).rejects.toThrow(
-				"OpenAI Compatible base URL and API key missing for embedder creation",
-			)
-		})
-
-		it("should throw error for invalid embedder provider", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "invalid-provider",
-					apiKey: "test-api-key",
-					model: "some-model",
-					dimension: 1536,
-				} as any,
-				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
-			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
-
-			// Act & Assert
-			await expect(factory.createEmbedder()).rejects.toThrow("Invalid embedder provider configured: invalid-provider")
+			expect(() => factory.createEmbedder()).toThrow("Invalid embedder type configured: invalid-provider")
 		})
 	})
 
@@ -361,141 +220,147 @@ describe("CodeIndexServiceFactory", () => {
 			vi.clearAllMocks()
 		})
 
-		it("should use embedder.dimension from config for OpenAI provider", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai",
-					apiKey: "test-api-key",
-					model: "text-embedding-3-large",
-					dimension: 3072,
-				},
+		it("should use model profile dimension when available", () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "text-embedding-3-small",
+				modelDimension: 2048,
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act
-			await factory.createVectorStore()
+			const expectedDimension = getModelDimension("openai", "text-embedding-3-small")!
 
-			// Assert
+			factory.createVectorStore()
+
 			expect(MockedQdrantVectorStore).toHaveBeenCalledWith(
 				"/test/workspace",
 				"http://localhost:6333",
-				3072,
+				expectedDimension,
 				"test-key",
 			)
 		})
 
-		it("should use embedder.dimension from config for Ollama provider", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "ollama",
-					baseUrl: "http://localhost:11434",
-					model: "nomic-embed-text:latest",
-					dimension: 768,
-				},
-				qdrantUrl: "http://localhost:6333",
-				qdrantApiKey: "test-key",
-			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
-
-			// Act
-			await factory.createVectorStore()
-
-			// Assert
-			expect(MockedQdrantVectorStore).toHaveBeenCalledWith(
-				"/test/workspace",
-				"http://localhost:6333",
-				768,
-				"test-key",
-			)
-		})
-
-		it("should use embedder.dimension from config for OpenAI Compatible provider", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai-compatible",
+		it("should fall back to manual modelDimension when model has no profile", () => {
+			const config = {
+				embedderProvider: "openai-compatible",
+				modelId: "custom-model",
+				modelDimension: 1024,
+				openAiCompatibleOptions: {
 					baseUrl: "https://api.example.com/v1",
 					apiKey: "test-api-key",
-					model: "text-embedding-3-large",
-					dimension: 3072,
 				},
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act
-			await factory.createVectorStore()
+			factory.createVectorStore()
 
-			// Assert
 			expect(MockedQdrantVectorStore).toHaveBeenCalledWith(
 				"/test/workspace",
 				"http://localhost:6333",
-				3072,
+				1024,
 				"test-key",
 			)
 		})
 
-		it("should throw error when embedder dimension is invalid", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai",
+		it("should throw specialized error when OpenAI Compatible dimension cannot be determined", () => {
+			const config = {
+				embedderProvider: "openai-compatible",
+				modelId: "custom-model",
+				modelDimension: 0,
+				openAiCompatibleOptions: {
+					baseUrl: "https://api.example.com/v1",
 					apiKey: "test-api-key",
-					model: "text-embedding-3-large",
-					dimension: 0, // Invalid dimension
 				},
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act & Assert
-			await expect(factory.createVectorStore()).rejects.toThrow(
-				"Invalid vector dimension '0' for model 'text-embedding-3-large' with provider 'openai'. Please specify a valid dimension in the configuration."
+			expect(() => factory.createVectorStore()).toThrow(
+				"Could not determine vector dimension for model 'custom-model' with provider 'openai-compatible'. Please ensure the 'Embedding Dimension' is correctly set in the OpenAI-Compatible provider settings.",
 			)
 		})
 
-		it("should throw error when embedder dimension is undefined", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai",
-					apiKey: "test-api-key",
-					model: "text-embedding-3-large",
-					dimension: undefined,
+		it("should throw generic error when dimension cannot be determined for OpenAI", () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "unknown-model",
+				modelDimension: undefined,
+				openAiOptions: {
+					openAiNativeApiKey: "test-key",
 				},
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act & Assert
-			await expect(factory.createVectorStore()).rejects.toThrow(
-				"Invalid vector dimension 'undefined' for model 'text-embedding-3-large' with provider 'openai'. Please specify a valid dimension in the configuration."
+			expect(() => factory.createVectorStore()).toThrow(
+				"Could not determine vector dimension for model 'unknown-model' with provider 'openai'. Check model profiles or configuration.",
 			)
 		})
 
-		it("should throw error when Qdrant URL is missing", async () => {
-			// Arrange
-			const testConfig = {
-				embedder: {
-					provider: "openai",
-					apiKey: "test-api-key",
-					model: "text-embedding-3-small",
-					dimension: 1536,
+		it("should throw when Qdrant URL is missing", () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "text-embedding-3-small",
+				modelDimension: 1536,
+				openAiOptions: {
+					openAiNativeApiKey: "test-key",
 				},
 				qdrantUrl: undefined,
 				qdrantApiKey: "test-key",
 			}
-			mockConfigManager.getConfig.mockResolvedValue(testConfig as any)
+			mockConfigManager.getConfig.mockReturnValue(config)
 
-			// Act & Assert
-			await expect(factory.createVectorStore()).rejects.toThrow("Qdrant URL missing for vector store creation")
+			expect(() => factory.createVectorStore()).toThrow("Qdrant URL missing for vector store creation")
+		})
+	})
+
+	describe("validateEmbedder", () => {
+		it("should return validation result from embedder", async () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "text-embedding-3-small",
+				openAiOptions: {
+					openAiNativeApiKey: "test-key",
+				},
+				qdrantUrl: "http://localhost:6333",
+			}
+			mockConfigManager.getConfig.mockReturnValue(config)
+
+			const embedder = factory.createEmbedder()
+			const result = await factory.validateEmbedder(embedder)
+
+			expect(result).toEqual({ valid: true })
+		})
+
+		it("should preserve error message when validation throws", async () => {
+			const config = {
+				embedderProvider: "openai",
+				modelId: "text-embedding-3-small",
+				openAiOptions: {
+					openAiNativeApiKey: "test-key",
+				},
+				qdrantUrl: "http://localhost:6333",
+			}
+			mockConfigManager.getConfig.mockReturnValue(config)
+
+			const embedderInstance: any = {
+				validateConfiguration: vi.fn().mockRejectedValue(new Error("authenticationFailed")),
+			}
+			;(MockedOpenAiEmbedder as any).mockImplementation(() => embedderInstance)
+
+			const embedder = factory.createEmbedder()
+			const result = await factory.validateEmbedder(embedder)
+
+			expect(result).toEqual({
+				valid: false,
+				error: "authenticationFailed",
+			})
 		})
 	})
 })

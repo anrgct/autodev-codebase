@@ -2,7 +2,6 @@ import { createHash } from "crypto"
 import { ICacheManager } from "./interfaces/cache"
 import { IFileSystem, IStorage } from "../abstractions"
 import debounce from "lodash.debounce"
-import { safeWriteJson } from "../utils/fs"
 
 /**
  * Manages the cache for code indexing
@@ -55,7 +54,10 @@ export class CacheManager implements ICacheManager {
 	 */
 	private async _performSave(): Promise<void> {
 		try {
-			await safeWriteJson(this.cachePath, this.fileHashes)
+			// Persist cache JSON via the injected filesystem so implementations
+			// (Node.js, VSCode, etc.) stay in control of how writes are done.
+			const json = JSON.stringify(this.fileHashes, null, 2)
+			await this.fileSystem.writeFile(this.cachePath, new TextEncoder().encode(json))
 		} catch (error) {
 			console.error("Failed to save cache:", error)
 		}
@@ -66,7 +68,7 @@ export class CacheManager implements ICacheManager {
 	 */
 	async clearCacheFile(): Promise<void> {
 		try {
-			await safeWriteJson(this.cachePath, {})
+			await this.fileSystem.writeFile(this.cachePath, new TextEncoder().encode("{}"))
 			this.fileHashes = {}
 		} catch (error) {
 			console.error("Failed to clear cache file:", error, this.cachePath)

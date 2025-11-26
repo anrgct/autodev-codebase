@@ -181,6 +181,7 @@ describe("DirectoryScanner", () => {
 		mockWorkspace = {
 			shouldIgnore: vi.fn().mockResolvedValue(false),
 			getRelativePath: vi.fn().mockImplementation((path) => path),
+			getRootPath: vi.fn().mockReturnValue("/mock/workspace"),
 		}
 		mockPathUtils = {
 			extname: vi.fn().mockImplementation((path) => {

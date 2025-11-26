@@ -1,10 +1,14 @@
 {
   "isEnabled": true,
-  "isConfigured": false,
-  "embedderProvider": "ollama",
-  "modelId": "nomic-embed-text",
-  "modelDimension": 768,
+  "isConfigured": true,
+  "embedderProvider": "openai",
+  "modelId": "text-embedding-3-small",
+  "modelDimension": 1536,
   "ollamaOptions": {
     "ollamaBaseUrl": "http://localhost:11434"
-  }
+  },
+  "openAiOptions": {
+    "openAiNativeApiKey": "test-key"
+  },
+  "qdrantUrl": "http://localhost:6333"
 }

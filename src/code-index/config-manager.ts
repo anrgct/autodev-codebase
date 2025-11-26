@@ -69,15 +69,17 @@ export class CodeIndexConfigManager {
 			codebaseIndexSearchMaxResults,
 		} = codebaseIndexConfig
 
-		const openAiKey = await this.configProvider.getSecret("codeIndexOpenAiKey") ?? ""
-		const qdrantApiKey = await this.configProvider.getSecret("codeIndexQdrantApiKey") ?? ""
+		const openAiKey = (await this.configProvider.getSecret("codeIndexOpenAiKey")) ?? ""
+		const qdrantApiKey = (await this.configProvider.getSecret("codeIndexQdrantApiKey")) ?? ""
 		// Fix: Read OpenAI Compatible settings from the correct location within codebaseIndexConfig
 		const openAiCompatibleBaseUrl = codebaseIndexConfig.codebaseIndexOpenAiCompatibleBaseUrl ?? ""
-		const openAiCompatibleApiKey = await this.configProvider.getSecret("codebaseIndexOpenAiCompatibleApiKey") ?? ""
-		const geminiApiKey = await this.configProvider.getSecret("codebaseIndexGeminiApiKey") ?? ""
-		const mistralApiKey = this.configProvider.getSecret("codebaseIndexMistralApiKey") ?? ""
-		const vercelAiGatewayApiKey = this.configProvider.getSecret("codebaseIndexVercelAiGatewayApiKey") ?? ""
-		const openRouterApiKey = this.configProvider.getSecret("codebaseIndexOpenRouterApiKey") ?? ""
+		const openAiCompatibleApiKey =
+			(await this.configProvider.getSecret("codebaseIndexOpenAiCompatibleApiKey")) ?? ""
+		const geminiApiKey = (await this.configProvider.getSecret("codebaseIndexGeminiApiKey")) ?? ""
+		const mistralApiKey = (await this.configProvider.getSecret("codebaseIndexMistralApiKey")) ?? ""
+		const vercelAiGatewayApiKey =
+			(await this.configProvider.getSecret("codebaseIndexVercelAiGatewayApiKey")) ?? ""
+		const openRouterApiKey = (await this.configProvider.getSecret("codebaseIndexOpenRouterApiKey")) ?? ""
 
 		// Update instance variables with configuration
 		this.codebaseIndexEnabled = codebaseIndexEnabled ?? true
