@@ -9,6 +9,15 @@ import { scannerExtensions, shouldUseFallbackChunking } from "../shared/supporte
 import { MAX_BLOCK_CHARS, MIN_BLOCK_CHARS, MIN_CHUNK_REMAINDER_CHARS, MAX_CHARS_TOLERANCE_FACTOR } from "../constants"
 
 /**
+ * Markdown header information for building parent chains
+ */
+interface MarkdownHeader {
+  level: number
+  text: string
+  line: number
+}
+
+/**
  * Implementation of the code parser interface
  */
 export class CodeParser implements ICodeParser {
@@ -238,7 +247,7 @@ export class CodeParser implements ICodeParser {
 						seenSegmentHashes.add(segmentHash)
 						
 						// Build parent chain and hierarchy display
-						const parentChain = this.buildParentChain(currentNode, nodeIdentifierMap)
+						const parentChain = this.buildParentChain('tree-sitter', currentNode, nodeIdentifierMap)
 						const hierarchyDisplay = this.buildHierarchyDisplay(parentChain, identifier, type)
 						
 						results.push({
@@ -274,7 +283,33 @@ export class CodeParser implements ICodeParser {
 		chunkType: string,
 		seenSegmentHashes: Set<string>,
 		baseStartLine: number = 1, // 1-based start line of the *first* line in the `lines` array
+		options?: {
+			/**
+			 * Optional identifier (e.g. markdown header text) to attach to all
+			 * produced chunks. When omitted, `identifier` defaults to null.
+			 */
+			identifier?: string | null
+			/**
+			 * Optional parent chain describing the logical hierarchy for the
+			 * chunks (used primarily for markdown sections).
+			 */
+			parentChain?: ParentContainer[]
+			/**
+			 * Optional pre-computed hierarchy display string.
+			 */
+			hierarchyDisplay?: string | null
+			/**
+			 * Optional override for the chunkSource. When omitted we keep the
+			 * existing defaults of 'fallback' and 'line-segment'.
+			 */
+			chunkSourceOverride?: CodeBlock["chunkSource"]
+		},
 	): CodeBlock[] {
+		const identifier = options?.identifier ?? null
+		const parentChain = options?.parentChain ?? []
+		const hierarchyDisplay = options?.hierarchyDisplay ?? null
+		const chunkSourceOverride = options?.chunkSourceOverride
+
 		const chunks: CodeBlock[] = []
 		let currentChunkLines: string[] = []
 		let currentChunkLength = 0
@@ -295,16 +330,16 @@ export class CodeParser implements ICodeParser {
 					seenSegmentHashes.add(segmentHash)
 					chunks.push({
 						file_path: filePath,
-						identifier: null,
+						identifier,
 						type: chunkType,
 						start_line: startLine,
 						end_line: endLine,
 						content: chunkContent,
 						segmentHash,
 						fileHash,
-						chunkSource: 'fallback',
-						parentChain: [], // No parent chain for fallback chunks
-						hierarchyDisplay: null,
+						chunkSource: chunkSourceOverride ?? "fallback",
+						parentChain,
+						hierarchyDisplay,
 					})
 				}
 			}
@@ -325,16 +360,16 @@ export class CodeParser implements ICodeParser {
 				seenSegmentHashes.add(segmentHash)
 				chunks.push({
 					file_path: filePath,
-					identifier: null,
+					identifier,
 					type: `${chunkType}_segment`,
 					start_line: originalLineNumber,
 					end_line: originalLineNumber,
 					content: segment,
 					segmentHash,
 					fileHash,
-					chunkSource: 'line-segment',
-					parentChain: [], // No parent chain for line segments
-					hierarchyDisplay: null,
+					chunkSource: chunkSourceOverride ?? "line-segment",
+					parentChain,
+					hierarchyDisplay,
 				})
 			}
 		}
@@ -472,7 +507,27 @@ export class CodeParser implements ICodeParser {
 	/**
 	 * Builds the parent chain for a given tree-sitter node
 	 */
-	private buildParentChain(node: treeSitter.SyntaxNode, nodeIdentifierMap: Map<treeSitter.SyntaxNode, string>): ParentContainer[] {
+	/**
+	 * 统一的parentChain构建入口
+	 */
+	private buildParentChain(
+		context: 'tree-sitter' | 'markdown',
+		...args: any[]
+	): ParentContainer[] {
+		if (context === 'markdown') {
+			return this.buildMarkdownParentChain(...args as [MarkdownHeader, MarkdownHeader[]])
+		} else {
+			return this.buildTreeSitterParentChain(...args as [treeSitter.SyntaxNode, Map<treeSitter.SyntaxNode, string>])
+		}
+	}
+
+	/**
+	 * 原有方法重命名 - tree-sitter专用
+	 */
+	private buildTreeSitterParentChain(
+		node: treeSitter.SyntaxNode, 
+		nodeIdentifierMap: Map<treeSitter.SyntaxNode, string>
+	): ParentContainer[] {
 		const parentChain: ParentContainer[] = []
 		
 		// Container node types that we want to track in the hierarchy
@@ -521,6 +576,51 @@ export class CodeParser implements ICodeParser {
 		}
 		
 		return parentChain
+	}
+
+	/**
+	 * Markdown专用的parentChain构建方法
+	 * 基于header层级关系构建虚拟的父子关系
+	 */
+	private buildMarkdownParentChain(
+		currentHeader: MarkdownHeader,
+		headerStack: MarkdownHeader[]
+	): ParentContainer[] {
+		const parentChain: ParentContainer[] = []
+
+		// 找到当前header的直接父级
+		const parentLevel = currentHeader.level - 1
+		if (parentLevel < 1) {
+			return parentChain // h1没有父级
+		}
+		
+		// 从栈顶开始查找最近的父级header
+		for (let i = headerStack.length - 1; i >= 0; i--) {
+			const header = headerStack[i]
+			if (header.level === parentLevel) {
+				// 找到直接父级，添加到parentChain
+				parentChain.push({
+					identifier: header.text,
+					// 使用更简洁的display类型，避免hierarchyDisplay过长
+					type: this.getMarkdownDisplayType(header.level),
+				})
+				
+				// 递归查找父级的父级
+				const grandParentChain = this.buildMarkdownParentChain(header, headerStack.slice(0, i))
+				parentChain.unshift(...grandParentChain)
+				break
+			}
+		}
+		
+		return parentChain
+	}
+
+	/**
+	 * 为Markdown header提供统一的、精简的展示类型
+	 * 例如：h1 -> "md_h1"
+	 */
+	private getMarkdownDisplayType(level: number): string {
+		return `md_h${level}`
 	}
 	
 	/**
@@ -615,6 +715,41 @@ export class CodeParser implements ICodeParser {
 	}
 
 	/**
+	 * 为Markdown section构建hierarchyDisplay
+	 */
+	private buildMarkdownHierarchyDisplay(
+		parentChain: ParentContainer[],
+		currentHeader: MarkdownHeader
+	): string {
+		const parts: string[] = []
+
+		// 添加父级链（这里的type已经是精简后的md_hX）
+		for (const parent of parentChain) {
+			parts.push(`${parent.type} ${parent.identifier}`)
+		}
+		
+		// 添加当前header（使用精简后的md_hX）
+		parts.push(`${this.getMarkdownDisplayType(currentHeader.level)} ${currentHeader.text}`)
+		
+		return parts.join(' > ')
+	}
+
+	/**
+	 * 更新header栈，保持正确的层级关系
+	 */
+	private updateHeaderStack(headerStack: MarkdownHeader[], newHeader: MarkdownHeader): MarkdownHeader[] {
+		// 移除所有大于或等于当前层级的header（同级或更低级的header需要被替换）
+		while (headerStack.length > 0 && headerStack[headerStack.length - 1].level >= newHeader.level) {
+			headerStack.pop()
+		}
+		
+		// 添加新的header
+		headerStack.push(newHeader)
+		
+		return headerStack
+	}
+
+	/**
 	 * Checks if block1 is contained within block2
 	 */
 	private isBlockContained(block1: CodeBlock, block2: CodeBlock): boolean {
@@ -635,6 +770,8 @@ export class CodeParser implements ICodeParser {
 		seenSegmentHashes: Set<string>,
 		startLine: number,
 		identifier: string | null = null,
+		parentChain: ParentContainer[] = [],
+		hierarchyDisplay: string | null = null,
 	): CodeBlock[] {
 		const content = lines.join("\n")
 
@@ -649,14 +786,22 @@ export class CodeParser implements ICodeParser {
 
 		if (needsChunking) {
 			// Apply chunking for large content or oversized lines
-			const chunks = this._chunkTextByLines(lines, filePath, fileHash, type, seenSegmentHashes, startLine)
-			// Preserve identifier in all chunks if provided
-			if (identifier) {
-				chunks.forEach((chunk) => {
-					chunk.identifier = identifier
-				})
-			}
-			return chunks
+			return this._chunkTextByLines(
+				lines,
+				filePath,
+				fileHash,
+				type,
+				seenSegmentHashes,
+				startLine,
+				{
+					identifier,
+					parentChain,
+					hierarchyDisplay,
+					// Ensure markdown sections keep a consistent source label even
+					// when they are internally chunked.
+					chunkSourceOverride: "markdown",
+				},
+			)
 		}
 
 		// Create a single block for normal-sized content with no oversized lines
@@ -679,8 +824,8 @@ export class CodeParser implements ICodeParser {
 					segmentHash,
 					fileHash,
 					chunkSource: 'markdown',
-					parentChain: [],
-					hierarchyDisplay: null,
+					parentChain,
+					hierarchyDisplay,
 				},
 			]
 		}
@@ -704,6 +849,9 @@ export class CodeParser implements ICodeParser {
 
 		const results: CodeBlock[] = []
 		let lastProcessedLine = 0
+		
+		// 维护一个header栈来跟踪层级关系
+		const headerStack: MarkdownHeader[] = []
 
 		// Process content before the first header
 		if (markdownCaptures.length > 0) {
@@ -717,6 +865,9 @@ export class CodeParser implements ICodeParser {
 					"markdown_content",
 					seenSegmentHashes,
 					1,
+					null, // 没有identifier
+					[],   // 空的parentChain
+					null, // 没有hierarchyDisplay
 				)
 				results.push(...preHeaderBlocks)
 			}
@@ -740,6 +891,22 @@ export class CodeParser implements ICodeParser {
 			const headerLevel = headerMatch ? parseInt(headerMatch[1]) : 1
 			const headerText = nameCapture.node.text
 
+			// 创建当前header对象
+			const currentHeader: MarkdownHeader = {
+				level: headerLevel,
+				text: headerText,
+				line: startLine
+			}
+
+			// 构建parentChain - 在更新栈之前使用当前栈来查找父级
+			const parentChain = this.buildMarkdownParentChain(currentHeader, headerStack)
+			
+			// 更新header栈
+			this.updateHeaderStack(headerStack, currentHeader)
+			
+			// 构建hierarchyDisplay
+			const hierarchyDisplay = this.buildMarkdownHierarchyDisplay(parentChain, currentHeader)
+
 			const sectionBlocks = this.processMarkdownSection(
 				sectionLines,
 				filePath,
@@ -748,6 +915,8 @@ export class CodeParser implements ICodeParser {
 				seenSegmentHashes,
 				startLine,
 				headerText,
+				parentChain,
+				hierarchyDisplay,
 			)
 			results.push(...sectionBlocks)
 
@@ -764,6 +933,9 @@ export class CodeParser implements ICodeParser {
 				"markdown_content",
 				seenSegmentHashes,
 				lastProcessedLine + 1,
+				null,
+				[],   // 剩余内容没有特定的父级
+				null, // 剩余内容没有层级显示
 			)
 			results.push(...remainingBlocks)
 		}

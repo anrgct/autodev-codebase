@@ -9,7 +9,7 @@
     "dist/**/*"
   ],
   "scripts": {
-    "dev": "rm -rf .autodev-cache/ && npx tsx src/index.ts --demo",
+    "dev": "rm -rf ~/.autodev-cache/ && npx tsx src/index.ts --demo",
     "build": "rollup -c rollup.config.cjs && chmod +x dist/cli.js",
     "type-check": "npx tsc -p tsconfig.json --noEmit",
     "demo-tui": "npx tsx src/examples/run-demo-tui.tsx",

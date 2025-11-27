@@ -50,8 +50,6 @@ export default defineConfig({
     sequence: {
       hooks: 'stack'
     }
-
-
   },
   esbuild: {
     target: 'node18'

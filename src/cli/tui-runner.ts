@@ -35,7 +35,6 @@ export function createTUIApp(options: CliOptions) {
         // Use config file from workspace directory
         const configPath = options.config || path.join(workspacePath, 'autodev-config.json');
 
-        // console.log('[tui-runner]📂 Workspace path:', workspacePath);
         const deps = createNodeDependencies({
           workspacePath,
           storageOptions: {
@@ -60,7 +59,7 @@ export function createTUIApp(options: CliOptions) {
 
         try {
           // Log workspace path after deps are created so we can use the logger
-          deps.logger?.info('[tui-runner]📂 Workspace path:', workspacePath);
+          deps.logger?.info(`[tui-runner]📂 Workspace path: ${workspacePath}, configPath: ${configPath}`);
 
           // Create demo files if requested
           if (options.demo) {
@@ -138,13 +137,45 @@ export function createTUIApp(options: CliOptions) {
               manager.startIndexing()
                 .then(() => {
                   clearTimeout(indexingTimeout);
-                  deps.logger?.info('[tui-runner]✅ Indexing completed');
+                    deps.logger?.info('[tui-runner]✅ Initial indexing process started');
+
+                    // In headless mode, we need to wait for indexing to truly complete
+                    if (options.headless) {
+                      deps.logger?.info('[tui-runner]⏳ Waiting for indexing to complete in headless mode...');
+
+                      // Check the current state and wait for it to be "Indexed"
+                      const waitForIndexingComplete = () => {
+                        const currentState = manager.state;
+                        deps.logger?.info('[tui-runner]📊 Current indexing state:', currentState);
+
+                        if (currentState === 'Indexed') {
+                          deps.logger?.info('[tui-runner]✅ Indexing truly completed, exiting headless mode');
+                          process.exit(0);
+                        } else if (currentState === 'Error') {
+                          deps.logger?.error('[tui-runner]❌ Indexing failed, exiting with error');
+                          process.exit(1);
+                        } else if (currentState === 'Standby') {
+                          deps.logger?.warn('[tui-runner]⚠️ Indexing stopped unexpectedly, exiting');
+                          process.exit(1);
+                        } else {
+                          // Still indexing, check again in 2 seconds
+                          setTimeout(waitForIndexingComplete, 2000);
+                        }
+                      };
+
+                      // Start monitoring the state
+                      setTimeout(waitForIndexingComplete, 2000);
+                  }
                 })
                 .catch((err: any) => {
                   clearTimeout(indexingTimeout);
                   deps.logger?.error('[tui-runner]❌ Indexing failed:', err);
                   deps.logger?.error('[tui-runner]❌ Error stack:', err.stack);
-                  setError(`Indexing failed: ${err.message}`);
+                  if (options.headless) {
+                    process.exit(1);
+                  } else {
+                    setError(`Indexing failed: ${err.message}`);
+                  }
                 });
             } else {
               deps.logger?.warn('[tui-runner]⚠️ Skipping indexing - feature not enabled or not initialized');
@@ -153,6 +184,9 @@ export function createTUIApp(options: CliOptions) {
                 isInitialized: manager.isInitialized,
                 state: manager.state
               });
+              if (options.headless) {
+                process.exit(1);
+              }
             }
           }, 1000);
 
@@ -180,8 +214,10 @@ export function createTUIApp(options: CliOptions) {
         React.createElement(Text, { color: "gray" }, "Please check configuration or service connection status")
       );
     }
-    const DummyApp = () => null;
-    return React.createElement(App, { codeIndexManager, dependencies });
+    if(!options.headless){
+      const DummyApp = () => null;
+      return React.createElement(App, { codeIndexManager, dependencies });
+    }
   };
 
   return AppWithOptions;

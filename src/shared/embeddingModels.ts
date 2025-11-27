@@ -27,6 +27,9 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
 		"nomic-embed-text:latest": { dimension: 768 },
 		"mxbai-embed-large": { dimension: 1024 },
 		"all-minilm": { dimension: 384 },
+		"qwen3-embedding:0.6b": { dimension: 1024 },
+		"qwen3-embedding:4b": { dimension: 4096 },
+		"qwen3-embedding:8b": { dimension: 2560 },
 		// Add default Ollama model if applicable, e.g.:
 		// 'default': { dimension: 768 } // Assuming a default dimension
 	},

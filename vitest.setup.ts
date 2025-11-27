@@ -18,13 +18,13 @@ global.afterAll = afterAll
 global.vi = vi
 
 // Setup common test utilities with better error handling
-global.console = {
-  ...console,
-  // Suppress console.log in tests unless explicitly needed
-  log: process.env.NODE_ENV === 'test' ? () => {} : console.log,
-  // Suppress console.warn for cleaner output
-  warn: process.env.NODE_ENV === 'test' ? () => {} : console.warn,
-}
+// global.console = {
+//   ...console,
+//   // Suppress console.log in tests unless explicitly needed
+//   log: process.env.NODE_ENV === 'test' ? () => {} : console.log,
+//   // Suppress console.warn for cleaner output
+//   warn: process.env.NODE_ENV === 'test' ? () => {} : console.warn,
+// }
 
 // Mock vscode module
 vi.mock('vscode', () => ({

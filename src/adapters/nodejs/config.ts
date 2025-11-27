@@ -25,8 +25,8 @@ const DEFAULT_CONFIG: CodeIndexConfig = {
   isEnabled: true,
   isConfigured: true,
   embedderProvider: "ollama",
-  modelId: "nomic-embed-text",
-  modelDimension: 768,
+  ollamaModelId: "qwen3-embedding:0.6b",
+  modelDimension: 1024,
   ollamaOptions: {
     ollamaBaseUrl: "http://localhost:11434",
   }
@@ -246,7 +246,7 @@ export class NodeConfigProvider implements IConfigProvider {
         const globalContent = await this.fileSystem.readFile(this.globalConfigPath)
         const globalText = new TextDecoder().decode(globalContent)
         const globalConfig = JSON.parse(globalText)
-        
+
         // Merge global config with defaults
         this.config = {
           ...this.config,

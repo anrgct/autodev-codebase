@@ -2,13 +2,13 @@
   "isEnabled": true,
   "isConfigured": true,
   "embedderProvider": "openai",
-  "modelId": "text-embedding-3-small",
+  "ollamaModelId": "qwen3-embedding:0.6b",
   "modelDimension": 1536,
   "ollamaOptions": {
     "ollamaBaseUrl": "http://localhost:11434"
   },
+  "modelId": "text-embedding-3-small",
   "openAiOptions": {
-    "openAiNativeApiKey": "test-key"
-  },
-  "qdrantUrl": "http://localhost:6333"
+    "openAiNativeApiKey": "test-api-key"
+  }
 }

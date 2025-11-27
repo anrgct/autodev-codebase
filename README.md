@@ -32,12 +32,10 @@ brew install ollama
 ollama serve
 
 # In a new terminal, pull the embedding model
-ollama pull dengcao/Qwen3-Embedding-0.6B:Q8_0
+ollama pull qwen3-embedding:0.6b
 ```
 
-### 2. Install ripgrep
-
-`ripgrep` is required for fast codebase indexing. Install it with:
+### 2. Install ripgrep for fast files search
 
 ```bash
 # Install ripgrep (macOS)
@@ -50,7 +48,7 @@ sudo apt-get install ripgrep
 sudo pacman -S ripgrep
 ```
 
-### 3. Install and Start Qdrant
+### 3. Install and Start Qdrant for Vector Storage
 
 Start Qdrant using Docker:
 
@@ -150,7 +148,7 @@ Create a global configuration file at `~/.autodev-cache/autodev-config.json`:
   "isEnabled": true,
   "embedder": {
     "provider": "ollama",
-    "model": "dengcao/Qwen3-Embedding-0.6B:Q8_0",
+    "model": "qwen3-embedding:0.6b",
     "dimension": 1024,
     "baseUrl": "http://localhost:11434"
   },
@@ -183,7 +181,7 @@ Create a project-specific configuration file at `./autodev-config.json`:
 |--------|------|-------------|---------|
 | `isEnabled` | boolean | Enable/disable code indexing feature | `true` |
 | `embedder.provider` | string | Embedding provider (`ollama`, `openai`, `openai-compatible`) | `ollama` |
-| `embedder.model` | string | Embedding model name | `dengcao/Qwen3-Embedding-0.6B:Q8_0` |
+| `embedder.model` | string | Embedding model name | `qwen3-embedding:0.6b` |
 | `embedder.dimension` | number | Vector dimension size | `1024` |
 | `embedder.baseUrl` | string | Provider API base URL | `http://localhost:11434` |
 | `embedder.apiKey` | string | API key (for OpenAI/compatible providers) | - |

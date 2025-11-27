@@ -310,7 +310,7 @@ describe('Node.js Adapters Integration', () => {
         isEnabled: true,
         isConfigured: true,
         embedderProvider: "ollama" as const,
-        modelId: "dengcao/Qwen3-Embedding-0.6B:Q8_0",
+        modelId: "qwen3-embedding:0.6b",
         modelDimension: 1024,
         ollamaOptions: { ollamaBaseUrl: 'http://localhost:11434' }
       }

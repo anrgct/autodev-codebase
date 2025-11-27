@@ -10,6 +10,7 @@ export interface CliOptions {
   cache?: string;
   logLevel: 'error' | 'warn' | 'info' | 'debug';
   help: boolean;
+  headless: boolean; // Run without UI, exit after indexing
   mcpServer: boolean;
   mcpPort?: number; // Port for HTTP MCP server
   mcpHost?: string; // Host for HTTP MCP server
@@ -30,6 +31,7 @@ export function parseArgs(argv: string[] = process.argv): CliOptions {
     model: '',
     logLevel: 'error',
     help: false,
+    headless: false,
     mcpServer: false,
     stdioAdapter: false
   };
@@ -57,6 +59,8 @@ export function parseArgs(argv: string[] = process.argv): CliOptions {
       options.demo = true;
     } else if (arg === '--force') {
       options.force = true;
+    } else if (arg === '--headless') {
+      options.headless = true;
     } else if (arg === '--mcp-server') {
       options.mcpServer = true;
     } else if (arg.startsWith('--path=')) {
@@ -110,6 +114,7 @@ Options:
   --path=<path>           Workspace path (default: current directory)
   --demo                  Create demo files in workspace
   --force                 Force reindex all files, ignoring cache
+  --headless              Run without UI, exit after indexing completes
 
 MCP Server Options:
   --port=<port>           HTTP server port (default: 3001)
@@ -121,7 +126,7 @@ Stdio Adapter Options:
 
   --ollama-url=<url>      Ollama API URL (default: http://localhost:11434)
   --qdrant-url=<url>      Qdrant vector DB URL (default: http://localhost:6333)
-  --model=<model>         Embedding model (default: dengcao/Qwen3-Embedding-0.6B:Q8_0)
+  --model=<model>         Embedding model (default: qwen3-embedding:0.6b)
 
   --config=<path>         Config file path
   --storage=<path>        Storage directory path
