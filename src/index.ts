@@ -1,5 +1,8 @@
-import React from 'react';
-import { render } from 'ink';
+/**
+ * @autodev/codebase - Simplified CLI (No React/Ink dependencies)
+ * Main entry point for CLI and library exports
+ */
+
 import { parseArgs, printHelp } from './cli/args-parser';
 import { CodeIndexManager } from './code-index/manager';
 
@@ -36,33 +39,23 @@ export async function main() {
     process.exit(1);
   });
 
-  // console.log('CLI options: ', options);
-
   if (options.mcpServer) {
     // Pure MCP server mode - no TUI interaction to avoid stdin conflicts
-    const { startMCPServerMode } = await import('./cli/tui-runner');
+    const { startMCPServerMode } = await import('./cli/mcp-runner');
     await startMCPServerMode(options);
   } else if (options.stdioAdapter) {
     // Stdio adapter mode - bridge stdio to HTTP/SSE
-    const { startStdioAdapterMode } = await import('./cli/tui-runner');
+    const { startStdioAdapterMode } = await import('./cli/mcp-runner');
     await startStdioAdapterMode(options);
   } else {
-    // Traditional TUI-only mode
-    const { createTUIApp } = await import('./cli/tui-runner');
-    const TUIApp = createTUIApp(options);
-
-    let renderConfig = {
-      patchConsole: true,
-      debug: false
-    }
-
-    // This will enable console patching and debug mode
-    // renderConfig = {
-    //   patchConsole: false,
-    //   debug: true
-    // }
-
-    render(React.createElement(TUIApp), renderConfig);
+    // Default: show help message (no TUI mode)
+    console.log('[CLI] No command specified. Use --help for usage information.');
+    console.log('[CLI] Common commands:');
+    console.log('  codebase mcp-server      Start MCP server mode');
+    console.log('  codebase stdio-adapter   Start stdio adapter mode');
+    console.log('  codebase --help          Show full help');
+    printHelp();
+    process.exit(0);
   }
 }
 if (process.argv[1] && process.argv[1].endsWith('index.ts')) {

@@ -1,17 +1,21 @@
-import { vitest, describe, it, expect, beforeEach } from "vitest"
+import { vitest, describe, it, expect, beforeEach, vi } from "vitest"
 import type { Mock } from "vitest"
 import { createHash } from "crypto"
 import debounce from "lodash.debounce"
 import { CacheManager } from "../cache-manager"
-import { IFileSystem, IStorage } from "../../abstractions"
+import * as filesystem from "../../utils/filesystem"
 
 
 // Mock debounce to execute immediately
 vitest.mock("lodash.debounce", () => ({ default: vitest.fn((fn) => fn) }))
 
+// Mock filesystem module
+vitest.mock("../../utils/filesystem", () => ({
+	readFile: vitest.fn(),
+	writeFile: vitest.fn(),
+}))
+
 describe("CacheManager", () => {
-	let mockFileSystem: IFileSystem
-	let mockStorage: IStorage
 	let mockWorkspacePath: string
 	let mockCachePath: string
 	let cacheManager: CacheManager
@@ -22,37 +26,20 @@ describe("CacheManager", () => {
 
 		// Mock workspace path and cache path
 		mockWorkspacePath = "/mock/workspace"
-		mockCachePath = "/mock/storage/roo-index-cache-hash.json"
+		// Cache path is now generated internally based on workspace hash
+		const hash = createHash("sha256").update(mockWorkspacePath).digest("hex")
+		mockCachePath = require("path").join(require("os").homedir(), ".autodev-cache", `roo-index-cache-${hash}.json`)
 
-		// Mock file system
-		mockFileSystem = {
-			readFile: vitest.fn(),
-			writeFile: vitest.fn(),
-			exists: vitest.fn(),
-			stat: vitest.fn(),
-			readdir: vitest.fn(),
-			mkdir: vitest.fn(),
-			delete: vitest.fn(),
-		}
-
-		// Mock storage
-		mockStorage = {
-			getGlobalStorageUri: vitest.fn().mockReturnValue("/mock/storage"),
-			createCachePath: vitest.fn().mockReturnValue(mockCachePath),
-			getCacheBasePath: vitest.fn().mockReturnValue("/mock/storage"),
-		}
-
-		// Create cache manager instance
-		cacheManager = new CacheManager(mockFileSystem, mockStorage, mockWorkspacePath)
+		// Create cache manager instance with only workspacePath
+		cacheManager = new CacheManager(mockWorkspacePath)
 	})
 
 	describe("constructor", () => {
-		it("should correctly set up cachePath using storage.createCachePath and crypto.createHash", () => {
+		it("should correctly set up cachePath using crypto.createHash", () => {
 			const expectedHash = createHash("sha256").update(mockWorkspacePath).digest("hex")
+			const expectedCachePath = require("path").join(require("os").homedir(), ".autodev-cache", `roo-index-cache-${expectedHash}.json`)
 
-			expect(mockStorage.createCachePath).toHaveBeenCalledWith(
-				`roo-index-cache-${expectedHash}.json`,
-			)
+			expect(cacheManager.getCachePath).toBe(expectedCachePath)
 		})
 
 		it("should set up debounced save function", () => {
@@ -64,16 +51,16 @@ describe("CacheManager", () => {
 		it("should load existing cache file successfully", async () => {
 			const mockCache = { "file1.ts": "hash1", "file2.ts": "hash2" }
 			const mockBuffer = new TextEncoder().encode(JSON.stringify(mockCache))
-			;(mockFileSystem.readFile as Mock).mockResolvedValue(mockBuffer)
+			;(filesystem.readFile as Mock).mockResolvedValue(mockBuffer)
 
 			await cacheManager.initialize()
 
-			expect(mockFileSystem.readFile).toHaveBeenCalledWith(mockCachePath)
+			expect(filesystem.readFile).toHaveBeenCalledWith(mockCachePath)
 			expect(cacheManager.getAllHashes()).toEqual(mockCache)
 		})
 
 		it("should handle missing cache file by creating empty cache", async () => {
-			;(mockFileSystem.readFile as Mock).mockRejectedValue(new Error("File not found"))
+			;(filesystem.readFile as Mock).mockRejectedValue(new Error("File not found"))
 
 			await cacheManager.initialize()
 
@@ -89,7 +76,7 @@ describe("CacheManager", () => {
 			cacheManager.updateHash(filePath, hash)
 
 			expect(cacheManager.getHash(filePath)).toBe(hash)
-			expect(mockFileSystem.writeFile).toHaveBeenCalled()
+			expect(filesystem.writeFile).toHaveBeenCalled()
 		})
 
 		it("should delete hash and trigger save", () => {
@@ -100,7 +87,7 @@ describe("CacheManager", () => {
 			cacheManager.deleteHash(filePath)
 
 			expect(cacheManager.getHash(filePath)).toBeUndefined()
-			expect(mockFileSystem.writeFile).toHaveBeenCalled()
+			expect(filesystem.writeFile).toHaveBeenCalled()
 		})
 
 		it("should return shallow copy of hashes", () => {
@@ -125,18 +112,18 @@ describe("CacheManager", () => {
 
 			cacheManager.updateHash(filePath, hash)
 
-			expect(mockFileSystem.writeFile).toHaveBeenCalledWith(mockCachePath, expect.any(Uint8Array))
+			expect(filesystem.writeFile).toHaveBeenCalledWith(mockCachePath, expect.any(Uint8Array))
 
 			// Verify the saved data
 			const savedData = JSON.parse(
-				new TextDecoder().decode((mockFileSystem.writeFile as Mock).mock.calls[0][1]),
+				new TextDecoder().decode((filesystem.writeFile as Mock).mock.calls[0][1]),
 			)
 			expect(savedData).toEqual({ [filePath]: hash })
 		})
 
 		it("should handle save errors gracefully", async () => {
 			const consoleErrorSpy = vitest.spyOn(console, "error").mockImplementation(() => {})
-			;(mockFileSystem.writeFile as Mock).mockRejectedValue(new Error("Save failed"))
+			;(filesystem.writeFile as Mock).mockRejectedValue(new Error("Save failed"))
 
 			cacheManager.updateHash("test.ts", "hash")
 
@@ -154,18 +141,18 @@ describe("CacheManager", () => {
 			cacheManager.updateHash("test.ts", "hash")
 
 			// Reset the mock to ensure writeFile succeeds for clearCacheFile
-			;(mockFileSystem.writeFile as Mock).mockClear()
-			;(mockFileSystem.writeFile as Mock).mockResolvedValue(undefined)
+			;(filesystem.writeFile as Mock).mockClear()
+			;(filesystem.writeFile as Mock).mockResolvedValue(undefined)
 
 			await cacheManager.clearCacheFile()
 
-			expect(mockFileSystem.writeFile).toHaveBeenCalledWith(mockCachePath, new TextEncoder().encode("{}"))
+			expect(filesystem.writeFile).toHaveBeenCalledWith(mockCachePath, new TextEncoder().encode("{}"))
 			expect(cacheManager.getAllHashes()).toEqual({})
 		})
 
 		it("should handle clear errors gracefully", async () => {
 			const consoleErrorSpy = vitest.spyOn(console, "error").mockImplementation(() => {})
-			;(mockFileSystem.writeFile as Mock).mockRejectedValue(new Error("Save failed"))
+			;(filesystem.writeFile as Mock).mockRejectedValue(new Error("Save failed"))
 
 			await cacheManager.clearCacheFile()
 

@@ -4,7 +4,10 @@ import { CodeIndexStateManager, IndexingState } from "./state-manager"
 import { ICodeFileWatcher, IVectorStore, BatchProcessingSummary } from "./interfaces"
 import { DirectoryScanner } from "./processors"
 import { CacheManager } from "./cache-manager"
-import { ILogger } from "../abstractions"
+import { Logger } from "../utils/logger"
+
+// Type-compatible logger interface using Pick to extract only required methods from Logger
+type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 
 // Hardcoded internationalization functions (replacing t() calls)
 const t = (key: string, params?: Record<string, string>): string => {
@@ -48,8 +51,15 @@ export class CodeIndexOrchestrator {
 		private readonly vectorStore: IVectorStore,
 		private readonly scanner: DirectoryScanner,
 		private readonly fileWatcher: ICodeFileWatcher,
-		private readonly logger?: ILogger,
+		private readonly logger?: LoggerLike,
 	) {}
+
+	/**
+	 * Get the vector store instance for direct access (e.g., search-only initialization)
+	 */
+	public getVectorStore(): IVectorStore {
+		return this.vectorStore
+	}
 
 	/**
 	 * Logging helper methods - only log if logger is available

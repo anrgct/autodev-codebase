@@ -1,7 +1,12 @@
 import { createHash } from "crypto"
+import * as path from "path"
+import * as os from "os"
 import { ICacheManager } from "./interfaces/cache"
-import { IFileSystem, IStorage } from "../abstractions"
+import * as filesystem from "../utils/filesystem"
 import debounce from "lodash.debounce"
+
+// Default cache base directory
+const DEFAULT_CACHE_BASE = path.join(os.homedir(), ".autodev-cache")
 
 /**
  * Manages the cache for code indexing
@@ -13,21 +18,24 @@ export class CacheManager implements ICacheManager {
 
 	/**
 	 * Creates a new cache manager
-	 * @param fileSystem File system abstraction
-	 * @param storage Storage abstraction
 	 * @param workspacePath Path to the workspace
 	 */
-	constructor(
-		private fileSystem: IFileSystem,
-		private storage: IStorage,
-		private workspacePath: string,
-	) {
-		this.cachePath = this.storage.createCachePath(
+	constructor(private workspacePath: string) {
+		this.cachePath = this.createCachePath(
 			`roo-index-cache-${createHash("sha256").update(workspacePath).digest("hex")}.json`,
 		)
 		this._debouncedSaveCache = debounce(async () => {
 			await this._performSave()
 		}, 1500)
+	}
+
+	/**
+	 * Creates a cache file path based on the filename
+	 * @param filename The cache filename
+	 * @returns The full path to the cache file
+	 */
+	private createCachePath(filename: string): string {
+		return path.join(DEFAULT_CACHE_BASE, filename)
 	}
 
 	/**
@@ -42,7 +50,7 @@ export class CacheManager implements ICacheManager {
 	 */
 	async initialize(): Promise<void> {
 		try {
-			const cacheData = await this.fileSystem.readFile(this.cachePath)
+			const cacheData = await filesystem.readFile(this.cachePath)
 			this.fileHashes = JSON.parse(new TextDecoder().decode(cacheData))
 		} catch (error) {
 			this.fileHashes = {}
@@ -54,10 +62,9 @@ export class CacheManager implements ICacheManager {
 	 */
 	private async _performSave(): Promise<void> {
 		try {
-			// Persist cache JSON via the injected filesystem so implementations
-			// (Node.js, VSCode, etc.) stay in control of how writes are done.
+			// Persist cache JSON using the filesystem module
 			const json = JSON.stringify(this.fileHashes, null, 2)
-			await this.fileSystem.writeFile(this.cachePath, new TextEncoder().encode(json))
+			await filesystem.writeFile(this.cachePath, new TextEncoder().encode(json))
 		} catch (error) {
 			console.error("Failed to save cache:", error)
 		}
@@ -68,7 +75,7 @@ export class CacheManager implements ICacheManager {
 	 */
 	async clearCacheFile(): Promise<void> {
 		try {
-			await this.fileSystem.writeFile(this.cachePath, new TextEncoder().encode("{}"))
+			await filesystem.writeFile(this.cachePath, new TextEncoder().encode("{}"))
 			this.fileHashes = {}
 		} catch (error) {
 			console.error("Failed to clear cache file:", error, this.cachePath)

@@ -38,11 +38,7 @@ describe('Core Library Integration', () => {
     let cacheManager: CacheManager
 
     beforeEach(() => {
-      cacheManager = new CacheManager(
-        dependencies.fileSystem,
-        dependencies.storage,
-        workspacePath
-      )
+      cacheManager = new CacheManager(workspacePath)
     })
 
     it('should initialize cache manager', async () => {
@@ -89,11 +85,7 @@ describe('Core Library Integration', () => {
       await cacheManager.clearCacheFile()
 
       // After clearing, we need to reinitialize to see the cleared state
-      const newCacheManager = new CacheManager(
-        dependencies.fileSystem,
-        dependencies.storage,
-        workspacePath
-      )
+      const newCacheManager = new CacheManager(workspacePath)
       await newCacheManager.initialize()
 
       expect(Object.keys(newCacheManager.getAllHashes()).length).toBe(0)
@@ -210,11 +202,7 @@ describe('Core Library Integration', () => {
         embedder: null as any, // Mock embedder for testing
         qdrantClient: null as any, // Mock qdrant client for testing
         codeParser: null as any, // Mock code parser for testing
-        cacheManager: new CacheManager(
-          dependencies.fileSystem,
-          dependencies.storage,
-          workspacePath
-        ),
+        cacheManager: new CacheManager(workspacePath),
         ignoreInstance // ignore() creates a proper instance with .ignores method
       })
     })

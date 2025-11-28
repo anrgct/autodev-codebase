@@ -1,4 +1,8 @@
-import { IEventBus } from "../abstractions/core"
+import { EventBus } from "../utils/events"
+
+// Use Pick to only require the methods actually used by this class
+// This maintains compatibility with IEventBus and other event bus implementations
+type EventBusLike = Pick<EventBus, 'on' | 'emit'>
 
 export type IndexingState = "Standby" | "Indexing" | "Indexed" | "Error"
 
@@ -8,9 +12,9 @@ export class CodeIndexStateManager {
 	private _processedItems: number = 0
 	private _totalItems: number = 0
 	private _currentItemUnit: string = "blocks"
-	private eventBus: IEventBus
+	private eventBus: EventBusLike
 
-	constructor(eventBus: IEventBus) {
+	constructor(eventBus: EventBusLike) {
 		this.eventBus = eventBus
 		this.onProgressUpdate = (handler) => this.eventBus.on('progress-update', handler)
 	}

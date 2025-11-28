@@ -18,6 +18,7 @@ import path from 'path'
 import os from 'os'
 import { CodebaseHTTPMCPServer } from '../mcp/http-server.js'
 import { createNodeDependencies, CodeIndexManager } from '../index.js'
+import createSampleFiles from '../examples/create-sample-files.js'
 
 /**
  * MCP HTTP测试客户端
@@ -224,88 +225,42 @@ class MCPHTTPTestClient {
 }
 
 /**
- * 创建临时工作空间
+ * 创建测试工作空间（使用当前目录下的demo目录）
  */
 async function createTestWorkspace(): Promise<string> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-test-'))
+  const workspaceDir = path.join(process.cwd(), 'demo')
 
-  // 创建测试文件结构
-  const files = [
-    {
-      path: 'src/utils.ts',
-      content: `/**
- * 工具函数集合
- */
+  // 清空并重新创建demo目录
+  try {
+    await fs.rm(workspaceDir, { recursive: true, force: true })
+  } catch (error) {
+    // 目录可能不存在，忽略错误
+  }
+  await fs.mkdir(workspaceDir, { recursive: true })
 
-export function add(a: number, b: number): number {
-  return a + b
-}
-
-export function multiply(a: number, b: number): number {
-  return a * b
-}
-
-export function greet(name: string): string {
-  return \`Hello, \${name}!\`
-}
-`
-    },
-    {
-      path: 'src/index.ts',
-      content: `export * from './utils'
-
-export function main() {
-  console.log('Application started')
-}
-`
-    },
-    {
-      path: 'src/components/Button.tsx',
-      content: `import React from 'react'
-
-interface ButtonProps {
-  label: string
-  onClick: () => void
-}
-
-export const Button: React.FC<ButtonProps> = ({ label, onClick }) => {
-  return <button onClick={onClick}>{label}</button>
-}
-`
-    },
-    {
-      path: 'README.md',
-      content: `# Test Project
-
-This is a test project for MCP server integration testing.
-
-## Features
-
-- TypeScript support
-- React components
-- Utility functions
-`
+  // 使用createSampleFiles函数创建示例文件
+  const mockFileSystem = {
+    writeFile: async (filePath: string, content: Uint8Array) => {
+      const dir = path.dirname(filePath)
+      await fs.mkdir(dir, { recursive: true })
+      await fs.writeFile(filePath, content)
     }
-  ]
-
-  for (const file of files) {
-    const filePath = path.join(tempDir, file.path)
-    const dir = path.dirname(filePath)
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(filePath, file.content)
   }
 
-  console.log(`📁 Test workspace created at: ${tempDir}`)
-  return tempDir
+  await createSampleFiles(mockFileSystem, workspaceDir)
+
+  console.log(`📁 Test workspace created at: ${workspaceDir}`)
+  return workspaceDir
 }
 
 /**
- * 清理临时工作空间
+ * 清理测试工作空间（可选，保留demo目录供检查）
  */
 async function cleanupTestWorkspace(workspacePath: string): Promise<void> {
+  // 可选：注释掉清理逻辑，保留demo目录供检查
   try {
-    await fs.rm(workspacePath, { recursive: true, force: true })
-    console.log(`🗑️  Test workspace cleaned: ${workspacePath}`)
+    // await fs.rm(workspacePath, { recursive: true, force: true })
+    console.log(`📁 Test workspace preserved at: ${workspacePath}`)
   } catch (error) {
     console.warn('⚠️  Failed to cleanup workspace:', error)
   }
@@ -405,7 +360,7 @@ describe('MCP Server Integration Tests', () => {
   describe('search_codebase Tool', () => {
     it('should search for function definitions', async () => {
       const response = await client.callTool('search_codebase', {
-        query: 'function that adds two numbers',
+        query: 'function that greets a user',
         limit: 5
       })
 
@@ -431,10 +386,10 @@ describe('MCP Server Integration Tests', () => {
 
     it('should search with path filters', async () => {
       const response = await client.callTool('search_codebase', {
-        query: 'React component',
+        query: 'JavaScript class for managing users',
         limit: 3,
         filters: {
-          pathFilters: ['.tsx']
+          pathFilters: ['.js']
         }
       })
 
@@ -471,7 +426,7 @@ describe('MCP Server Integration Tests', () => {
 
     it('should return results with proper format', async () => {
       const response = await client.callTool('search_codebase', {
-        query: 'typescript function',
+        query: 'data processing function',
         limit: 3
       })
 
@@ -514,7 +469,7 @@ describe('MCP Server Integration Tests', () => {
 
     it('should handle limit parameter correctly', async () => {
       const response = await client.callTool('search_codebase', {
-        query: 'function',
+        query: 'process',
         limit: 2
       })
 

@@ -4,7 +4,8 @@ import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../sha
 import { scannerExtensions } from "../shared/supported-extensions"
 import { CodeBlock, ICodeParser, IEmbedder, IVectorStore, IDirectoryScanner } from "../interfaces"
 import { BatchProcessor, BatchProcessorOptions } from "./batch-processor"
-import { IFileSystem, IWorkspace, IPathUtils, ILogger } from "../../abstractions"
+import { IFileSystem, IWorkspace, IPathUtils } from "../../abstractions"
+import { Logger } from "../../utils/logger"
 import { createHash } from "crypto"
 import { v5 as uuidv5 } from "uuid"
 // p-limit for concurrency control
@@ -23,6 +24,9 @@ import {
 	MAX_PENDING_BATCHES,
 } from "../constants"
 
+// Type-compatible logger interface using Pick to extract only required methods from Logger
+type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
+
 export interface DirectoryScannerDependencies {
 	embedder: IEmbedder
 	qdrantClient: IVectorStore
@@ -32,7 +36,7 @@ export interface DirectoryScannerDependencies {
 	fileSystem: IFileSystem
 	workspace: IWorkspace
 	pathUtils: IPathUtils
-	logger?: ILogger // 新增logger依赖，可选
+	logger?: LoggerLike // Using LoggerLike for type compatibility
 }
 
 export class DirectoryScanner implements IDirectoryScanner {

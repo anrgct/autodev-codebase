@@ -103,10 +103,10 @@ export function parseArgs(argv: string[] = process.argv): CliOptions {
 
 export function printHelp() {
   console.log(`
-@autodev/codebase - Code Analysis TUI
+@autodev/codebase - Code Analysis CLI
 
 Usage:
-  codebase [options]                    Run TUI mode (default)
+  codebase [options]                    Show help
   codebase mcp-server [options]         Start MCP server mode
   codebase stdio-adapter [options]      Start stdio adapter mode
 
@@ -114,7 +114,6 @@ Options:
   --path=<path>           Workspace path (default: current directory)
   --demo                  Create demo files in workspace
   --force                 Force reindex all files, ignoring cache
-  --headless              Run without UI, exit after indexing completes
 
 MCP Server Options:
   --port=<port>           HTTP server port (default: 3001)
@@ -137,7 +136,7 @@ Stdio Adapter Options:
   --help, -h              Show this help
 
 Examples:
-  # TUI mode
+  # Basic usage
   codebase --path=/my/project
   codebase --demo --log-level=info
   codebase --force --path=/my/project    # Force reindex

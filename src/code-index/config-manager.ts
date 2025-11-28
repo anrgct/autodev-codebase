@@ -2,8 +2,13 @@ import { EmbedderProvider } from "./interfaces/manager"
 import { CodeIndexConfig, PreviousConfigSnapshot } from "./interfaces/config"
 import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "./constants"
 import { getDefaultModelId, getModelDimension, getModelScoreThreshold } from "../shared/embeddingModels"
-// Import interface from a local file to avoid circular dependencies
-interface IConfigProvider {
+
+/**
+ * Local configuration provider interface for CodeIndexConfigManager.
+ * This is different from the IConfigProvider in abstractions/config.ts.
+ * It provides lower-level access to global state and secrets storage.
+ */
+export interface ICodeIndexConfigProvider {
   getGlobalState(key: string): any
   getSecret(key: string): Promise<string>
   refreshSecrets(): Promise<void>
@@ -30,7 +35,7 @@ export class CodeIndexConfigManager {
 	private searchMinScore?: number
 	private searchMaxResults?: number
 
-	constructor(private readonly configProvider: IConfigProvider) {
+	constructor(private readonly configProvider: ICodeIndexConfigProvider) {
 		// Initialize with current configuration to avoid false restart triggers
 		// Note: This is async but constructor can't be async, so we'll initialize asynchronously
 		this._loadAndSetConfiguration().catch(console.error)
@@ -39,7 +44,7 @@ export class CodeIndexConfigManager {
 	/**
 	 * Gets the context proxy instance
 	 */
-	public getConfigProvider(): IConfigProvider {
+	public getConfigProvider(): ICodeIndexConfigProvider {
 		return this.configProvider
 	}
 

@@ -1,17 +1,19 @@
 import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner } from "./interfaces"
 import { IndexingState, ICodeIndexManager } from "./interfaces/manager"
-import { CodeIndexConfigManager } from "./config-manager"
+import { CodeIndexConfigManager, ICodeIndexConfigProvider } from "./config-manager"
 import { CodeIndexStateManager } from "./state-manager"
 import { CodeIndexServiceFactory } from "./service-factory"
 import { CodeIndexSearchService } from "./search-service"
 import { CodeIndexOrchestrator } from "./orchestrator"
 import { CacheManager } from "./cache-manager"
-import { IConfigProvider } from "../abstractions/config"
-import { IFileSystem, IStorage, IEventBus, ILogger } from "../abstractions/core"
+import { IFileSystem, IStorage, IEventBus } from "../abstractions/core"
 import { IWorkspace, IPathUtils } from "../abstractions/workspace"
+import { Logger } from "../utils/logger"
 import fs from "fs/promises"
 import ignore from "ignore"
 import path from "path"
+
+type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 
 export interface CodeIndexManagerDependencies {
 	fileSystem: IFileSystem
@@ -19,8 +21,8 @@ export interface CodeIndexManagerDependencies {
 	eventBus: IEventBus
 	workspace: IWorkspace
 	pathUtils: IPathUtils
-	configProvider: IConfigProvider
-	logger?: ILogger
+	configProvider: ICodeIndexConfigProvider
+	logger?: LoggerLike
 }
 
 export class CodeIndexManager implements ICodeIndexManager {
@@ -116,9 +118,11 @@ export class CodeIndexManager implements ICodeIndexManager {
 	 * Initializes the manager with configuration and dependent services.
 	 * Must be called before using any other methods.
 	 * @param options Optional initialization options
+	 * @param options.force Force reindex all files
+	 * @param options.searchOnly Initialize for search only (no background indexing, just init vector store)
 	 * @returns Object indicating if a restart is needed
 	 */
-	public async initialize(options?: { force?: boolean }): Promise<{ requiresRestart: boolean }> {
+	public async initialize(options?: { force?: boolean; searchOnly?: boolean }): Promise<{ requiresRestart: boolean }> {
 		// 1. ConfigManager Initialization and Configuration Loading
 		if (!this._configManager) {
 			this._configManager = new CodeIndexConfigManager(this.dependencies.configProvider)
@@ -145,11 +149,7 @@ export class CodeIndexManager implements ICodeIndexManager {
 
 		// 4. CacheManager Initialization
 		if (!this._cacheManager) {
-			this._cacheManager = new CacheManager(
-				this.dependencies.fileSystem,
-				this.dependencies.storage,
-				this.workspacePath
-			)
+			this._cacheManager = new CacheManager(this.workspacePath)
 			await this._cacheManager.initialize()
 		}
 
@@ -163,12 +163,17 @@ export class CodeIndexManager implements ICodeIndexManager {
 		// 6. Handle Indexing Start/Restart
 		// The enhanced vectorStore.initialize() in startIndexing() now handles dimension changes automatically
 		// by detecting incompatible collections and recreating them, so we rely on that for dimension changes
-		const shouldStartOrRestartIndexing =
-			requiresRestart ||
-			(needsServiceRecreation && (!this._orchestrator || this._orchestrator.state !== "Indexing"))
+		if (options?.searchOnly) {
+			// For search-only mode: initialize vector store and set state to Indexed if data exists
+			await this._initializeForSearchOnly()
+		} else {
+			const shouldStartOrRestartIndexing =
+				requiresRestart ||
+				(needsServiceRecreation && (!this._orchestrator || this._orchestrator.state !== "Indexing"))
 
-		if (shouldStartOrRestartIndexing) {
-			this._orchestrator?.startIndexing() // This method is async, but we don't await it here
+			if (shouldStartOrRestartIndexing) {
+				this._orchestrator?.startIndexing() // This method is async, but we don't await it here
+			}
 		}
 
 		return { requiresRestart }
@@ -417,6 +422,29 @@ export class CodeIndexManager implements ICodeIndexManager {
 	}
 
 	/**
+	 * Initialize for search-only mode.
+	 * Initializes the vector store and sets state to "Indexed" if data exists.
+	 * This allows searching without starting background indexing.
+	 */
+	private async _initializeForSearchOnly(): Promise<void> {
+		this.assertInitialized()
+
+		const vectorStore = this._orchestrator!.getVectorStore()
+
+		// Initialize the vector store connection
+		await vectorStore.initialize()
+
+		// Check if there's existing indexed data
+		const hasData = await vectorStore.hasIndexedData()
+
+		if (hasData) {
+			this._stateManager.setSystemState("Indexed", "Search-only mode: using existing index")
+		} else {
+			this._stateManager.setSystemState("Standby", "No indexed data found. Run --index first.")
+		}
+	}
+
+	/**
 	 * Handle code index settings changes.
 	 * This method should be called when code index settings are updated
 	 * to ensure the CodeIndexConfigManager picks up the new configuration.
@@ -445,11 +473,7 @@ export class CodeIndexManager implements ICodeIndexManager {
 				try {
 					// Ensure cacheManager is initialized before recreating services
 					if (!this._cacheManager) {
-						this._cacheManager = new CacheManager(
-							this.dependencies.fileSystem,
-							this.dependencies.storage,
-							this.workspacePath
-						)
+						this._cacheManager = new CacheManager(this.workspacePath)
 						await this._cacheManager.initialize()
 					}
 

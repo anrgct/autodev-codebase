@@ -12,8 +12,12 @@ import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore } from "./interf
 import { CodeIndexConfigManager } from "./config-manager"
 import { CacheManager } from "./cache-manager"
 import { Ignore } from "ignore"
-import { IEventBus, IFileSystem, ILogger } from "../abstractions/core"
+import { IEventBus, IFileSystem } from "../abstractions/core"
 import { IWorkspace, IPathUtils } from "../abstractions/workspace"
+import { Logger } from "../utils/logger"
+
+// Type-compatible logger interface using Pick to extract only required methods from Logger
+type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 
 // Hardcoded internationalization functions (replacing t() calls)
 const t = (key: string, params?: Record<string, string>): string => {
@@ -50,7 +54,7 @@ export class CodeIndexServiceFactory {
 		private readonly configManager: CodeIndexConfigManager,
 		private readonly workspacePath: string,
 		private readonly cacheManager: CacheManager,
-		private readonly logger?: ILogger,
+		private readonly logger?: LoggerLike,
 	) {}
 
 	/**
