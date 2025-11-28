@@ -47,20 +47,20 @@ export function createNodeDependencies(options: {
   const eventBus = new NodeEventBus()
   const logger = new NodeLogger(options.loggerOptions)
   const fileWatcher = new NodeFileWatcher()
-  
+
   const workspace = new NodeWorkspace(fileSystem, {
     rootPath: options.workspacePath,
     ...options.storageOptions
   })
-  
+
   const pathUtils = new NodePathUtils()
-  
+
   // Configure global config path in config options
   const configOptions = {
     ...options.configOptions,
     globalConfigPath: options.configOptions?.globalConfigPath || path.join(globalConfigDir, 'autodev-config.json')
   }
-  
+
   const configProvider = new NodeConfigProvider(fileSystem, eventBus, configOptions)
 
   return {

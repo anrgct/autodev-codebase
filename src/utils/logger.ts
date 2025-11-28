@@ -173,3 +173,11 @@ export function getGlobalLogger(): Logger {
 export function setGlobalLogger(logger: Logger): void {
   globalLogger = logger
 }
+
+export function setGlobalLogLevel(level: LogLevel): void {
+  if (globalLogger) {
+    globalLogger.setLevel(level)
+  } else {
+    globalLogger = new Logger({ name: 'App', level })
+  }
+}

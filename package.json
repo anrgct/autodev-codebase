@@ -9,11 +9,11 @@
     "dist/**/*"
   ],
   "scripts": {
-    "dev": "rm -rf ~/.autodev-cache/ && npx tsx src/index.ts --demo",
+    "dev": "rm -rf ~/.autodev-cache/ && npx tsx src/cli.ts --demo",
     "build": "rollup -c rollup.config.cjs && chmod +x dist/cli.js",
     "type-check": "npx tsc -p tsconfig.json --noEmit",
     "demo-tui": "npx tsx src/examples/run-demo-tui.tsx",
-    "mcp-server": "npx tsx src/index.ts mcp-server --demo --port=3002",
+    "mcp-server": "npx tsx src/cli.ts --serve --demo --port=3002",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx vitest --config vitest.e2e.config.ts",
