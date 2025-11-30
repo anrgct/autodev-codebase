@@ -392,30 +392,10 @@ async function startMCPServer(options: SimpleCliOptions): Promise<void> {
 }
 
 /**
- * Index the codebase
+ * Wait for indexing to complete on a given manager instance.
+ * Shared by `--index` 与自动索引搜索场景。
  */
-async function indexCodebase(options: SimpleCliOptions): Promise<void> {
-  getLogger().info('Starting indexing mode');
-  getLogger().info(`Workspace: ${options.path}`);
-
-  const manager = await initializeManager(options);
-  if (!manager) {
-    process.exit(1);
-  }
-
-  if (!manager.isFeatureEnabled) {
-    getLogger().error('Code indexing feature is not enabled');
-    process.exit(1);
-  }
-
-  getLogger().info('Starting indexing process...');
-
-  // Set up progress monitoring
-  manager.onProgressUpdate((progressInfo) => {
-    getLogger().info(`Indexing progress: ${progressInfo.systemStatus} - ${progressInfo.message || ''}`);
-  });
-
-  // Wait for indexing to complete
+async function waitForIndexingCompletion(manager: CodeIndexManager): Promise<void> {
   return new Promise((resolve, reject) => {
     const checkState = () => {
       const currentState = manager.state;
@@ -446,9 +426,43 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
 }
 
 /**
- * Search the index
+ * Index the codebase
  */
-async function searchIndex(query: string, options: SimpleCliOptions): Promise<void> {
+async function indexCodebase(options: SimpleCliOptions): Promise<void> {
+  getLogger().info('Starting indexing mode');
+  getLogger().info(`Workspace: ${options.path}`);
+
+  const manager = await initializeManager(options);
+  if (!manager) {
+    process.exit(1);
+  }
+
+  if (!manager.isFeatureEnabled) {
+    getLogger().error('Code indexing feature is not enabled');
+    process.exit(1);
+  }
+
+  try {
+    getLogger().info('Starting indexing process...');
+
+    // Set up progress monitoring
+    manager.onProgressUpdate((progressInfo) => {
+      getLogger().info(`Indexing progress: ${progressInfo.systemStatus} - ${progressInfo.message || ''}`);
+    });
+
+    // Wait for indexing to complete
+    await waitForIndexingCompletion(manager);
+  } finally {
+    // Ensure watcher is stopped so the process can exit cleanly
+    manager.dispose();
+    getLogger().info('Indexing mode completed. Exiting...');
+  }
+}
+
+/**
+  * Search the index
+  */
+  async function searchIndex(query: string, options: SimpleCliOptions): Promise<void> {
   getLogger().info('Search mode');
   getLogger().info(`Query: "${query}"`);
   getLogger().info(`Workspace: ${options.path}`);
@@ -464,22 +478,44 @@ async function searchIndex(query: string, options: SimpleCliOptions): Promise<vo
     process.exit(1);
   }
 
-  getLogger().info('Searching index...');
-  const results = await manager.searchIndex(query);
+  try {
+    getLogger().info('Searching index (first attempt)...');
+    let results: VectorStoreSearchResult[];
 
-  if (results.length === 0) {
-    getLogger().info('No results found');
+    try {
+      results = await manager.searchIndex(query);
+    } catch (error) {
+      // 如果索引尚未准备好，则先执行一次索引再重试搜索
+      if (error instanceof Error && error.message.startsWith('Code index is not ready for search')) {
+        getLogger().info('Index is not ready. Running indexing before search...');
+        await waitForIndexingCompletion(manager);
+        getLogger().info('Retrying search after indexing...');
+        results = await manager.searchIndex(query);
+      } else {
+        throw error;
+      }
+    }
+
+    if (!results || results.length === 0) {
+      getLogger().info('No results found');
+      return;
+    }
+
+    // 使用新的格式化函数显示搜索结果
+    const formattedOutput = formatSearchResults(results as SearchResult[], query);
+    console.log(formattedOutput);
+  } catch (error) {
+    if (error instanceof Error) {
+      getLogger().error('Search failed:', error.message);
+    } else {
+      getLogger().error('Search failed with unknown error:', error);
+    }
+    process.exit(1);
+  } finally {
+    // 停止后台服务以允许程序退出
     manager.dispose();
-    return;
+    getLogger().info('Search completed. Exiting...');
   }
-
-  // 使用新的格式化函数显示搜索结果
-  const formattedOutput = formatSearchResults(results as SearchResult[], query);
-  console.log(formattedOutput);
-
-  // 停止后台服务以允许程序退出
-  manager.dispose();
-  getLogger().info('Search completed. Exiting...');
 }
 
 /**
@@ -489,7 +525,10 @@ async function clearIndex(options: SimpleCliOptions): Promise<void> {
   getLogger().info('Clear index mode');
   getLogger().info(`Workspace: ${options.path}`);
 
-  const manager = await initializeManager(options);
+  // 使用 searchOnly 模式初始化：
+  // - 只连接到向量存储，不自动启动后台索引
+  // - 避免在仅清理数据时触发不必要的 full indexing 流程
+  const manager = await initializeManager(options, { searchOnly: true });
   if (!manager) {
     process.exit(1);
   }

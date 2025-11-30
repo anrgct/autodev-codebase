@@ -71,11 +71,17 @@ export class CacheManager implements ICacheManager {
 	}
 
 	/**
-	 * Clears the cache file by writing an empty object to it
+	 * Clears the cache for this workspace.
+	 * Default行为：删除对应的缓存文件，并重置内存中的哈希映射。
 	 */
 	async clearCacheFile(): Promise<void> {
 		try {
-			await filesystem.writeFile(this.cachePath, new TextEncoder().encode("{}"))
+			// If the cache file exists, remove it entirely
+			if (await filesystem.exists(this.cachePath)) {
+				await filesystem.remove(this.cachePath)
+			}
+
+			// Reset in-memory cache state
 			this.fileHashes = {}
 		} catch (error) {
 			console.error("Failed to clear cache file:", error, this.cachePath)

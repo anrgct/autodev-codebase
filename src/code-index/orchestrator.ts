@@ -376,46 +376,46 @@ export class CodeIndexOrchestrator {
 		this._isProcessing = false
 	}
 
-	/**
-	 * Clears all index data by stopping the watcher, clearing the vector store,
-	 * and resetting the cache file.
-	 */
-	public async clearIndexData(): Promise<void> {
-		this._isProcessing = true
-
-		try {
-			this.stopWatcher()
+		/**
+		 * Clears all index data by stopping the watcher, deleting the vector store collection,
+		 * and resetting the cache file.
+		 *
+		 * 注意：这里不会重新创建空的 collection，目的是实现真正“清空干净”的语义。
+		 * 下一次运行 --index / 搜索时，由对应流程负责按需重新初始化向量存储。
+		 */
+		public async clearIndexData(): Promise<void> {
+			this._isProcessing = true
 
 			try {
-				if (this.configManager.isFeatureConfigured) {
-					await this.vectorStore.deleteCollection()
+				// Stop file watcher so no new indexing work is scheduled while we clear data
+				this.stopWatcher()
 
-					// Add a small delay to ensure deletion is fully completed in vector store
-					await new Promise(resolve => setTimeout(resolve, 500))
-					this.info("[CodeIndexOrchestrator] Collection deletion completed, waiting for propagation...")
+				try {
+					if (this.configManager.isFeatureConfigured) {
+						this.info("[CodeIndexOrchestrator] Deleting vector store collection for full reset...")
+						await this.vectorStore.deleteCollection()
 
-					// Immediately reinitialize the vector store to recreate the collection
-					// This prevents any timing window where the collection doesn't exist
-					this.info("[CodeIndexOrchestrator] Reinitializing vector store after deletion...")
-					await this.vectorStore.initialize()
-					this.info("[CodeIndexOrchestrator] Vector store reinitialized successfully")
-				} else {
-					this.warn("[CodeIndexOrchestrator] Service not configured, skipping vector collection clear.")
+						// 给 Qdrant 一点时间完成删除操作（防止立即后续请求命中旧状态）
+						await new Promise(resolve => setTimeout(resolve, 500))
+						this.info("[CodeIndexOrchestrator] Collection deletion requested. No collection will be recreated.")
+					} else {
+						this.warn("[CodeIndexOrchestrator] Service not configured, skipping vector collection clear.")
+					}
+				} catch (error: any) {
+					this.error("[CodeIndexOrchestrator] Failed to clear vector collection:", error)
+					this.stateManager.setSystemState("Error", `Failed to clear vector collection: ${error.message}`)
 				}
-			} catch (error: any) {
-				this.error("[CodeIndexOrchestrator] Failed to clear vector collection:", error)
-				this.stateManager.setSystemState("Error", `Failed to clear vector collection: ${error.message}`)
-			}
 
-			await this.cacheManager.clearCacheFile()
+				// Also clear local cache so next indexing run starts from a clean slate
+				await this.cacheManager.clearCacheFile()
 
-			if (this.stateManager.state !== "Error") {
-				this.stateManager.setSystemState("Standby", t("embeddings:orchestrator.indexDataCleared"))
+				if (this.stateManager.state !== "Error") {
+					this.stateManager.setSystemState("Standby", t("embeddings:orchestrator.indexDataCleared"))
+				}
+			} finally {
+				this._isProcessing = false
 			}
-		} finally {
-			this._isProcessing = false
 		}
-	}
 
 	/**
 	 * Gets the current state of the indexing system.

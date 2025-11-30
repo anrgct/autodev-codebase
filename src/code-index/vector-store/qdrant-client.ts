@@ -93,6 +93,30 @@ export class QdrantVectorStore implements IVectorStore {
 	}
 
 	/**
+	 * Detect whether an error indicates that the target collection does not exist.
+	 * Qdrant REST client wraps errors in ApiError objects with status/data fields.
+	 */
+	private isCollectionNotFoundError(error: unknown): boolean {
+		const err: any = error
+		const statusCode = err?.status
+		if (statusCode === 404) {
+			return true
+		}
+
+		const message = (err?.message || "").toString().toLowerCase()
+		if (message.includes("collection") && message.includes("not found")) {
+			return true
+		}
+
+		const dataError = (err?.data?.status?.error || "").toString().toLowerCase()
+		if (dataError.includes("collection") && dataError.includes("doesn't exist")) {
+			return true
+		}
+
+		return false
+	}
+
+	/**
 	 * Initializes the vector store
 	 * @returns Promise resolving to boolean indicating if a new collection was created
 	 */
@@ -525,6 +549,12 @@ export class QdrantVectorStore implements IVectorStore {
 				wait: true,
 			})
 		} catch (error) {
+			if (this.isCollectionNotFoundError(error)) {
+				console.warn(
+					`[QdrantVectorStore] clearCollection: collection ${this.collectionName} does not exist, treating as already empty.`,
+				)
+				return
+			}
 			console.error("Failed to clear collection:", error)
 			throw error
 		}
@@ -637,6 +667,12 @@ export class QdrantVectorStore implements IVectorStore {
 			})
 			console.log("[QdrantVectorStore] Marked indexing as complete")
 		} catch (error) {
+			if (this.isCollectionNotFoundError(error)) {
+				console.warn(
+					`[QdrantVectorStore] markIndexingComplete: collection ${this.collectionName} does not exist, skipping metadata update.`,
+				)
+				return
+			}
 			console.error("[QdrantVectorStore] Failed to mark indexing as complete:", error)
 			throw error
 		}
@@ -668,6 +704,12 @@ export class QdrantVectorStore implements IVectorStore {
 			})
 			console.log("[QdrantVectorStore] Marked indexing as incomplete (in progress)")
 		} catch (error) {
+			if (this.isCollectionNotFoundError(error)) {
+				console.warn(
+					`[QdrantVectorStore] markIndexingIncomplete: collection ${this.collectionName} does not exist, skipping metadata update.`,
+				)
+				return
+			}
 			console.error("[QdrantVectorStore] Failed to mark indexing as incomplete:", error)
 			throw error
 		}
