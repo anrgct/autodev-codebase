@@ -112,7 +112,13 @@ describe("Ripgrep integration", () => {
 	it("should throw error when ripgrep binary is not found", async () => {
 		// Mock getBinPath to return undefined
 		const mockFileSystem = {
-			exists: () => Promise.resolve(false)
+			readFile: vi.fn(),
+			writeFile: vi.fn(),
+			stat: vi.fn(),
+			readdir: vi.fn(),
+			mkdir: vi.fn(),
+			exists: () => Promise.resolve(false),
+			delete: vi.fn(),
 		}
 
 		await expect(

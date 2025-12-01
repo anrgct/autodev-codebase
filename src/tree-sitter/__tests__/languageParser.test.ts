@@ -50,8 +50,8 @@ vi.mock("web-tree-sitter", () => {
 	})
 
 	// Add static methods
-	ParserMock.init = vi.fn().mockResolvedValue(undefined)
-	ParserMock.Language = {
+	;(ParserMock as any).init = vi.fn().mockResolvedValue(undefined)
+	;(ParserMock as any).Language = {
 		load: vi.fn().mockImplementation((wasmPath: string) => {
 			// Extract language name from path for debugging
 			const langName = wasmPath.split('/').pop()?.replace('tree-sitter-', '').replace('.wasm', '')
@@ -138,8 +138,8 @@ describe("Language Parser", () => {
 			expect(Parser.Language.load).toHaveBeenCalledWith(
 				expect.stringContaining("tree-sitter-javascript.wasm"),
 			)
-			expect(parsers.js).toBeDefined()
-			expect(parsers.js.query).toBeDefined()
+			expect(parsers['js']).toBeDefined()
+			expect(parsers['js'].query).toBeDefined()
 		})
 
 		it("should load TypeScript parser for .ts and .tsx files", async () => {
@@ -150,8 +150,8 @@ describe("Language Parser", () => {
 				expect.stringContaining("tree-sitter-typescript.wasm"),
 			)
 			expect(Parser.Language.load).toHaveBeenCalledWith(expect.stringContaining("tree-sitter-tsx.wasm"))
-			expect(parsers.ts).toBeDefined()
-			expect(parsers.tsx).toBeDefined()
+			expect(parsers['ts']).toBeDefined()
+			expect(parsers['tsx']).toBeDefined()
 		})
 
 		it("should load Python parser for .py files", async () => {
@@ -159,7 +159,7 @@ describe("Language Parser", () => {
 			const parsers = await loadRequiredLanguageParsers(files)
 
 			expect(Parser.Language.load).toHaveBeenCalledWith(expect.stringContaining("tree-sitter-python.wasm"))
-			expect(parsers.py).toBeDefined()
+			expect(parsers['py']).toBeDefined()
 		})
 
 		it("should load multiple language parsers as needed", async () => {
@@ -167,10 +167,10 @@ describe("Language Parser", () => {
 			const parsers = await loadRequiredLanguageParsers(files)
 
 			expect(Parser.Language.load).toHaveBeenCalledTimes(4)
-			expect(parsers.js).toBeDefined()
-			expect(parsers.py).toBeDefined()
-			expect(parsers.rs).toBeDefined()
-			expect(parsers.go).toBeDefined()
+			expect(parsers['js']).toBeDefined()
+			expect(parsers['py']).toBeDefined()
+			expect(parsers['rs']).toBeDefined()
+			expect(parsers['go']).toBeDefined()
 		})
 
 		it("should handle C/C++ files correctly", async () => {
@@ -179,10 +179,10 @@ describe("Language Parser", () => {
 
 			expect(Parser.Language.load).toHaveBeenCalledWith(expect.stringContaining("tree-sitter-c.wasm"))
 			expect(Parser.Language.load).toHaveBeenCalledWith(expect.stringContaining("tree-sitter-cpp.wasm"))
-			expect(parsers.c).toBeDefined()
-			expect(parsers.h).toBeDefined()
-			expect(parsers.cpp).toBeDefined()
-			expect(parsers.hpp).toBeDefined()
+			expect(parsers['c']).toBeDefined()
+			expect(parsers['h']).toBeDefined()
+			expect(parsers['cpp']).toBeDefined()
+			expect(parsers['hpp']).toBeDefined()
 		})
 
 		it("should handle Kotlin files correctly", async () => {
@@ -190,10 +190,10 @@ describe("Language Parser", () => {
 			const parsers = await loadRequiredLanguageParsers(files)
 
 			expect(Parser.Language.load).toHaveBeenCalledWith(expect.stringContaining("tree-sitter-kotlin.wasm"))
-			expect(parsers.kt).toBeDefined()
-			expect(parsers.kts).toBeDefined()
-			expect(parsers.kt.query).toBeDefined()
-			expect(parsers.kts.query).toBeDefined()
+			expect(parsers['kt']).toBeDefined()
+			expect(parsers['kts']).toBeDefined()
+			expect(parsers['kt'].query).toBeDefined()
+			expect(parsers['kts'].query).toBeDefined()
 		})
 
 		it("should skip unsupported file extensions gracefully", async () => {
@@ -234,7 +234,7 @@ describe("Language Parser", () => {
 			expect(Parser.Language.load).toHaveBeenCalledWith(
 				expect.stringContaining("tree-sitter-embedded_template.wasm"),
 			)
-			expect(parsers.embedded_template).toBeDefined()
+			expect(parsers['embedded_template']).toBeDefined()
 		})
 
 		it("should handle Elixir files correctly", async () => {
@@ -244,26 +244,26 @@ describe("Language Parser", () => {
 			expect(Parser.Language.load).toHaveBeenCalledWith(
 				expect.stringContaining("tree-sitter-elixir.wasm"),
 			)
-			expect(parsers.ex).toBeDefined()
-			expect(parsers.exs).toBeDefined()
+			expect(parsers['ex']).toBeDefined()
+			expect(parsers['exs']).toBeDefined()
 		})
 
 		it("should handle case-insensitive file extensions", async () => {
 			const files = ["test.JS", "test.PY", "test.TS"]
 			const parsers = await loadRequiredLanguageParsers(files)
 
-			expect(parsers.js).toBeDefined()
-			expect(parsers.py).toBeDefined()
-			expect(parsers.ts).toBeDefined()
+			expect(parsers['js']).toBeDefined()
+			expect(parsers['py']).toBeDefined()
+			expect(parsers['ts']).toBeDefined()
 		})
 
 		it("should handle files with multiple dots", async () => {
 			const files = ["test.component.js", "app.config.ts", "module.test.py"]
 			const parsers = await loadRequiredLanguageParsers(files)
 
-			expect(parsers.js).toBeDefined()
-			expect(parsers.ts).toBeDefined()
-			expect(parsers.py).toBeDefined()
+			expect(parsers['js']).toBeDefined()
+			expect(parsers['ts']).toBeDefined()
+			expect(parsers['py']).toBeDefined()
 		})
 
 		it("should handle mixed supported and unsupported files", async () => {
@@ -271,8 +271,8 @@ describe("Language Parser", () => {
 			const parsers = await loadRequiredLanguageParsers(files)
 
 			// Should only load parsers for supported extensions
-			expect(parsers.js).toBeDefined()
-			expect(parsers.py).toBeDefined()
+			expect(parsers['js']).toBeDefined()
+			expect(parsers['py']).toBeDefined()
 			expect(Object.keys(parsers)).toHaveLength(2)
 		})
 

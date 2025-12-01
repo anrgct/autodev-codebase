@@ -13,6 +13,8 @@ vitest.mock("lodash.debounce", () => ({ default: vitest.fn((fn) => fn) }))
 vitest.mock("../../utils/filesystem", () => ({
 	readFile: vitest.fn(),
 	writeFile: vitest.fn(),
+	exists: vitest.fn(),
+	remove: vitest.fn(),
 }))
 
 describe("CacheManager", () => {
@@ -140,19 +142,31 @@ describe("CacheManager", () => {
 		it("should clear cache file and reset state", async () => {
 			cacheManager.updateHash("test.ts", "hash")
 
-			// Reset the mock to ensure writeFile succeeds for clearCacheFile
-			;(filesystem.writeFile as Mock).mockClear()
-			;(filesystem.writeFile as Mock).mockResolvedValue(undefined)
+			// Reset the mock to ensure exists and remove succeed for clearCacheFile
+			;(filesystem.exists as Mock).mockResolvedValue(true)
+			;(filesystem.remove as Mock).mockResolvedValue(undefined)
 
 			await cacheManager.clearCacheFile()
 
-			expect(filesystem.writeFile).toHaveBeenCalledWith(mockCachePath, new TextEncoder().encode("{}"))
+			expect(filesystem.exists).toHaveBeenCalledWith(mockCachePath)
+			expect(filesystem.remove).toHaveBeenCalledWith(mockCachePath)
+			expect(cacheManager.getAllHashes()).toEqual({})
+		})
+
+		it("should not call remove if cache file does not exist", async () => {
+			;(filesystem.exists as Mock).mockResolvedValue(false)
+
+			await cacheManager.clearCacheFile()
+
+			expect(filesystem.exists).toHaveBeenCalledWith(mockCachePath)
+			expect(filesystem.remove).not.toHaveBeenCalled()
 			expect(cacheManager.getAllHashes()).toEqual({})
 		})
 
 		it("should handle clear errors gracefully", async () => {
 			const consoleErrorSpy = vitest.spyOn(console, "error").mockImplementation(() => {})
-			;(filesystem.writeFile as Mock).mockRejectedValue(new Error("Save failed"))
+			;(filesystem.exists as Mock).mockResolvedValue(true)
+			;(filesystem.remove as Mock).mockRejectedValue(new Error("Remove failed"))
 
 			await cacheManager.clearCacheFile()
 

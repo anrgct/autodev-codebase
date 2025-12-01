@@ -51,38 +51,7 @@ vi.mock("fs/promises", () => ({
 	stat: vi.fn(),
 }))
 
-// Create a simple mock for vscode since we can't access the real one
-vi.mock("vscode", () => ({
-	workspace: {
-		workspaceFolders: [
-			{
-				uri: {
-					fsPath: "/mock/workspace",
-				},
-			},
-		],
-		getWorkspaceFolder: vi.fn().mockReturnValue({
-			uri: {
-				fsPath: "/mock/workspace",
-			},
-		}),
-		fs: {
-			readFile: vi.fn().mockResolvedValue(Buffer.from("test content")),
-		},
-	},
-	Uri: {
-		file: vi.fn().mockImplementation((path) => path),
-	},
-	window: {
-		activeTextEditor: {
-			document: {
-				uri: {
-					fsPath: "/mock/workspace",
-				},
-			},
-		},
-	},
-}))
+// VSCode mock removed - no longer needed
 
 vi.mock("../../../../core/ignore/RooIgnoreController")
 vi.mock("ignore")

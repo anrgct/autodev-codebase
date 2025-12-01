@@ -1,10 +1,20 @@
 {
   "isEnabled": true,
   "isConfigured": true,
+  // "embedderProvider": "openai-compatible",
+  // "modelId": "Qwen/Qwen3-Embedding-0.6B",
   "embedderProvider": "ollama",
   "modelId": "qwen3-embedding:0.6b",
-  "modelDimension": 1536,
+  "modelDimension": 1024,
   "ollamaOptions": {
     "ollamaBaseUrl": "http://localhost:11434"
-  }
+  },
+  "openAiOptions": {
+    "openAiNativeApiKey": "test-key"
+  },
+  "openAiCompatibleOptions": {
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "apiKey": "sk-ughiikqkayqxxwxfflddywnssdesczoggpdqjngfuojrcabd"
+  },
+  "qdrantUrl": "http://localhost:6333"
 }

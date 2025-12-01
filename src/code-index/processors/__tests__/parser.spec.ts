@@ -257,10 +257,12 @@ describe("CodeParser", () => {
 					content: "function parent() {\n  function child() {}\n}",
 					segmentHash: "parent-hash",
 					fileHash: "file-hash",
-					chunkSource: "tree-sitter" as const
+					chunkSource: "tree-sitter" as const,
+					parentChain: [],
+					hierarchyDisplay: null
 				},
 				{
-					file_path: "test.js", 
+					file_path: "test.js",
 					identifier: "child",
 					type: "function",
 					start_line: 2,
@@ -268,7 +270,9 @@ describe("CodeParser", () => {
 					content: "function child() {}",
 					segmentHash: "child-hash",
 					fileHash: "file-hash",
-					chunkSource: "tree-sitter" as const
+					chunkSource: "tree-sitter" as const,
+					parentChain: [],
+					hierarchyDisplay: null
 				}
 			]
 
@@ -288,7 +292,9 @@ describe("CodeParser", () => {
 					content: "some code content",
 					segmentHash: "fallback-hash",
 					fileHash: "file-hash",
-					chunkSource: "fallback" as const
+					chunkSource: "fallback" as const,
+					parentChain: [],
+					hierarchyDisplay: null
 				},
 				{
 					file_path: "test.js",
@@ -299,7 +305,9 @@ describe("CodeParser", () => {
 					content: "some code content",
 					segmentHash: "tree-hash",
 					fileHash: "file-hash",
-					chunkSource: "tree-sitter" as const
+					chunkSource: "tree-sitter" as const,
+					parentChain: [],
+					hierarchyDisplay: null
 				}
 			]
 
@@ -319,7 +327,9 @@ describe("CodeParser", () => {
 				content: "function parent() {\n  const x = 1;\n  return x;\n}",
 				segmentHash: "parent-hash",
 				fileHash: "file-hash",
-				chunkSource: "tree-sitter" as const
+				chunkSource: "tree-sitter" as const,
+				parentChain: [],
+				hierarchyDisplay: null
 			}
 
 			const childBlock = {
@@ -329,9 +339,11 @@ describe("CodeParser", () => {
 				start_line: 2,
 				end_line: 2,
 				content: "const x = 1;",
-				segmentHash: "child-hash", 
+				segmentHash: "child-hash",
 				fileHash: "file-hash",
-				chunkSource: "tree-sitter" as const
+				chunkSource: "tree-sitter" as const,
+				parentChain: [],
+				hierarchyDisplay: null
 			}
 
 			const isContained = parser["isBlockContained"](childBlock, parentBlock)

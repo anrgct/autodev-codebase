@@ -1,5 +1,4 @@
 import { vitest, describe, it, expect, beforeEach, afterEach } from "vitest"
-import * as vscode from "vscode"
 import { CodeIndexManager } from "../manager"
 
 

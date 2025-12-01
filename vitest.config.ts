@@ -56,8 +56,10 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      // Mock vscode module for tests
-      vscode: path.resolve(__dirname, './src/__mocks__/vscode.ts')
+      // No VSCode mock needed - project is CLI-only
     }
+  },
+  optimizeDeps: {
+    external: ['vscode', '@types/vscode']
   }
 })

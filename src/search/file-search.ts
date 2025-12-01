@@ -11,18 +11,11 @@ import * as readline from "readline"
 import { byLengthAsc, Fzf } from "fzf"
 import { getBinPath as getRipgrepBinPath } from "../ripgrep"
 
-// For VSCode environments, vscode should be available as peer dependency
-let vscode: any
-try {
-  vscode = require('vscode')
-} catch (e) {
-  // VSCode not available - this is expected in standalone environments
-//   console.warn('VSCode not available - search functionality will be limited')
-}
+// VSCode support removed - using standalone Node.js implementation
 
 // Use the proper ripgrep getBinPath implementation
-async function getBinPath(appRoot?: string): Promise<string | null> {
-  const rgPath = await getRipgrepBinPath(undefined, appRoot)
+async function getBinPath(): Promise<string | null> {
+  const rgPath = await getRipgrepBinPath(undefined, undefined)
   return rgPath || null
 }
 
@@ -37,10 +30,10 @@ export async function executeRipgrep({
 	workspacePath: string
 	limit?: number
 }): Promise<FileResult[]> {
-	const rgPath = await getBinPath(vscode?.env?.appRoot)
+	const rgPath = await getBinPath()
 
 	if (!rgPath) {
-		throw new Error(`ripgrep not found: ${rgPath}`)
+		throw new Error(`ripgrep not found in system PATH`)
 	}
 
 	return new Promise((resolve, reject) => {

@@ -87,6 +87,7 @@ export interface IVectorStore {
 
 export interface SearchFilter {
 	pathFilters?: string[]
+	directoryPrefix?: string
 	minScore?: number
 	limit?: number
 }

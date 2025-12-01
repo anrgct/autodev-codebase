@@ -339,14 +339,18 @@ describe('Node.js Adapters Integration', () => {
       expect(validation.errors).toContain('Qdrant URL is required')
     })
 
-    it('should notify configuration changes', (done) => {
+    it('should notify configuration changes', async () => {
+      let changeReceived = false
       const unsubscribe = configProvider.onConfigChange((config) => {
         expect(config.isEnabled).toBe(true)
+        changeReceived = true
         unsubscribe()
-        done()
       })
 
-      configProvider.saveConfig({ isEnabled: true })
+      await configProvider.saveConfig({ isEnabled: true })
+      // Wait a bit for the change to be processed
+      await new Promise(resolve => setTimeout(resolve, 10))
+      expect(changeReceived).toBe(true)
     })
   })
 

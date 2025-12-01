@@ -80,6 +80,9 @@ export class DirectoryScanner implements IDirectoryScanner {
 		const directoryPath = directory
 		// Capture workspace context at scan start
 		const scanWorkspace = this.deps.workspace.getRootPath()
+		if (!scanWorkspace) {
+			throw new Error("Workspace root path is required for scanning")
+		}
 		this.debug(`[Scanner] Scanning directory: ${directoryPath}, workspace: ${scanWorkspace}`)
 		// Get all files recursively (handles .gitignore automatically)
 		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT_CODE_INDEX, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })

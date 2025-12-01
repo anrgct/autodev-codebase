@@ -26,27 +26,7 @@ global.vi = vi
 //   warn: process.env.NODE_ENV === 'test' ? () => {} : console.warn,
 // }
 
-// Mock vscode module
-vi.mock('vscode', () => ({
-  window: {
-    createTextEditorDecorationType: vi.fn(),
-    showInformationMessage: vi.fn(),
-    showErrorMessage: vi.fn(),
-    showWarningMessage: vi.fn(),
-  },
-  workspace: {
-    getConfiguration: vi.fn(() => ({})),
-    workspaceFolders: [],
-    rootPath: '',
-  },
-  commands: {
-    registerCommand: vi.fn(),
-    executeCommand: vi.fn(),
-  },
-  languages: {
-    registerDocumentSemanticTokensProvider: vi.fn(),
-  },
-}))
+// Mock vscode module removed - project is CLI-only
 
 // Suppress network error logs in tests to reduce noise
 // NOTE: Do NOT mock fetch for E2E tests - they need real network access

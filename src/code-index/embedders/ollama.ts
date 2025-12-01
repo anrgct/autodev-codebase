@@ -24,7 +24,7 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
         baseUrl = baseUrl.replace(/\/+$/, "")
 
         this.baseUrl = baseUrl
-        this.defaultModelId = options.ollamaModelId || "nomic-embed-text:latest"
+        this.defaultModelId = options['ollamaModelId'] || "nomic-embed-text:latest"
     }
 
     /**

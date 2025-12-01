@@ -37,7 +37,13 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      vscode: path.resolve(__dirname, './src/__mocks__/vscode.ts')
+      // VSCode mock removed - project is CLI-only
     }
+  },
+  ssr: {
+    external: ['vscode', '@types/vscode']
+  },
+  optimizeDeps: {
+    external: ['vscode', '@types/vscode']
   }
 })

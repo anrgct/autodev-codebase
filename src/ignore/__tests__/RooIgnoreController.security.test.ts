@@ -1,4 +1,4 @@
-import { vitest, describe, it, expect, beforeEach, vi } from "vitest"
+import { vitest, describe, it, expect, beforeEach, vi, type Mocked } from "vitest"
 import { RooIgnoreController } from "../RooIgnoreController"
 import * as path from "path"
 import type { IFileSystem, IWorkspace, IPathUtils, IFileWatcher } from "../../abstractions"
@@ -6,10 +6,10 @@ import type { IFileSystem, IWorkspace, IPathUtils, IFileWatcher } from "../../ab
 describe("RooIgnoreController Security Tests", () => {
 	const TEST_CWD = "/test/path"
 	let controller: RooIgnoreController
-	let mockFileSystem: vi.Mocked<IFileSystem>
-	let mockWorkspace: vi.Mocked<IWorkspace>
-	let mockPathUtils: vi.Mocked<IPathUtils>
-	let mockFileWatcher: vi.Mocked<IFileWatcher>
+	let mockFileSystem: Mocked<IFileSystem>
+	let mockWorkspace: Mocked<IWorkspace>
+	let mockPathUtils: Mocked<IPathUtils>
+	let mockFileWatcher: Mocked<IFileWatcher>
 
 	beforeEach(async () => {
 		// Reset mocks
@@ -24,18 +24,21 @@ describe("RooIgnoreController Security Tests", () => {
 			readdir: vi.fn(),
 			mkdir: vi.fn(),
 			delete: vi.fn(),
-		}
+			watchFile: vi.fn(),
+			unwatchFile: vi.fn(),
+		} as Mocked<IFileSystem>
 
 		// Setup mock workspace
 		mockWorkspace = {
 			getRootPath: vi.fn().mockReturnValue(TEST_CWD),
 			getRelativePath: vi.fn(),
+			findFiles: vi.fn(),
+			getWorkspaceFolders: vi.fn(),
+			isWorkspaceFile: vi.fn(),
 			getIgnoreRules: vi.fn().mockReturnValue([]),
 			shouldIgnore: vi.fn().mockResolvedValue(false),
-			getName: vi.fn().mockReturnValue("test-workspace"),
-			getWorkspaceFolders: vi.fn().mockReturnValue([]),
-			findFiles: vi.fn().mockResolvedValue([]),
-		}
+			getName: vi.fn().mockReturnValue('test'),
+		} as Mocked<IWorkspace>
 
 		// Setup mock path utils
 		mockPathUtils = {
@@ -47,7 +50,7 @@ describe("RooIgnoreController Security Tests", () => {
 			isAbsolute: vi.fn().mockImplementation((p) => path.isAbsolute(p)),
 			relative: vi.fn().mockImplementation((from, to) => path.relative(from, to)),
 			normalize: vi.fn().mockImplementation((p) => path.normalize(p)),
-		}
+		} as Mocked<IPathUtils>
 
 		// Setup mock file watcher
 		mockFileWatcher = {
@@ -59,7 +62,7 @@ describe("RooIgnoreController Security Tests", () => {
 		mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("node_modules\n.git\nsecrets/**\n*.log\nprivate/"))
 
 		// Setup getRelativePath mock
-		mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+		mockWorkspace.getRelativePath.mockImplementation((fullPath: string) => {
 			if (fullPath.startsWith(TEST_CWD)) {
 				return path.relative(TEST_CWD, fullPath)
 			}
@@ -170,7 +173,7 @@ describe("RooIgnoreController Security Tests", () => {
 			// Mock getRelativePath to behave like a real implementation would:
 			// 1. Normalize the path (resolve traversals)
 			// 2. Make it relative to the workspace root
-			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+			mockWorkspace.getRelativePath.mockImplementation((fullPath: string) => {
 				// Normalize the path (resolves traversals like ../)
 				const normalizedPath = path.normalize(fullPath)
 
@@ -265,7 +268,7 @@ build/
       `))
 
 			// Reset getRelativePath mock for this test
-			mockWorkspace.getRelativePath.mockImplementation((fullPath) => {
+			mockWorkspace.getRelativePath.mockImplementation((fullPath: string) => {
 				if (fullPath.startsWith(TEST_CWD)) {
 					return path.relative(TEST_CWD, fullPath)
 				}
@@ -351,7 +354,7 @@ build/
 			})
 
 			// Spy on console.error
-			const consoleSpy = vitest.spyOn(console, "error").mockImplementation()
+			const consoleSpy = vitest.spyOn(console, "error").mockImplementation(() => {})
 
 			// Even with mix of allowed/ignored paths, should return empty array on error
 			const filtered = controller.filterPaths(["src/app.js", "node_modules/package.json"])

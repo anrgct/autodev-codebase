@@ -4,6 +4,7 @@
  */
 import * as path from 'path'
 import * as os from 'os'
+import * as jsoncParser from 'jsonc-parser'
 import { IConfigProvider, EmbedderConfig, VectorStoreConfig, SearchConfig } from '../../abstractions/config'
 import { CodeIndexConfig, OllamaEmbedderConfig } from '../../code-index/interfaces/config'
 import { EmbedderProvider } from '../../code-index/interfaces/manager'
@@ -25,7 +26,7 @@ const DEFAULT_CONFIG: CodeIndexConfig = {
   isEnabled: true,
   isConfigured: true,
   embedderProvider: "ollama",
-  ollamaModelId: "qwen3-embedding:0.6b",
+  modelId: "qwen3-embedding:0.6b",
   modelDimension: 1024,
   ollamaOptions: {
     ollamaBaseUrl: "http://localhost:11434",
@@ -245,7 +246,7 @@ export class NodeConfigProvider implements IConfigProvider {
       if (await this.fileSystem.exists(this.globalConfigPath)) {
         const globalContent = await this.fileSystem.readFile(this.globalConfigPath)
         const globalText = new TextDecoder().decode(globalContent)
-        const globalConfig = JSON.parse(globalText)
+        const globalConfig = jsoncParser.parse(globalText)
 
         // Merge global config with defaults
         this.config = {
@@ -263,7 +264,7 @@ export class NodeConfigProvider implements IConfigProvider {
       if (await this.fileSystem.exists(this.configPath)) {
         const projectContent = await this.fileSystem.readFile(this.configPath)
         const projectText = new TextDecoder().decode(projectContent)
-        const projectConfig = JSON.parse(projectText)
+        const projectConfig = jsoncParser.parse(projectText)
 
         // Merge project config with global config
         this.config = {

@@ -7,20 +7,23 @@ import { IWorkspace, IPathUtils } from '../../../abstractions/workspace'
 const mockFileSystem: IFileSystem = {
   readFile: vi.fn(),
   writeFile: vi.fn(),
-  exists: vi.fn(),
-  createDirectory: vi.fn(),
-  listDirectory: vi.fn(),
-  deletePath: vi.fn(),
-  copyPath: vi.fn(),
-  movePath: vi.fn(),
+  exists: vi.fn(() => Promise.resolve(true)),
+  stat: vi.fn(),
+  mkdir: vi.fn(),
+  readdir: vi.fn(),
+  delete: vi.fn(),
 }
 
 const mockWorkspace: IWorkspace = {
   getRootPath: vi.fn(() => '/test'),
+  getRelativePath: vi.fn(),
   findFiles: vi.fn(),
-  relative: vi.fn((path: string) => path),
-  shouldIgnore: vi.fn(() => false),
-}
+  getWorkspaceFolders: vi.fn(),
+  isWorkspaceFile: vi.fn(),
+  getIgnoreRules: vi.fn().mockReturnValue([]),
+  shouldIgnore: vi.fn().mockResolvedValue(false),
+  getName: vi.fn().mockReturnValue('test'),
+} as IWorkspace
 
 const mockPathUtils: IPathUtils = {
   basename: vi.fn((path: string) => path.split('/').pop() || ''),
@@ -29,7 +32,9 @@ const mockPathUtils: IPathUtils = {
   join: vi.fn((...paths: string[]) => paths.join('/')),
   resolve: vi.fn((...paths: string[]) => paths.join('/')),
   relative: vi.fn((from: string, to: string) => to),
-}
+  normalize: vi.fn((path: string) => path),
+  isAbsolute: vi.fn((path: string) => path.startsWith('/')),
+} as IPathUtils
 
 describe('CodeParser', () => {
   let parser: CodeParser

@@ -11,71 +11,7 @@ import { codeParser } from "../parser"
 import * as fs from "fs"
 import * as path from "path"
 
-vi.mock("vscode", () => {
-	type Disposable = { dispose: () => void }
-
-	type _Event<T> = (listener: (e: T) => any, thisArgs?: any, disposables?: Disposable[]) => Disposable
-
-	const MOCK_EMITTER_REGISTRY = new Map<object, Set<(data: any) => any>>()
-
-	return {
-		EventEmitter: vi.fn().mockImplementation(() => {
-			const emitterInstanceKey = {}
-			MOCK_EMITTER_REGISTRY.set(emitterInstanceKey, new Set())
-
-			return {
-				event: function <T>(listener: (e: T) => any): Disposable {
-					const listeners = MOCK_EMITTER_REGISTRY.get(emitterInstanceKey)
-					listeners!.add(listener as any)
-					return {
-						dispose: () => {
-							listeners!.delete(listener as any)
-						},
-					}
-				},
-
-				fire: function <T>(data: T): void {
-					const listeners = MOCK_EMITTER_REGISTRY.get(emitterInstanceKey)
-					listeners!.forEach((fn) => fn(data))
-				},
-
-				dispose: () => {
-					MOCK_EMITTER_REGISTRY.get(emitterInstanceKey)!.clear()
-					MOCK_EMITTER_REGISTRY.delete(emitterInstanceKey)
-				},
-			}
-		}),
-		RelativePattern: vi.fn().mockImplementation((base, pattern) => ({
-			base,
-			pattern,
-		})),
-		Uri: {
-			file: vi.fn().mockImplementation((path) => ({ fsPath: path })),
-		},
-		window: {
-			activeTextEditor: undefined,
-		},
-		workspace: {
-			createFileSystemWatcher: vi.fn().mockReturnValue({
-				onDidCreate: vi.fn(),
-				onDidChange: vi.fn(),
-				onDidDelete: vi.fn(),
-				dispose: vi.fn(),
-			}),
-			fs: {
-				stat: vi.fn(),
-				readFile: vi.fn(),
-			},
-			workspaceFolders: [{ uri: { fsPath: "/mock/workspace" } }],
-			getWorkspaceFolder: vi.fn((uri) => {
-				if (uri && uri.fsPath && uri.fsPath.startsWith("/mock/workspace")) {
-					return { uri: { fsPath: "/mock/workspace" } }
-				}
-				return undefined
-			}),
-		},
-	}
-})
+// VSCode mock removed - no longer needed
 
 vi.mock("crypto", () => ({
 	createHash: vi.fn(() => ({
@@ -95,9 +31,8 @@ vi.mock("uuid", () => ({
 }))
 vi.mock("../../../ignore/RooIgnoreController", () => ({
 	RooIgnoreController: vi.fn().mockImplementation(() => ({
-		validateAccess: vi.fn(),
+		validateAccess: vi.fn().mockReturnValue(true),
 	})),
-	mockValidateAccess: vi.fn(),
 }))
 vi.mock("../../cache-manager")
 vi.mock("../parser")
@@ -113,6 +48,7 @@ describe("FileWatcher", () => {
 	let mockFileSystem: IFileSystem
 	let mockWorkspace: IWorkspace
 	let mockPathUtils: IPathUtils
+	let mockFileWatcher: any
 	const testWorkspacePath = "/tmp/autodev-test-workspace"
 
 	beforeEach(async () => {
@@ -141,7 +77,8 @@ describe("FileWatcher", () => {
 		mockEmbedder = {
 			createEmbeddings: vi.fn().mockResolvedValue({ embeddings: [[0.1, 0.2, 0.3]] }),
 			embedderInfo: { name: "openai" },
-		}
+			validateConfiguration: vi.fn().mockResolvedValue({ isValid: true, errors: [] }),
+		} as IEmbedder
 		mockVectorStore = {
 			upsertPoints: vi.fn().mockResolvedValue(undefined),
 			deletePointsByFilePath: vi.fn().mockResolvedValue(undefined),
@@ -151,7 +88,11 @@ describe("FileWatcher", () => {
 			clearCollection: vi.fn().mockResolvedValue(undefined),
 			deleteCollection: vi.fn().mockResolvedValue(undefined),
 			collectionExists: vi.fn().mockResolvedValue(true),
-		}
+			getAllFilePaths: vi.fn().mockResolvedValue([]),
+			hasIndexedData: vi.fn().mockResolvedValue(false),
+			markIndexingComplete: vi.fn().mockResolvedValue(undefined),
+			markIndexingIncomplete: vi.fn().mockResolvedValue(undefined),
+		} as IVectorStore
 		mockCacheManager = {
 			getHash: vi.fn(),
 			updateHash: vi.fn(),
@@ -169,16 +110,21 @@ describe("FileWatcher", () => {
 			stat: vi.fn().mockImplementation((filePath: string) => {
 				if (fs.existsSync(filePath)) {
 					const stats = fs.statSync(filePath)
-					return Promise.resolve({ size: stats.size, mtime: stats.mtimeMs } as any)
+					return Promise.resolve({
+						isFile: stats.isFile(),
+						isDirectory: stats.isDirectory(),
+						size: stats.size,
+						mtime: stats.mtimeMs
+					} as any)
 				}
 				return Promise.reject(new Error("File not found"))
 			}),
-			readDirectory: vi.fn().mockResolvedValue([]),
-			createDirectory: vi.fn().mockResolvedValue(undefined),
+			mkdir: vi.fn().mockResolvedValue(undefined),
+			readdir: vi.fn().mockResolvedValue([]),
 			delete: vi.fn().mockResolvedValue(undefined),
 			watchFile: vi.fn().mockReturnValue({ dispose: vi.fn() }),
 			unwatchFile: vi.fn(),
-		}
+		} as IFileSystem
 		mockWorkspace = {
 			getRootPath: vi.fn().mockReturnValue(testWorkspacePath),
 			getRelativePath: vi.fn().mockImplementation((absolutePath: string) => {
@@ -187,9 +133,13 @@ describe("FileWatcher", () => {
 				}
 				return absolutePath || ""
 			}),
-			getAbsolutePath: vi.fn().mockImplementation((relativePath) => `${testWorkspacePath}/${relativePath}`),
 			isWorkspaceFile: vi.fn().mockReturnValue(true),
-		}
+			getWorkspaceFolders: vi.fn().mockReturnValue([{ uri: testWorkspacePath, name: 'test' }]),
+			getIgnoreRules: vi.fn().mockReturnValue([]),
+			shouldIgnore: vi.fn().mockResolvedValue(false),
+			getName: vi.fn().mockReturnValue('test'),
+			findFiles: vi.fn().mockResolvedValue([]),
+		} as IWorkspace
 		mockPathUtils = {
 			join: vi.fn().mockImplementation((...paths) => paths.join("/")),
 			dirname: vi.fn().mockReturnValue("/mock/workspace"),
@@ -197,7 +147,9 @@ describe("FileWatcher", () => {
 			extname: vi.fn().mockReturnValue(".js"),
 			normalize: vi.fn().mockImplementation((path) => path),
 			resolve: vi.fn().mockImplementation((path) => path),
-		}
+			isAbsolute: vi.fn().mockReturnValue(false),
+			relative: vi.fn().mockReturnValue("relative/path")
+		} as IPathUtils
 		mockContext = {
 			subscriptions: [],
 		}
@@ -222,9 +174,14 @@ describe("FileWatcher", () => {
 			once: vi.fn(),
 		}
 
-		const { RooIgnoreController, mockValidateAccess } = await import("../../../ignore/RooIgnoreController")
-		mockRooIgnoreController = new RooIgnoreController()
-		mockRooIgnoreController.validateAccess = mockValidateAccess.mockReturnValue(true)
+		// Setup mock file watcher
+		mockFileWatcher = {
+			watchFile: vi.fn().mockReturnValue(vi.fn()),
+			watchDirectory: vi.fn().mockReturnValue(vi.fn()),
+		} as any
+
+		const { RooIgnoreController } = await import("../../../ignore/RooIgnoreController")
+		mockRooIgnoreController = new RooIgnoreController(mockFileSystem, mockWorkspace, mockPathUtils, mockFileWatcher)
 
 		fileWatcher = new FileWatcher(
 			testWorkspacePath,
@@ -470,7 +427,7 @@ describe("FileWatcher", () => {
 		})
 
 		it("should skip files larger than MAX_FILE_SIZE_BYTES", async () => {
-			mockFileSystem.stat.mockResolvedValue({ size: 2 * 1024 * 1024 } as any)
+			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 2 * 1024 * 1024 } as any)
 			mockRooIgnoreController.validateAccess.mockReturnValue(true)
 			const result = await fileWatcher.processFile(`${testWorkspacePath}/large.js`)
 
@@ -487,8 +444,8 @@ describe("FileWatcher", () => {
 				digest: vi.fn(() => "hash"), // Same as cache hash
 			} as any)
 			
-			mockFileSystem.stat.mockResolvedValue({ size: 1024, mtime: Date.now() } as any)
-			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("test content"))
+			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 1024, mtime: Date.now() } as any)
+			vi.spyOn(mockFileSystem, 'readFile').mockResolvedValue(new TextEncoder().encode("test content"))
 			mockCacheManager.getHash.mockReturnValue("hash")
 			mockRooIgnoreController.validateAccess.mockReturnValue(true)
 
@@ -507,11 +464,11 @@ describe("FileWatcher", () => {
 				digest: vi.fn(() => "new-hash"), // Different from cache hash
 			} as any)
 			
-			mockFileSystem.stat.mockResolvedValue({ size: 1024, mtime: Date.now() } as any)
-			mockFileSystem.readFile.mockResolvedValue(new TextEncoder().encode("test content"))
+			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 1024, mtime: Date.now() } as any)
+			vi.spyOn(mockFileSystem, 'readFile').mockResolvedValue(new TextEncoder().encode("test content"))
 			mockCacheManager.getHash.mockReturnValue("old-hash")
 			mockRooIgnoreController.validateAccess.mockReturnValue(true)
-			mockWorkspace.getRelativePath.mockReturnValue("test.js")
+			vi.spyOn(mockWorkspace, 'getRelativePath').mockReturnValue("test.js")
 
 			const mockCodeParser = vi.mocked(codeParser)
 			mockCodeParser.parseFile.mockResolvedValue([
@@ -535,20 +492,22 @@ describe("FileWatcher", () => {
 			expect(result.status).toBe("processed_for_batching")
 			expect(result.newHash).toBe("new-hash")
 			expect(result.pointsToUpsert).toHaveLength(1)
-			expect(result.pointsToUpsert[0].vector).toEqual([0.1, 0.2, 0.3])
-			expect(result.pointsToUpsert[0].payload).toMatchObject({
-				filePath: "test.js",
-				codeChunk: "test content",
-				startLine: 1,
-				endLine: 5,
-			})
+			if (result.pointsToUpsert && result.pointsToUpsert[0]) {
+				expect(result.pointsToUpsert[0].vector).toEqual([0.1, 0.2, 0.3])
+				expect(result.pointsToUpsert[0].payload).toMatchObject({
+					filePath: "test.js",
+					codeChunk: "test content",
+					startLine: 1,
+					endLine: 5,
+				})
+			}
 			expect(mockCodeParser.parseFile).toHaveBeenCalled()
 			expect(mockEmbedder.createEmbeddings).toHaveBeenCalled()
 		})
 
 		it("should handle processing errors", async () => {
-			mockFileSystem.stat.mockResolvedValue({ size: 1024 } as any)
-			mockFileSystem.readFile.mockRejectedValue(new Error("Read error"))
+			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 1024 } as any)
+			vi.spyOn(mockFileSystem, 'readFile').mockRejectedValue(new Error("Read error"))
 
 			const result = await fileWatcher.processFile(`${testWorkspacePath}/error.js`)
 

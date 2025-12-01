@@ -12,6 +12,7 @@ import { CodeIndexManager } from './code-index/manager';
 import { CodebaseHTTPMCPServer } from './mcp/http-server.js';
 import createSampleFiles from './examples/create-sample-files';
 import { getGlobalLogger, setGlobalLogger, Logger, LogLevel } from './utils/logger';
+import { VectorStoreSearchResult } from './code-index/interfaces';
 
 // Initialize global logger with CLI settings
 function initGlobalLogger(level: LogLevel) {

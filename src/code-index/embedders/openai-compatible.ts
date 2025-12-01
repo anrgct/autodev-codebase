@@ -101,7 +101,6 @@ export class OpenAICompatibleEmbedder implements IEmbedder {
 				console.log('📝 调试: OpenAI客户端将使用 undici ProxyAgent 代理')
 			} else {
 				clientConfig.fetch = fetch
-				console.log('📝 调试: OpenAI客户端不使用代理 (undici)')
 			}
 
 			this.embeddingsClient = new OpenAI(clientConfig)
