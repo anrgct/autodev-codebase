@@ -11,7 +11,7 @@ import { URL } from 'url';
 
 class SimpleMCPStreamableClient {
     constructor(options = {}) {
-        this.baseUrl = options.baseUrl || 'http://localhost:3002';
+        this.baseUrl = options.baseUrl || 'http://localhost:3001';
         this.requests = new Map();
         this.requestId = 0;
         this.serverProcess = null;
@@ -25,10 +25,9 @@ class SimpleMCPStreamableClient {
 
         this.serverProcess = spawn('npx', [
             'tsx',
-            'src/index.ts',
-            'mcp-server',
+            'src/cli.ts',
+            '--serve',
             '--demo',
-            '--port=3002',
             '--host=localhost'
         ], {
             stdio: ['pipe', 'pipe', 'pipe'],
@@ -65,17 +64,17 @@ class SimpleMCPStreamableClient {
             } catch (error) {
                 // Server not ready yet
             }
-            
+
             console.log(`⏳ Attempt ${i + 1}/${maxAttempts} - waiting for server...`);
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
-        
+
         throw new Error('Server failed to start within timeout');
     }
 
     async initialize() {
         console.log('🔧 Initializing MCP connection...');
-        
+
         const initRequest = {
             jsonrpc: '2.0',
             id: ++this.requestId,
@@ -137,10 +136,10 @@ class SimpleMCPStreamableClient {
         }
 
         console.log('🔌 Connecting to StreamableHTTP SSE endpoint...');
-        
+
         return new Promise((resolve, reject) => {
             const url = new URL('/mcp', this.baseUrl);
-            
+
             const req = http.request({
                 hostname: url.hostname,
                 port: url.port,
@@ -288,7 +287,7 @@ class SimpleMCPStreamableClient {
 
         try {
             const response = await this.httpRequest('/mcp', 'POST', request);
-            
+
             // Parse SSE format response if it comes as text
             if (typeof response === 'string' && response.includes('data: ')) {
                 const lines = response.split('\n');
@@ -311,7 +310,7 @@ class SimpleMCPStreamableClient {
                 console.log('📨 Direct response:', JSON.stringify(response, null, 2));
                 return response;
             }
-            
+
             throw new Error('No valid response received');
         } catch (error) {
             console.error('❌ Request error:', error);
@@ -352,7 +351,7 @@ class SimpleMCPStreamableClient {
                     query: 'function',
                     limit: 3,
                     // filters: {
-                    //     pathFilters: ['.ts']   
+                    //     pathFilters: ['.ts']
                     // }
                 }
             });
@@ -415,7 +414,7 @@ class SimpleMCPStreamableClient {
             console.log('🔌 Closing SSE connection...');
             this.sseConnection.destroy();
         }
-        
+
         if (this.serverProcess) {
             console.log('🔄 Stopping server...');
             this.serverProcess.kill('SIGTERM');
@@ -427,7 +426,7 @@ async function main() {
     console.log('🧪 Simple MCP StreamableHTTP Debug Client Starting...');
 
     const client = new SimpleMCPStreamableClient({
-        baseUrl: process.env.MCP_BASE_URL || 'http://localhost:3002'
+        baseUrl: process.env.MCP_BASE_URL || 'http://localhost:3001'
     });
 
     process.on('SIGINT', () => {
@@ -440,16 +439,16 @@ async function main() {
         await client.startServer();
         await client.initialize();
         await client.connectSSE();
-        
+
         // Run automated tests
         const results = await client.runFullTest();
-        
+
         if (results.failed === 0) {
             console.log('\n🎉 All tests passed successfully!');
         } else {
             console.log(`\n⚠️ ${results.failed} test(s) failed`);
         }
-        
+
     } catch (error) {
         console.error('❌ Debug session failed:', error);
     } finally {

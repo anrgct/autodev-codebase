@@ -16,7 +16,7 @@
  * - MCP HTTP服务器测试
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
-import { spawn } from 'child_process'
+import { spawn, ChildProcess } from 'child_process'
 import path from 'path'
 
 /**
@@ -163,6 +163,166 @@ class MCPHTTPTestClient {
    */
   async healthCheck(): Promise<any> {
     return await this.httpRequest('/health', 'GET')
+  }
+}
+
+/**
+ * MCP Stdio测试客户端
+ * 通过 CLI 的 --stdio-adapter 模式，使用 stdin/stdout 与 MCP 服务器通信。
+ * 适配 src/examples/debug-mcp-client.js 中的测试流程。
+ */
+class MCPStdioTestClient {
+  private adapterProcess: ChildProcess | null = null
+  private readonly serverUrl: string
+  private readonly timeout: number
+  private requestId = 0
+  private pendingRequests: Map<number, { resolve: (value: any) => void; reject: (err: Error) => void }> = new Map()
+
+  constructor(options: { serverUrl: string; timeout?: number }) {
+    this.serverUrl = options.serverUrl
+    this.timeout = options.timeout ?? 30000
+  }
+
+  async startAdapter(): Promise<void> {
+    const cliPath = path.join(process.cwd(), 'src', 'cli.ts')
+
+    this.adapterProcess = spawn(
+      'npx',
+      ['tsx', cliPath, '--stdio-adapter', `--server-url=${this.serverUrl}`, `--timeout=${this.timeout}`],
+      {
+        cwd: process.cwd(),
+        stdio: 'pipe',
+        shell: true,
+        env: {
+          ...process.env,
+          npm_config_loglevel: 'error',
+          npm_config_update_notifier: 'false'
+        }
+      }
+    )
+
+    let buffer = ''
+
+    this.adapterProcess.stdout?.on('data', (data: Buffer) => {
+      buffer += data.toString()
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+
+        // 跳过非 JSON 行（适配器日志）
+        if (!trimmed.startsWith('{')) {
+          continue
+        }
+
+        try {
+          const message = JSON.parse(trimmed)
+          if (message.id && this.pendingRequests.has(message.id)) {
+            const { resolve } = this.pendingRequests.get(message.id)!
+            this.pendingRequests.delete(message.id)
+            resolve(message)
+          }
+        } catch {
+          // 非 JSON 内容忽略
+        }
+      }
+    })
+
+    this.adapterProcess.stderr?.on('data', () => {
+      // 适配器日志对测试结果不重要，这里忽略
+    })
+
+    this.adapterProcess.on('error', (err) => {
+      // 失败时 reject 所有挂起请求
+      for (const [, { reject }] of this.pendingRequests.entries()) {
+        reject(err as Error)
+      }
+      this.pendingRequests.clear()
+    })
+
+    // 给适配器一点时间完成初始化
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+
+  stop(): void {
+    if (this.adapterProcess) {
+      try {
+        this.adapterProcess.kill('SIGTERM')
+      } catch {
+        // ignore
+      }
+      this.adapterProcess = null
+    }
+    // 清理挂起请求
+    for (const [, { reject }] of this.pendingRequests.entries()) {
+      reject(new Error('Adapter stopped'))
+    }
+    this.pendingRequests.clear()
+  }
+
+  private async sendRequest(method: string, params: any = {}): Promise<any> {
+    if (!this.adapterProcess || !this.adapterProcess.stdin) {
+      throw new Error('Stdio adapter is not started')
+    }
+
+    const id = ++this.requestId
+    const request = {
+      jsonrpc: '2.0',
+      id,
+      method,
+      params
+    }
+
+    const payload = JSON.stringify(request) + '\n'
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingRequests.has(id)) {
+          this.pendingRequests.delete(id)
+          reject(new Error(`Request ${id} timed out`))
+        }
+      }, this.timeout)
+
+      this.pendingRequests.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer)
+          resolve(value)
+        },
+        reject: (err) => {
+          clearTimeout(timer)
+          reject(err)
+        }
+      })
+
+      this.adapterProcess!.stdin!.write(payload)
+    })
+  }
+
+  async initialize(): Promise<any> {
+    return await this.sendRequest('initialize', {
+      protocolVersion: '2024-11-05',
+      capabilities: {
+        roots: { listChanged: true },
+        sampling: {}
+      },
+      clientInfo: {
+        name: 'cli-stdio-integration-test-client',
+        version: '1.0.0'
+      }
+    })
+  }
+
+  async listTools(): Promise<any> {
+    return await this.sendRequest('tools/list')
+  }
+
+  async callTool(name: string, args: any): Promise<any> {
+    return await this.sendRequest('tools/call', {
+      name,
+      arguments: args
+    })
   }
 }
 
@@ -589,6 +749,65 @@ describe('CLI Commands E2E Tests', () => {
           expect(textContent.text).toBeDefined()
         }
       }, 60000)
+    })
+
+    describe('Stdio adapter mode (CLI --stdio-adapter)', () => {
+      it('should initialize via stdio adapter and list tools', async () => {
+        const stdioClient = new MCPStdioTestClient({
+          serverUrl: `${serverUrl}/mcp`,
+          timeout: 30000
+        })
+
+        try {
+          await stdioClient.startAdapter()
+
+          const initResponse = await stdioClient.initialize()
+          expect(initResponse).toBeDefined()
+
+          const toolsResponse = await stdioClient.listTools()
+          expect(toolsResponse).toBeDefined()
+
+          const tools = toolsResponse.result?.tools || toolsResponse.tools
+          expect(tools).toBeDefined()
+          expect(tools).toBeInstanceOf(Array)
+          expect(tools.length).toBeGreaterThan(0)
+
+          const searchTool = tools.find((t: any) => t.name === 'search_codebase')
+          expect(searchTool).toBeDefined()
+        } finally {
+          stdioClient.stop()
+        }
+      }, 90000)
+
+      it('should call search_codebase tool through stdio adapter', async () => {
+        const stdioClient = new MCPStdioTestClient({
+          serverUrl: `${serverUrl}/mcp`,
+          timeout: 30000
+        })
+
+        try {
+          await stdioClient.startAdapter()
+          await stdioClient.initialize()
+
+          const response = await stdioClient.callTool('search_codebase', {
+            query: 'greet',
+            limit: 3
+          })
+
+          expect(response).toBeDefined()
+          const content = response.result?.content || response.content
+          expect(content).toBeDefined()
+          expect(content).toBeInstanceOf(Array)
+
+          if (content.length > 0) {
+            const textContent = content[0]
+            expect(textContent.type).toBe('text')
+            expect(textContent.text).toBeDefined()
+          }
+        } finally {
+          stdioClient.stop()
+        }
+      }, 90000)
     })
   })
 })

@@ -116,7 +116,7 @@ codebase mcp-server
 
 # With custom configuration
 codebase mcp-server --port=3001 --host=localhost
-codebase mcp-server --path=/workspace --port=3002
+codebase mcp-server --path=/workspace --port=3001
 ```
 
 

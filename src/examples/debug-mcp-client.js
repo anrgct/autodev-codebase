@@ -3,21 +3,21 @@
 /**
  * Debug client for testing stdio adapter functionality
  * This script tests the stdio-to-StreamableHTTP adapter bridge
- * 
+ *
  * Flow: Client -> stdio -> StdioAdapter -> HTTP/StreamableHTTP -> MCP Server
- * 
+ *
  * Usage:
- * 
+ *
  * # Start HTTP/StreamableHTTP server first (Terminal 1)
- * codebase mcp-server --port=3002
- * 
+ * codebase mcp-server --port=3001
+ *
  * # Test stdio adapter (Terminal 2)
  * node src/examples/debug-mcp-client.js
- * node src/examples/debug-mcp-client.js --server-url=http://localhost:3002/mcp
+ * node src/examples/debug-mcp-client.js --server-url=http://localhost:3001/mcp
  * node src/examples/debug-mcp-client.js --timeout=30000
- * 
+ *
  * Arguments:
- * --server-url=<url>     HTTP server URL (default: http://localhost:3002/mcp)
+ * --server-url=<url>     HTTP server URL (default: http://localhost:3001/mcp)
  * --timeout=<ms>         Request timeout in milliseconds (default: 30000)
  * --help, -h             Show help message
  */
@@ -30,7 +30,7 @@ class StdioAdapterTestClient extends EventEmitter {
         super();
         this.requests = new Map();
         this.requestId = 0;
-        this.serverUrl = options.serverUrl || 'http://localhost:3002/mcp';
+        this.serverUrl = options.serverUrl || 'http://localhost:3001/mcp';
         this.timeout = options.timeout || 30000;
     }
 
@@ -39,12 +39,12 @@ class StdioAdapterTestClient extends EventEmitter {
         console.log(`🌐 Server URL: ${this.serverUrl}`);
         console.log(`⏱️ Timeout: ${this.timeout}ms`);
         console.log('📝 Note: Make sure HTTP/StreamableHTTP server is running separately');
-        
-        // Start stdio adapter
+
+        // Start stdio adapter via main CLI (cli.ts --stdio-adapter ...)
         this.adapterProcess = spawn('npx', [
             'tsx',
-            'src/index.ts',
-            'stdio-adapter',
+            'src/cli.ts',
+            '--stdio-adapter',
             `--server-url=${this.serverUrl}`,
             `--timeout=${this.timeout}`
         ], {
@@ -220,7 +220,7 @@ class StdioAdapterTestClient extends EventEmitter {
 async function main() {
     // Parse command line arguments
     const args = process.argv.slice(2);
-    
+
     // Show help if requested
     if (args.includes('--help') || args.includes('-h')) {
         console.log(`
@@ -234,29 +234,29 @@ Usage:
   node src/examples/debug-mcp-client.js [options]
 
 Options:
-  --server-url=<url>       Full StreamableHTTP endpoint URL (default: http://localhost:3002/mcp)
+  --server-url=<url>       Full StreamableHTTP endpoint URL (default: http://localhost:3001/mcp)
   --timeout=<ms>           Request timeout in milliseconds (default: 30000)
   --help, -h               Show this help message
 
 Setup:
   1. Start HTTP/StreamableHTTP server:
-     codebase mcp-server --port=3002
-  
+     codebase mcp-server --port=3001
+
   2. Test stdio adapter:
      node src/examples/debug-mcp-client.js
-     node src/examples/debug-mcp-client.js --server-url=http://localhost:3002/mcp
+     node src/examples/debug-mcp-client.js --server-url=http://localhost:3001/mcp
      node src/examples/debug-mcp-client.js --timeout=30000
 `);
         process.exit(0);
     }
-    
+
     console.log('🧪 Stdio Adapter Test Client Starting...');
-    
+
     const serverUrlArg = args.find(arg => arg.startsWith('--server-url='));
-    const serverUrl = serverUrlArg ? serverUrlArg.split('=')[1] : 'http://localhost:3002/mcp';
+    const serverUrl = serverUrlArg ? serverUrlArg.split('=')[1] : 'http://localhost:3001/mcp';
     const timeoutArg = args.find(arg => arg.startsWith('--timeout='));
     const timeout = timeoutArg ? parseInt(timeoutArg.split('=')[1], 10) : 30000;
-    
+
     console.log(`📋 Configuration:`);
     console.log(`   Server URL: ${serverUrl}`);
     console.log(`   Timeout: ${timeout}ms`);

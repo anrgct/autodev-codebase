@@ -1,15 +1,14 @@
-#!/usr/bin/env node
 /**
  * Simplified CLI for @autodev/codebase
  * Uses Node.js native parseArgs without React/Ink dependencies
  */
-
 import { parseArgs } from 'node:util';
 import * as path from 'path';
 import * as fs from 'fs';
 import { createNodeDependencies } from './adapters/nodejs';
 import { CodeIndexManager } from './code-index/manager';
 import { CodebaseHTTPMCPServer } from './mcp/http-server.js';
+import { StdioToStreamableHTTPAdapter } from './mcp/stdio-adapter.js';
 import createSampleFiles from './examples/create-sample-files';
 import { getGlobalLogger, setGlobalLogger, Logger, LogLevel } from './utils/logger';
 import { VectorStoreSearchResult } from './code-index/interfaces';
@@ -146,6 +145,9 @@ interface SimpleCliOptions {
   path: string;
   port: number;
   host: string;
+  // Optional adapter settings (used when running in stdio adapter mode)
+  serverUrl?: string;
+  timeoutMs?: number;
   config?: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   demo: boolean;
@@ -159,6 +161,7 @@ const { values, positionals } = parseArgs({
   options: {
     help: { type: 'boolean', short: 'h' },
     serve: { type: 'boolean', short: 's' },
+    'stdio-adapter': { type: 'boolean' },
     index: { type: 'boolean', short: 'i' },
     search: { type: 'string' },
     watch: { type: 'boolean', short: 'w' },
@@ -169,6 +172,9 @@ const { values, positionals } = parseArgs({
     // MCP server options
     port: { type: 'string', default: '3001' },
     host: { type: 'string', default: 'localhost' },
+    // Stdio adapter options
+    'server-url': { type: 'string' },
+    timeout: { type: 'string' },
     // Logging
     'log-level': { type: 'string', default: 'error' },
     // Demo mode
@@ -189,26 +195,33 @@ function printHelp(): void {
 @autodev/codebase - Simplified CLI (No React/Ink dependencies)
 
 Usage:
-  codebase --serve           Start MCP server
-  codebase --index           Index the codebase
-  codebase --search="query"  Search the index
-  codebase --clear           Clear index data
-  codebase --help            Show this help
+  codebase --serve               Start MCP HTTP MCP server
+  codebase --stdio-adapter       Start stdio adapter (bridge stdio <-> HTTP MCP server)
+  codebase --index               Index the codebase
+  codebase --search="query"      Search the index
+  codebase --clear               Clear index data
+  codebase --help                Show this help
 
 Options:
-  --path, -p <path>         Working directory path (default: current directory)
-  --port <port>             MCP server port (default: 3001)
-  --host <host>             MCP server host (default: localhost)
-  --config, -c <path>       Configuration file path
-  --log-level <level>       Log level: debug|info|warn|error (default: info)
-  --demo                    Create demo files in workspace
-  --force                   Force reindex all files, ignoring cache
-  --storage <path>          Storage directory path
-  --cache <path>            Cache directory path
+  --path, -p <path>             Working directory path (default: current directory)
+  --port <port>                 MCP server port (default: 3001)
+  --host <host>                 MCP server host (default: localhost)
+  --stdio-adapter               Run in stdio adapter mode (no indexing, no HTTP server)
+  --server-url <url>            Target MCP HTTP endpoint (default: http://<host>:<port>/mcp)
+  --timeout <ms>                Stdio adapter request timeout in ms (default: 30000)
+  --config, -c <path>           Configuration file path
+  --log-level <level>           Log level: debug|info|warn|error (default: info)
+  --demo                        Create demo files in workspace
+  --force                       Force reindex all files, ignoring cache
+  --storage <path>              Storage directory path
+  --cache <path>                Cache directory path
 
 Examples:
   # Start MCP server
   codebase --serve --path=/my/project
+
+  # Start stdio adapter and connect to an existing MCP HTTP server
+  codebase --stdio-adapter --server-url=http://localhost:3001/mcp
 
   # Index codebase
   codebase --index --path=/my/project
@@ -237,10 +250,14 @@ function resolveOptions(): SimpleCliOptions {
     ? path.join(resolvedPath, 'demo')
     : resolvedPath;
 
+  const timeoutMs = values.timeout ? parseInt(values.timeout, 10) : undefined;
+
   return {
     path: workspacePath,
     port: parseInt(values.port || '3001', 10),
     host: values.host || 'localhost',
+    serverUrl: values['server-url'],
+    timeoutMs: !Number.isNaN(timeoutMs || NaN) ? timeoutMs : undefined,
     config: values.config,
     logLevel: values['log-level'] as SimpleCliOptions['logLevel'],
     demo: !!values.demo,
@@ -545,6 +562,45 @@ async function clearIndex(options: SimpleCliOptions): Promise<void> {
 }
 
 /**
+ * Start stdio adapter mode.
+ *
+ * This bridges stdio-based MCP clients (e.g. Claude Desktop) to an existing
+ * HTTP/Streamable MCP server (CodebaseHTTPMCPServer or any compatible server).
+ */
+async function startStdioAdapter(options: SimpleCliOptions): Promise<void> {
+  // Derive default target from host/port, allow explicit override via --server-url
+  const targetUrl =
+    options.serverUrl || `http://${options.host}:${options.port}/mcp`;
+  const timeout =
+    options.timeoutMs && !Number.isNaN(options.timeoutMs)
+      ? options.timeoutMs
+      : 30000;
+
+  getLogger().info('Starting stdio adapter mode');
+  getLogger().info(`Target MCP HTTP endpoint: ${targetUrl}`);
+  getLogger().info(`Request timeout: ${timeout}ms`);
+
+  const adapter = new StdioToStreamableHTTPAdapter({
+    serverUrl: targetUrl,
+    timeout,
+  });
+
+  const handleShutdown = () => {
+    getLogger().info('Shutting down stdio adapter...');
+    adapter.stop();
+    process.exit(0);
+  };
+
+  process.on('SIGINT', handleShutdown);
+  process.on('SIGTERM', handleShutdown);
+
+  await adapter.start();
+
+  // Adapter keeps the process alive by listening on stdin; no further work here.
+  return new Promise(() => {}); // never resolves
+}
+
+/**
  * Main entry point
  */
 async function main(): Promise<void> {
@@ -561,6 +617,8 @@ async function main(): Promise<void> {
 
     if (values.serve) {
       await startMCPServer(options);
+    } else if (values['stdio-adapter']) {
+      await startStdioAdapter(options);
     } else if (values.index) {
       await indexCodebase(options);
     } else if (values.search) {

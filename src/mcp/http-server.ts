@@ -315,7 +315,33 @@ Note: Configuration changes will apply to subsequent searches.
         app.use((req: any, res: any, next: any) => {
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, MCP-Session-ID');
+            // Allow MCP-specific headers used by browser-based clients (e.g. Inspector)
+            // Note: header names are case-insensitive, but we include common casings for clarity.
+            res.setHeader(
+                'Access-Control-Allow-Headers',
+                [
+                    'Content-Type',
+                    'MCP-Session-ID',
+                    'mcp-session-id',
+                    'MCP-Protocol-Version',
+                    'mcp-protocol-version',
+                    'Authorization',
+                    'X-MCP-Proxy-Token',
+                    'x-mcp-proxy-token',
+                ].join(', ')
+            );
+            // Expose MCP-specific headers so browser clients (Inspector) can read the
+            // session ID and negotiated protocol version from responses.
+            res.setHeader(
+                'Access-Control-Expose-Headers',
+                [
+                    'Content-Type',
+                    'MCP-Session-ID',
+                    'mcp-session-id',
+                    'MCP-Protocol-Version',
+                    'mcp-protocol-version',
+                ].join(', ')
+            );
 
             if (req.method === 'OPTIONS') {
                 res.writeHead(200);
