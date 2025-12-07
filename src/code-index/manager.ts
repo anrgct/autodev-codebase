@@ -1,4 +1,4 @@
-import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner } from "./interfaces"
+import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner, IReranker } from "./interfaces"
 import { IndexingState, ICodeIndexManager } from "./interfaces/manager"
 import { CodeIndexConfigManager, ICodeIndexConfigProvider } from "./config-manager"
 import { CodeIndexStateManager } from "./state-manager"
@@ -394,6 +394,19 @@ export class CodeIndexManager implements ICodeIndexManager {
 			throw new Error(errorMessage)
 		}
 
+		// Create reranker (optional)
+		let reranker: IReranker | undefined
+		if (this._configManager!.isRerankerEnabled) {
+			reranker = this._serviceFactory.createReranker()
+			if (reranker) {
+				const rerankerValidation = await this._serviceFactory.validateReranker(reranker)
+				if (!rerankerValidation.valid) {
+					console.warn('Reranker validation failed:', rerankerValidation.error)
+					reranker = undefined // Degrade gracefully, don't use reranker
+				}
+			}
+		}
+
 		// (Re)Initialize orchestrator
 		this._orchestrator = new CodeIndexOrchestrator(
 			this._configManager!,
@@ -412,6 +425,7 @@ export class CodeIndexManager implements ICodeIndexManager {
 			this._stateManager,
 			embedder,
 			vectorStore,
+			reranker // Pass reranker to search service
 		)
 
 		// Clear any error state after successful recreation

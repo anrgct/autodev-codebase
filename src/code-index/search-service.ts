@@ -1,5 +1,5 @@
 import * as path from "path"
-import { VectorStoreSearchResult, SearchFilter } from "./interfaces"
+import { VectorStoreSearchResult, SearchFilter, IReranker, RerankerCandidate } from "./interfaces"
 import { IEmbedder } from "./interfaces/embedder"
 import { IVectorStore } from "./interfaces/vector-store"
 import { CodeIndexConfigManager } from "./config-manager"
@@ -14,6 +14,7 @@ export class CodeIndexSearchService {
 		private readonly stateManager: CodeIndexStateManager,
 		private readonly embedder: IEmbedder,
 		private readonly vectorStore: IVectorStore,
+		private readonly reranker?: IReranker,
 	) {}
 
 	/**
@@ -63,7 +64,33 @@ export class CodeIndexSearchService {
 			}
 
 			// Perform search
-			const results = await this.vectorStore.search(vector, normalizedPrefix, minScore, maxResults)
+			let results = await this.vectorStore.search(vector, normalizedPrefix, minScore, maxResults)
+
+			// If reranker is enabled, rerank the results
+			if (this.reranker && results.length > 0) {
+				const candidates = results.map(r => ({
+					id: r.id,
+					content: r.payload?.codeChunk || '',
+					score: r.score,
+					payload: r.payload
+				}))
+
+				const reranked = await this.reranker.rerank(query, candidates)
+
+				// Convert back to VectorStoreSearchResult format, preserving original payload
+				results = reranked.map(r => ({
+					id: r.id,
+					score: r.score, // Use LLM score
+					payload: r.payload
+				}))
+
+				// Optional: Filter low-score results
+				const rerankerMinScore = this.configManager.rerankerConfig?.minScore
+				if (rerankerMinScore !== undefined) {
+					results = results.filter(r => r.score >= rerankerMinScore)
+				}
+			}
+
 			return results
 		} catch (error) {
 			console.error("[CodeIndexSearchService] Error during search:", error)

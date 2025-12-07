@@ -84,6 +84,12 @@ export class NodeConfigProvider implements IConfigProvider {
         codebaseIndexSearchMinScore: this.config.searchMinScore,
         codebaseIndexSearchMaxResults: undefined,
         codebaseIndexOpenAiCompatibleBaseUrl: this.config.openAiCompatibleOptions?.baseUrl ?? "",
+        // Reranker configuration mapping
+        codebaseIndexRerankerEnabled: this.config.rerankerEnabled ?? false,
+        codebaseIndexRerankerProvider: this.config.rerankerProvider ?? 'none',
+        codebaseIndexRerankerOllamaBaseUrl: this.config.rerankerOllamaBaseUrl,
+        codebaseIndexRerankerOllamaModelId: this.config.rerankerOllamaModelId,
+        codebaseIndexRerankerMinScore: this.config.rerankerMinScore,
       }
     }
 

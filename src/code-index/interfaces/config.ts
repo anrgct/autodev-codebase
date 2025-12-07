@@ -124,6 +124,12 @@ export interface CodeIndexConfig {
 	qdrantApiKey?: string
 	searchMinScore?: number
 	searchMaxResults?: number
+	// Reranker configuration
+	rerankerEnabled?: boolean
+	rerankerProvider?: 'ollama-llm' | 'none'
+	rerankerOllamaBaseUrl?: string
+	rerankerOllamaModelId?: string
+	rerankerMinScore?: number
 }
 
 /**

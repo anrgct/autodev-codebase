@@ -1,5 +1,6 @@
 import { EmbedderProvider } from "./interfaces/manager"
 import { CodeIndexConfig, PreviousConfigSnapshot } from "./interfaces/config"
+import { RerankerConfig } from "./interfaces/reranker"
 import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "./constants"
 import { getDefaultModelId, getModelDimension, getModelScoreThreshold } from "../shared/embeddingModels"
 
@@ -35,6 +36,13 @@ export class CodeIndexConfigManager {
 	private searchMinScore?: number
 	private searchMaxResults?: number
 
+	// Reranker configuration
+	private rerankerEnabled: boolean = false
+	private rerankerProvider: 'ollama-llm' | 'none' = 'none'
+	private rerankerOllamaBaseUrl?: string
+	private rerankerOllamaModelId?: string
+	private rerankerMinScore?: number
+
 	constructor(private readonly configProvider: ICodeIndexConfigProvider) {
 		// Initialize with current configuration to avoid false restart triggers
 		// Note: This is async but constructor can't be async, so we'll initialize asynchronously
@@ -62,6 +70,11 @@ export class CodeIndexConfigManager {
 			codebaseIndexEmbedderModelId: "",
 			codebaseIndexSearchMinScore: undefined,
 			codebaseIndexSearchMaxResults: undefined,
+			codebaseIndexRerankerEnabled: false,
+			codebaseIndexRerankerProvider: "none",
+			codebaseIndexRerankerOllamaBaseUrl: undefined,
+			codebaseIndexRerankerOllamaModelId: undefined,
+			codebaseIndexRerankerMinScore: undefined,
 		}
 
 		const {
@@ -72,6 +85,11 @@ export class CodeIndexConfigManager {
 			codebaseIndexEmbedderModelId,
 			codebaseIndexSearchMinScore,
 			codebaseIndexSearchMaxResults,
+			codebaseIndexRerankerEnabled,
+			codebaseIndexRerankerProvider,
+			codebaseIndexRerankerOllamaBaseUrl,
+			codebaseIndexRerankerOllamaModelId,
+			codebaseIndexRerankerMinScore,
 		} = codebaseIndexConfig
 
 		const openAiKey = (await this.configProvider.getSecret("codeIndexOpenAiKey")) ?? ""
@@ -92,6 +110,13 @@ export class CodeIndexConfigManager {
 		this.qdrantApiKey = qdrantApiKey ?? ""
 		this.searchMinScore = codebaseIndexSearchMinScore
 		this.searchMaxResults = codebaseIndexSearchMaxResults
+
+		// Update reranker configuration
+		this.rerankerEnabled = codebaseIndexRerankerEnabled ?? false
+		this.rerankerProvider = codebaseIndexRerankerProvider ?? 'none'
+		this.rerankerOllamaBaseUrl = codebaseIndexRerankerOllamaBaseUrl
+		this.rerankerOllamaModelId = codebaseIndexRerankerOllamaModelId
+		this.rerankerMinScore = codebaseIndexRerankerMinScore
 
 		// Validate and set model dimension
 		const rawDimension = codebaseIndexConfig.codebaseIndexEmbedderModelDimension
@@ -518,5 +543,29 @@ export class CodeIndexConfigManager {
 	 */
 	public get currentSearchMaxResults(): number {
 		return this.searchMaxResults ?? DEFAULT_MAX_SEARCH_RESULTS
+	}
+
+	/**
+	 * Gets whether the reranker is enabled
+	 */
+	public get isRerankerEnabled(): boolean {
+		return this.rerankerEnabled && this.rerankerProvider !== 'none'
+	}
+
+	/**
+	 * Gets the reranker configuration
+	 */
+	public get rerankerConfig(): RerankerConfig | undefined {
+		if (!this.rerankerEnabled || this.rerankerProvider === 'none') {
+			return undefined
+		}
+
+		return {
+			enabled: this.rerankerEnabled,
+			provider: this.rerankerProvider,
+			ollamaBaseUrl: this.rerankerOllamaBaseUrl,
+			ollamaModelId: this.rerankerOllamaModelId || 'gemma3n:e2b',
+			minScore: this.rerankerMinScore
+		}
 	}
 }

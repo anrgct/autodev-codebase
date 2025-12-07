@@ -5,10 +5,11 @@ import { GeminiEmbedder } from "./embedders/gemini"
 import { MistralEmbedder } from "./embedders/mistral"
 import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
+import { OllamaLLMReranker } from "./rerankers/ollama-llm"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
 import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
-import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore } from "./interfaces"
+import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker } from "./interfaces"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CacheManager } from "./cache-manager"
 import { Ignore } from "ignore"
@@ -35,6 +36,8 @@ const t = (key: string, params?: Record<string, string>): string => {
 		"embeddings:serviceFactory.qdrantUrlMissing": "Qdrant URL missing for vector store creation",
 		"embeddings:serviceFactory.codeIndexingNotConfigured": "Cannot create services: Code indexing is not properly configured",
 		"embeddings:validation.configurationError": "Embedder configuration validation failed",
+		"embeddings:serviceFactory.invalidRerankerType": "Invalid reranker provider configured: {provider}",
+		"embeddings:serviceFactory.rerankerValidationError": "Reranker configuration validation failed",
 	}
 
 	let message = translations[key] || key
@@ -268,6 +271,45 @@ export class CodeIndexServiceFactory {
 			parser,
 			scanner,
 			fileWatcher,
+		}
+	}
+
+	/**
+	 * Creates a reranker instance based on the current configuration.
+	 * @returns IReranker instance or undefined if reranker is disabled
+	 */
+	public createReranker(): IReranker | undefined {
+		const config = this.configManager.rerankerConfig
+		if (!config || !config.enabled || config.provider === 'none') {
+			return undefined
+		}
+
+		if (config.provider === 'ollama-llm') {
+			return new OllamaLLMReranker(
+				config.ollamaBaseUrl || 'http://localhost:11434',
+				config.ollamaModelId || 'gemma3n:e2b'
+			)
+		}
+
+		throw new Error(
+			t("embeddings:serviceFactory.invalidRerankerType", { provider: config.provider })
+		)
+	}
+
+	/**
+	 * Validates a reranker instance to ensure it's properly configured.
+	 * @param reranker The reranker instance to validate
+	 * @returns Promise resolving to validation result
+	 */
+	public async validateReranker(reranker: IReranker): Promise<{ valid: boolean; error?: string }> {
+		try {
+			return await reranker.validateConfiguration()
+		} catch (error) {
+			// If validation throws an exception, preserve the original error message
+			return {
+				valid: false,
+				error: error instanceof Error ? error.message : t("embeddings:serviceFactory.rerankerValidationError"),
+			}
 		}
 	}
 }
