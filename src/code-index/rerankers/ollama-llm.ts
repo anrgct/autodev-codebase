@@ -12,12 +12,14 @@ const OLLAMA_VALIDATION_TIMEOUT_MS = 30000 // 30 seconds for validation requests
 export class OllamaLLMReranker implements IReranker {
     private readonly baseUrl: string
     private readonly modelId: string
+    private readonly batchSize: number
 
-    constructor(baseUrl: string = "http://localhost:11434", modelId: string = "gemma3n:e2b") {
+    constructor(baseUrl: string = "http://localhost:11434", modelId: string = "qwen3-vl:4b-instruct", batchSize: number = 10) {
         // Normalize the baseUrl by removing all trailing slashes
         const normalizedBaseUrl = baseUrl.replace(/\/+$/, "")
         this.baseUrl = normalizedBaseUrl
         this.modelId = modelId
+        this.batchSize = batchSize
     }
 
     /**
@@ -31,6 +33,46 @@ export class OllamaLLMReranker implements IReranker {
             return []
         }
 
+        // If candidates count <= batchSize, process directly (original logic)
+        if (candidates.length <= this.batchSize) {
+            return this.rerankSingleBatch(query, candidates)
+        }
+
+        // Process in batches
+        const allResults: RerankerResult[] = []
+        let processedCount = 0
+
+        for (let i = 0; i < candidates.length; i += this.batchSize) {
+            const batch = candidates.slice(i, i + this.batchSize)
+            try {
+                const batchResults = await this.rerankSingleBatch(query, batch)
+                allResults.push(...batchResults)
+            } catch (error) {
+                console.error(`Batch ${Math.floor(i / this.batchSize) + 1} failed:`, error)
+                // Fallback for failed batch
+                const fallbackResults = batch.map((candidate, idx) => ({
+                    id: candidate.id,
+                    score: 10 - (processedCount + idx) * 0.1,
+                    originalScore: candidate.score,
+                    payload: candidate.payload
+                }))
+                allResults.push(...fallbackResults)
+            }
+            processedCount += batch.length
+        }
+
+        // Merge and re-sort all results
+        allResults.sort((a, b) => b.score - a.score)
+        return allResults
+    }
+
+    /**
+     * Reranks a single batch of candidates.
+     * @param query The search query
+     * @param candidates Array of candidates to rerank (single batch)
+     * @returns Promise resolving to reranked results with LLM scores
+     */
+    private async rerankSingleBatch(query: string, candidates: RerankerCandidate[]): Promise<RerankerResult[]> {
         try {
             // Build the scoring prompt with all candidates
             const prompt = this.buildScoringPrompt(query, candidates)
@@ -46,12 +88,12 @@ export class OllamaLLMReranker implements IReranker {
                 payload: candidate.payload
             }))
 
-            // Sort by LLM score (descending)
+            // Sort by LLM score (descending) - this maintains order within the batch
             results.sort((a, b) => b.score - a.score)
 
             return results
         } catch (error: any) {
-            console.error("Ollama LLM reranking failed, returning original order:", error)
+            console.error("Ollama LLM batch reranking failed, returning original order:", error)
 
             // Fallback to original order with default scores
             return candidates.map((candidate, index) => ({
@@ -67,19 +109,64 @@ export class OllamaLLMReranker implements IReranker {
      * Builds the scoring prompt for the LLM.
      */
     private buildScoringPrompt(query: string, candidates: RerankerCandidate[]): string {
-        let prompt = `You are a code relevance scorer. Given a search query and code snippets, rate each snippet's relevance (0-10).
+        let prompt = `You are a code relevance scorer. Given a search query and code snippets with their hierarchy context, rate each snippet's relevance (0-10).
+
+Scoring criteria:
+
+10 points: Perfect match with query intent, directly includes relevant code
+7-9 points: Highly relevant, includes relevant functions/classes/concepts
+4-6 points: Moderately relevant, mentions related topics but not directly
+1-3 points: Slightly relevant, only indirect connections
+0 points: Completely unrelated
 
 Query: ${query}
 
-Snippets:\n`
+Snippets:
+`
 
         candidates.forEach((candidate, index) => {
-            prompt += `[${index + 1}] ${candidate.content}\n---\n`
+            // Build context information
+            const contextInfo = this.buildContextInfo(candidate)
+
+            prompt += `## snippet ${index + 1} ${contextInfo}\`\`\`\n${candidate.content}\`\`\`
+---
+`
         })
 
-        prompt += `Respond with ONLY a JSON object with a "scores" array: {"scores": [score1, score2, ..., score${candidates.length}]}`
+        prompt += `Respond with ONLY a JSON object with a relevant "scores" array: {"scores": [${Array.from({length: candidates.length}, (_, i) => `score${i + 1}`).join(', ')}]}`
+
 
         return prompt
+    }
+
+    /**
+     * Builds context information for a candidate based on its payload.
+     */
+    private buildContextInfo(candidate: RerankerCandidate): string {
+        const parts: string[] = []
+
+        // Add hierarchy information
+        if (candidate.payload?.hierarchyDisplay) {
+            parts.push(`[Context: ${candidate.payload.hierarchyDisplay}]`)
+        }
+
+        // Add file path information
+        if (candidate.payload?.filePath) {
+            const fileName = candidate.payload.filePath.split('/').pop()
+            parts.push(`[File: ${fileName}]`)
+        }
+
+        // // Add code type information
+        // if (candidate.payload?.type) {
+        //     parts.push(`[Type: ${candidate.payload.type}]`)
+        // }
+
+        // // Add line number information
+        // if (candidate.payload?.startLine && candidate.payload?.endLine) {
+        //     parts.push(`[Lines: ${candidate.payload.startLine}-${candidate.payload.endLine}]`)
+        // }
+
+        return parts.length > 0 ? parts.join(' ') + '\n' : ''
     }
 
     /**
@@ -167,7 +254,7 @@ Snippets:\n`
         const scores = parsedResponse.scores
 
         // Process and validate scores
-        return scores.map(score => {
+        return scores.map((score: number | string) => {
             const num = typeof score === 'number' ? score : parseFloat(score)
             return isNaN(num) ? 0 : Math.max(0, Math.min(10, num)) // Clamp between 0-10
         })

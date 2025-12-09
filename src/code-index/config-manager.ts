@@ -42,6 +42,7 @@ export class CodeIndexConfigManager {
 	private rerankerOllamaBaseUrl?: string
 	private rerankerOllamaModelId?: string
 	private rerankerMinScore?: number
+	private rerankerBatchSize?: number
 
 	constructor(private readonly configProvider: ICodeIndexConfigProvider) {
 		// Initialize with current configuration to avoid false restart triggers
@@ -75,6 +76,7 @@ export class CodeIndexConfigManager {
 			codebaseIndexRerankerOllamaBaseUrl: undefined,
 			codebaseIndexRerankerOllamaModelId: undefined,
 			codebaseIndexRerankerMinScore: undefined,
+			codebaseIndexRerankerBatchSize: undefined,
 		}
 
 		const {
@@ -90,6 +92,7 @@ export class CodeIndexConfigManager {
 			codebaseIndexRerankerOllamaBaseUrl,
 			codebaseIndexRerankerOllamaModelId,
 			codebaseIndexRerankerMinScore,
+			codebaseIndexRerankerBatchSize,
 		} = codebaseIndexConfig
 
 		const openAiKey = (await this.configProvider.getSecret("codeIndexOpenAiKey")) ?? ""
@@ -117,6 +120,7 @@ export class CodeIndexConfigManager {
 		this.rerankerOllamaBaseUrl = codebaseIndexRerankerOllamaBaseUrl
 		this.rerankerOllamaModelId = codebaseIndexRerankerOllamaModelId
 		this.rerankerMinScore = codebaseIndexRerankerMinScore
+		this.rerankerBatchSize = codebaseIndexRerankerBatchSize
 
 		// Validate and set model dimension
 		const rawDimension = codebaseIndexConfig.codebaseIndexEmbedderModelDimension
@@ -564,8 +568,9 @@ export class CodeIndexConfigManager {
 			enabled: this.rerankerEnabled,
 			provider: this.rerankerProvider,
 			ollamaBaseUrl: this.rerankerOllamaBaseUrl,
-			ollamaModelId: this.rerankerOllamaModelId || 'gemma3n:e2b',
-			minScore: this.rerankerMinScore
+			ollamaModelId: this.rerankerOllamaModelId,
+			minScore: this.rerankerMinScore,
+			batchSize: this.rerankerBatchSize || 10
 		}
 	}
 }

@@ -27,6 +27,7 @@ export interface RerankerConfig {
 	ollamaBaseUrl?: string
 	ollamaModelId?: string
 	minScore?: number
+	batchSize?: number  // 新增：批次大小，默认10
 }
 
 export interface IReranker {

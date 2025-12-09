@@ -8,13 +8,15 @@ import { CodeIndexConfigManager } from '../../config-manager'
 import { CodeIndexStateManager } from '../../state-manager'
 import { CodeIndexSearchService } from '../../search-service'
 import { OllamaLLMReranker } from '../ollama-llm'
-import type { IEmbedder, IVectorStore, IEventBus } from '../../interfaces'
+import type { IEmbedder, IVectorStore } from '../../interfaces'
 import type { ICodeIndexConfigProvider } from '../../config-manager'
+import type { IEventBus } from '../../../abstractions/core'
 
 // Mock dependencies
 const mockEmbedder: IEmbedder = {
   createEmbeddings: vi.fn(),
-  validateConfiguration: vi.fn()
+  validateConfiguration: vi.fn(),
+  embedderInfo: { name: 'openai' as const }
 }
 
 const mockVectorStore: IVectorStore = {
@@ -22,18 +24,27 @@ const mockVectorStore: IVectorStore = {
   search: vi.fn(),
   hasIndexedData: vi.fn(),
   getAllFilePaths: vi.fn(),
-  deletePointsByMultipleFilePaths: vi.fn()
+  deletePointsByMultipleFilePaths: vi.fn(),
+  upsertPoints: vi.fn(),
+  deletePointsByFilePath: vi.fn(),
+  clearCollection: vi.fn(),
+  deleteCollection: vi.fn(),
+  collectionExists: vi.fn(),
+  markIndexingComplete: vi.fn(),
+  markIndexingIncomplete: vi.fn()
 }
 
 const mockEventBus: IEventBus = {
   on: vi.fn(),
   off: vi.fn(),
-  emit: vi.fn()
+  emit: vi.fn(),
+  once: vi.fn()
 }
 
 const mockConfigProvider: ICodeIndexConfigProvider = {
-  getConfig: vi.fn(),
-  getStorage: vi.fn()
+  getGlobalState: vi.fn(),
+  getSecret: vi.fn().mockResolvedValue(''),
+  refreshSecrets: vi.fn().mockResolvedValue(undefined)
 }
 
 describe('LLM Reranker Integration Tests', () => {
@@ -52,17 +63,14 @@ describe('LLM Reranker Integration Tests', () => {
       deleteHashes: vi.fn()
     }
 
-    // Setup default config
-    mockConfigProvider.getConfig = vi.fn().mockReturnValue({
-      embedderProvider: 'openai',
-      modelId: 'text-embedding-ada-002',
-      qdrantUrl: 'http://localhost:6333',
-      qdrantApiKey: undefined,
-      codeIndexingEnabled: true,
-      rerankerConfig: {
-        enabled: false,
-        provider: 'none' as const
-      }
+    // Setup default config via getGlobalState
+    ;(mockConfigProvider.getGlobalState as any) = vi.fn().mockReturnValue({
+      codebaseIndexEnabled: true,
+      codebaseIndexQdrantUrl: 'http://localhost:6333',
+      codebaseIndexEmbedderProvider: 'openai',
+      codebaseIndexEmbedderModelId: 'text-embedding-ada-002',
+      codebaseIndexRerankerEnabled: false,
+      codebaseIndexRerankerProvider: 'none'
     })
 
     configManager = new CodeIndexConfigManager(mockConfigProvider)
@@ -114,7 +122,7 @@ describe('LLM Reranker Integration Tests', () => {
           enabled: true,
           provider: 'ollama-llm' as const,
           ollamaBaseUrl: 'http://localhost:11434',
-          ollamaModelId: 'gemma2:9b'
+          ollamaModelId: 'qwen3-vl:4b-instruct'
         }
       }
 

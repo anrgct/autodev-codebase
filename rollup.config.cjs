@@ -124,6 +124,10 @@ module.exports = [
         return true;
       }
       // Bundle everything else (including fzf, tslib, etc.)
+      // 特别将 web-tree-sitter 设为外部依赖，避免 __dirname 问题
+      if (id === 'web-tree-sitter' || id.includes('web-tree-sitter')) {
+        return true;
+      }
       return false;
     },
     plugins: [
@@ -173,6 +177,10 @@ module.exports = [
         return true;
       }
       // Bundle everything else (including fzf, tslib, etc.)
+      // 特别将 web-tree-sitter 设为外部依赖，避免 __dirname 问题
+      if (id === 'web-tree-sitter' || id.includes('web-tree-sitter')) {
+        return true;
+      }
       return false;
     },
     plugins: [

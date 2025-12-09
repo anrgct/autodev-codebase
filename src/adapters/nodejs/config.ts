@@ -82,7 +82,7 @@ export class NodeConfigProvider implements IConfigProvider {
         codebaseIndexEmbedderModelId: this.config.modelId ?? "",
         codebaseIndexEmbedderModelDimension: this.config.modelDimension,
         codebaseIndexSearchMinScore: this.config.searchMinScore,
-        codebaseIndexSearchMaxResults: undefined,
+        codebaseIndexSearchMaxResults: this.config.searchMaxResults,
         codebaseIndexOpenAiCompatibleBaseUrl: this.config.openAiCompatibleOptions?.baseUrl ?? "",
         // Reranker configuration mapping
         codebaseIndexRerankerEnabled: this.config.rerankerEnabled ?? false,
@@ -90,6 +90,7 @@ export class NodeConfigProvider implements IConfigProvider {
         codebaseIndexRerankerOllamaBaseUrl: this.config.rerankerOllamaBaseUrl,
         codebaseIndexRerankerOllamaModelId: this.config.rerankerOllamaModelId,
         codebaseIndexRerankerMinScore: this.config.rerankerMinScore,
+        codebaseIndexRerankerBatchSize: this.config.rerankerBatchSize,
       }
     }
 
@@ -202,7 +203,7 @@ export class NodeConfigProvider implements IConfigProvider {
     const config = await this.ensureConfigLoaded()
     return {
       minScore: config.searchMinScore,
-      maxResults: 50 // Default max results
+      maxResults: config.searchMaxResults ?? 50 // Use config value or default to 50
     }
   }
 

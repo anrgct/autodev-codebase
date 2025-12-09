@@ -39,9 +39,9 @@ export class OpenAiEmbedder implements IEmbedder {
 			if (proxyUrl) {
 				try {
 					dispatcher = new ProxyAgent(proxyUrl)
-					console.log('✓ OpenAI using undici ProxyAgent:', proxyUrl)
+					console.log('✓ OpenAI Embedding using undici ProxyAgent:', proxyUrl)
 				} catch (error) {
-					console.error('✗ Failed to create undici ProxyAgent for OpenAI:', error)
+					console.error('✗ Failed to create undici ProxyAgent for OpenAI Embedding:', error)
 				}
 			}
 

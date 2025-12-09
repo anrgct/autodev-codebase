@@ -36,21 +36,24 @@ describe('OllamaLLMReranker', () => {
   })
 
   describe('Constructor', () => {
-    it('should use default baseUrl and modelId when no parameters provided', () => {
+    it('should use default baseUrl, modelId, and batchSize when no parameters provided', () => {
       reranker = new OllamaLLMReranker()
 
       expect(reranker['baseUrl']).toBe('http://localhost:11434')
-      expect(reranker['modelId']).toBe('gemma3n:e2b')
+      expect(reranker['modelId']).toBe('qwen3-vl:4b-instruct')
+      expect(reranker['batchSize']).toBe(10)
     })
 
-    it('should use custom baseUrl and modelId when provided', () => {
+    it('should use custom baseUrl, modelId, and batchSize when provided', () => {
       const customBaseUrl = 'https://custom-ollama.example.com:8080'
       const customModelId = 'custom-model:latest'
+      const customBatchSize = 5
 
-      reranker = new OllamaLLMReranker(customBaseUrl, customModelId)
+      reranker = new OllamaLLMReranker(customBaseUrl, customModelId, customBatchSize)
 
       expect(reranker['baseUrl']).toBe(customBaseUrl)
       expect(reranker['modelId']).toBe(customModelId)
+      expect(reranker['batchSize']).toBe(customBatchSize)
     })
 
     it('should normalize baseUrl by removing trailing slashes', () => {
@@ -102,7 +105,7 @@ describe('OllamaLLMReranker', () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
-          response: '[8.5, 6.0, 9.2]'
+          response: '{"scores": [8.5, 6.0, 9.2]}'
         })
       })
 
@@ -136,13 +139,13 @@ describe('OllamaLLMReranker', () => {
       expect(result[2].originalScore).toBe(0.6)
     })
 
-    it('should handle successful LLM reranking with text response (fallback)', async () => {
+    it('should handle non-JSON response and throw error', async () => {
       const candidates: RerankerCandidate[] = [
         { id: '1', content: 'function test1() { return 1; }' },
         { id: '2', content: 'function test2() { return 2; }' }
       ]
 
-      // Mock fetch response that will fail JSON parsing but succeed with text extraction
+      // Mock fetch response with non-JSON text (should throw error in new implementation)
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -152,11 +155,12 @@ describe('OllamaLLMReranker', () => {
 
       const result = await reranker.rerank('test function', candidates)
 
+      // Should return fallback results due to error
       expect(result).toHaveLength(2)
       expect(result[0].id).toBe('1')
-      expect(result[0].score).toBe(7.5)
+      expect(result[0].score).toBe(10) // Fallback score
       expect(result[1].id).toBe('2')
-      expect(result[1].score).toBe(3.2)
+      expect(result[1].score).toBe(9.9) // Fallback score
     })
 
     it('should clamp scores to 0-10 range', async () => {
@@ -169,7 +173,7 @@ describe('OllamaLLMReranker', () => {
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
-          response: '[-5, 15.5]'
+          response: '{"scores": [-5, 15.5]}'
         })
       })
 
@@ -203,7 +207,7 @@ describe('OllamaLLMReranker', () => {
       expect(result[2].score).toBe(9.8)
     })
 
-    it('should handle invalid JSON response and fallback to text extraction', async () => {
+    it('should handle invalid JSON response and return fallback results', async () => {
       const candidates: RerankerCandidate[] = [
         { id: '1', content: 'test content 1' },
         { id: '2', content: 'test content 2' }
@@ -219,10 +223,173 @@ describe('OllamaLLMReranker', () => {
 
       const result = await reranker.rerank('test', candidates)
 
-      // Should extract numbers from text
+      // Should return fallback results due to JSON parsing error
       expect(result).toHaveLength(2)
-      expect(result[0].score).toBeGreaterThanOrEqual(0)
-      expect(result[1].score).toBeGreaterThanOrEqual(0)
+      expect(result[0].id).toBe('1')
+      expect(result[0].score).toBe(10) // Fallback score
+      expect(result[1].id).toBe('2')
+      expect(result[1].score).toBe(9.9) // Fallback score
+    })
+  })
+
+  describe('Batch processing', () => {
+    it('should process single batch when candidates <= batchSize', async () => {
+      reranker = new OllamaLLMReranker('http://localhost:11434', 'test-model', 5)
+
+      const candidates: RerankerCandidate[] = [
+        { id: '1', content: 'function test1() { return 1; }', score: 0.8 },
+        { id: '2', content: 'function test2() { return 2; }', score: 0.6 },
+        { id: '3', content: 'function test3() { return 3; }', score: 0.4 }
+      ]
+
+      // Mock successful fetch response
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          response: '{"scores": [8.5, 6.0, 9.2]}'
+        })
+      })
+
+      const result = await reranker.rerank('test function', candidates)
+
+      expect(mockFetch).toHaveBeenCalledTimes(1)
+      expect(result).toHaveLength(3)
+
+      // Results should be sorted by score (descending)
+      expect(result[0].id).toBe('3')
+      expect(result[0].score).toBe(9.2)
+    })
+
+    it('should process multiple batches when candidates > batchSize', async () => {
+      reranker = new OllamaLLMReranker('http://localhost:11434', 'test-model', 3)
+
+      const candidates: RerankerCandidate[] = [
+        { id: '1', content: 'function test1() { return 1; }', score: 0.8 },
+        { id: '2', content: 'function test2() { return 2; }', score: 0.6 },
+        { id: '3', content: 'function test3() { return 3; }', score: 0.4 },
+        { id: '4', content: 'function test4() { return 4; }', score: 0.3 },
+        { id: '5', content: 'function test5() { return 5; }', score: 0.2 }
+      ]
+
+      // Mock fetch responses for 2 batches: first 3 candidates, then 2 candidates
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response: '{"scores": [8.5, 6.0, 9.2]}'
+          })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response: '{"scores": [7.0, 8.0]}'
+          })
+        })
+
+      const result = await reranker.rerank('test function', candidates)
+
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+      expect(result).toHaveLength(5)
+
+      // All results should be sorted by score (descending) across batches
+      const scores = result.map(r => r.score)
+      expect(scores).toEqual([9.2, 8.5, 8.0, 7.0, 6.0])
+
+      // Verify ids match the scores
+      expect(result[0].id).toBe('3') // score 9.2 from first batch
+      expect(result[1].id).toBe('1') // score 8.5 from first batch
+      expect(result[2].id).toBe('5') // score 8.0 from second batch
+      expect(result[3].id).toBe('4') // score 7.0 from second batch
+      expect(result[4].id).toBe('2') // score 6.0 from first batch
+    })
+
+    it('should handle batch failure gracefully with fallback', async () => {
+      reranker = new OllamaLLMReranker('http://localhost:11434', 'test-model', 2)
+
+      const candidates: RerankerCandidate[] = [
+        { id: '1', content: 'function test1() { return 1; }', score: 0.8 },
+        { id: '2', content: 'function test2() { return 2; }', score: 0.6 },
+        { id: '3', content: 'function test3() { return 3; }', score: 0.4 },
+        { id: '4', content: 'function test4() { return 4; }', score: 0.3 }
+      ]
+
+      // Mock first batch failure, second batch success
+      mockFetch
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response: '{"scores": [7.0, 8.0]}'
+          })
+        })
+
+      const result = await reranker.rerank('test function', candidates)
+
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+      expect(result).toHaveLength(4)
+
+      // First batch should have fallback scores (positions 0, 1): 10, 9.9
+      // Second batch should have real scores (positions 2, 3): 8.0, 7.0
+      const scores = result.map(r => r.score)
+      const allScores = [10, 9.9, 8.0, 7.0].sort((a, b) => b - a)
+      expect(scores).toEqual(allScores)
+    })
+
+    it('should correctly divide candidates into batches', async () => {
+      reranker = new OllamaLLMReranker('http://localhost:11434', 'test-model', 2)
+
+      const candidates: RerankerCandidate[] = [
+        { id: '1', content: 'content1' },
+        { id: '2', content: 'content2' },
+        { id: '3', content: 'content3' },
+        { id: '4', content: 'content4' },
+        { id: '5', content: 'content5' }
+      ]
+
+      // Mock responses for 3 batches: 2, 2, 1 candidates
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response: '{"scores": [1, 2]}'
+          })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response: '{"scores": [3, 4]}'
+          })
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            response: '{"scores": [5]}'
+          })
+        })
+
+      await reranker.rerank('test', candidates)
+
+      expect(mockFetch).toHaveBeenCalledTimes(3)
+
+      // Verify each batch call had correct number of candidates
+      const firstCall = mockFetch.mock.calls[0][1]
+      const firstBody = JSON.parse(firstCall.body)
+      expect(firstBody.prompt).toContain('## snippet 1')
+      expect(firstBody.prompt).toContain('content1')
+      expect(firstBody.prompt).toContain('## snippet 2')
+      expect(firstBody.prompt).toContain('content2')
+
+      const secondCall = mockFetch.mock.calls[1][1]
+      const secondBody = JSON.parse(secondCall.body)
+      expect(secondBody.prompt).toContain('## snippet 1')
+      expect(secondBody.prompt).toContain('content3')
+      expect(secondBody.prompt).toContain('## snippet 2')
+      expect(secondBody.prompt).toContain('content4')
+
+      const thirdCall = mockFetch.mock.calls[2][1]
+      const thirdBody = JSON.parse(thirdCall.body)
+      expect(thirdBody.prompt).toContain('## snippet 1')
+      expect(thirdBody.prompt).toContain('content5')
     })
   })
 
@@ -241,10 +408,34 @@ describe('OllamaLLMReranker', () => {
       const prompt = (reranker as any)['buildScoringPrompt']('search query', candidates)
 
       expect(prompt).toContain('You are a code relevance scorer')
+      expect(prompt).toContain('with their hierarchy context')
       expect(prompt).toContain('Query: search query')
-      expect(prompt).toContain('[1] function test() { return "hello"; }')
-      expect(prompt).toContain('[2] const variable = 42;')
-      expect(prompt).toContain('Respond with ONLY a JSON array of scores')
+      expect(prompt).toContain('## snippet 1')
+      expect(prompt).toContain('function test() { return "hello"; }')
+      expect(prompt).toContain('## snippet 2')
+      expect(prompt).toContain('const variable = 42;')
+      expect(prompt).toContain('Respond with ONLY a JSON object with a relevant "scores" array')
+    })
+
+    it('should include context information when payload is provided', () => {
+      const candidates: RerankerCandidate[] = [
+        {
+          id: '1',
+          content: 'function test() { return "hello"; }',
+          payload: {
+            hierarchyDisplay: 'MyClass.myMethod',
+            filePath: 'src/test.js',
+            type: 'function',
+            startLine: 10,
+            endLine: 12
+          }
+        }
+      ]
+
+      const prompt = (reranker as any)['buildScoringPrompt']('search query', candidates)
+
+      expect(prompt).toContain('## snippet 1 [Context: MyClass.myMethod] [File: test.js]')
+      expect(prompt).toContain('function test() { return "hello"; }')
     })
 
     it('should handle special characters in query and content', () => {
@@ -256,6 +447,170 @@ describe('OllamaLLMReranker', () => {
 
       expect(prompt).toContain('Query: search & query')
       expect(prompt).toContain('function test() { return "hello & world"; }')
+    })
+  })
+
+  describe('buildContextInfo method', () => {
+    beforeEach(() => {
+      reranker = new OllamaLLMReranker('http://localhost:11434', 'test-model')
+    })
+
+    it('should build complete context info when all payload fields are present', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          hierarchyDisplay: 'MyClass.myMethod',
+          filePath: 'src/components/test.ts',
+          type: 'function',
+          startLine: 15,
+          endLine: 20
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('[Context: MyClass.myMethod] [File: test.ts]\n')
+    })
+
+    it('should build partial context info when only some payload fields are present', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'const variable = 42;',
+        payload: {
+          filePath: 'src/constants.ts',
+          type: 'variable'
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('[File: constants.ts]\n')
+    })
+
+    it('should return empty string when no payload is provided', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}'
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('')
+    })
+
+    it('should return empty string when payload is empty', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {}
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('')
+    })
+
+    it('should handle only hierarchyDisplay', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          hierarchyDisplay: 'UserService.authenticate'
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('[Context: UserService.authenticate]\n')
+    })
+
+    it('should handle only filePath', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          filePath: '/path/to/file.js'
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('[File: file.js]\n')
+    })
+
+    it('should handle only type', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          type: 'class'
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('')
+    })
+
+    it('should handle line numbers with only startLine (should not include lines)', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          startLine: 15
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('')
+    })
+
+    it('should handle line numbers with only endLine (should not include lines)', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          endLine: 20
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('')
+    })
+
+    it('should handle complex file paths correctly', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          filePath: 'src/utils/helpers/date/format.ts'
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('[File: format.ts]\n')
+    })
+
+    it('should handle empty strings in payload fields', () => {
+      const candidate: RerankerCandidate = {
+        id: '1',
+        content: 'function test() {}',
+        payload: {
+          hierarchyDisplay: '',
+          filePath: '',
+          type: 'function',
+          startLine: 0,
+          endLine: 0
+        }
+      }
+
+      const contextInfo = (reranker as any)['buildContextInfo'](candidate)
+
+      expect(contextInfo).toBe('')
     })
   })
 

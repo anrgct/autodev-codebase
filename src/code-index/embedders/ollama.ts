@@ -77,7 +77,7 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
             if (proxyUrl) {
                 try {
                     dispatcher = new ProxyAgent(proxyUrl)
-                    console.log('✓ Ollama using undici ProxyAgent:', proxyUrl)
+                    console.log('✓ Ollama Embedding using undici ProxyAgent:', proxyUrl)
                 } catch (error) {
                     console.error('✗ Failed to create undici ProxyAgent for Ollama:', error)
                 }

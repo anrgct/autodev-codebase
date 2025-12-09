@@ -39,8 +39,6 @@ export class CodeIndexSearchService {
 			throw new Error(`Code index is not ready for search. Current state: ${currentState}`)
 		}
 
-		query = "search_code: " + query // Prefix query for better context
-
 		// Handle directory prefix from filter
 		let normalizedPrefix = ""
 		if (filter?.directoryPrefix) {

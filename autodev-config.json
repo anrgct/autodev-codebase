@@ -22,5 +22,7 @@
   "rerankerProvider": "ollama-llm",
   "rerankerOllamaBaseUrl": "http://localhost:11434",
   "rerankerOllamaModelId": "qwen3-vl:2b-instruct",
-  "rerankerMinScore": 5.0
+  "rerankerMinScore": 5.0,
+  "rerankerBatchSize": 10,
+  "searchMaxResults": 50
 }

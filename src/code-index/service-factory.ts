@@ -287,7 +287,8 @@ export class CodeIndexServiceFactory {
 		if (config.provider === 'ollama-llm') {
 			return new OllamaLLMReranker(
 				config.ollamaBaseUrl || 'http://localhost:11434',
-				config.ollamaModelId || 'gemma3n:e2b'
+				config.ollamaModelId || 'qwen3-vl:4b-instruct',
+				config.batchSize || 10
 			)
 		}
 

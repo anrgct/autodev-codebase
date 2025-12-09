@@ -181,7 +181,7 @@ export class MemoryVectorSearch {
 
       console.log('📝 开始搜索，查询:', query)
       // 获取查询向量
-      const queryResponse = await this.embedder.createEmbeddings(["search_code: " + query])
+      const queryResponse = await this.embedder.createEmbeddings([query])
       const queryVector = queryResponse.embeddings[0]
       console.log('📝 查询向量维度:', queryVector.length)
 

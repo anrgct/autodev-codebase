@@ -191,8 +191,8 @@ const { values, positionals } = parseArgs({
  * Print help message
  */
 function printHelp(): void {
-  getLogger().info(`
-@autodev/codebase - Simplified CLI (No React/Ink dependencies)
+  console.log(`
+@autodev/codebase - Simplified CLI Codebase
 
 Usage:
   codebase --serve               Start MCP HTTP MCP server
@@ -514,14 +514,14 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
       }
     }
 
+    // 使用新的格式化函数显示搜索结果，即使没有结果也会显示友好的提示
+    const formattedOutput = formatSearchResults(results as SearchResult[], query);
+    console.log(formattedOutput);
+
     if (!results || results.length === 0) {
       getLogger().info('No results found');
       return;
     }
-
-    // 使用新的格式化函数显示搜索结果
-    const formattedOutput = formatSearchResults(results as SearchResult[], query);
-    console.log(formattedOutput);
   } catch (error) {
     if (error instanceof Error) {
       getLogger().error('Search failed:', error.message);

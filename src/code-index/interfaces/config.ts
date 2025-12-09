@@ -130,6 +130,7 @@ export interface CodeIndexConfig {
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerMinScore?: number
+	rerankerBatchSize?: number
 }
 
 /**
