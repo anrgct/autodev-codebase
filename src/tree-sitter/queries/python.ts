@@ -10,12 +10,23 @@ export default `
   definition: (class_definition
     name: (identifier) @name.definition.class)) @definition.class
 
-; Function and method definitions (including async and decorated)
+; Function definitions (including async and decorated)
 (function_definition
+  name: (identifier) @name.definition.function) @definition.function
+
+; Async function definitions
+(function_definition
+  "async"
   name: (identifier) @name.definition.function) @definition.function
 
 (decorated_definition
   definition: (function_definition
+    name: (identifier) @name.definition.function)) @definition.function
+
+; Decorated async functions
+(decorated_definition
+  definition: (function_definition
+    "async"
     name: (identifier) @name.definition.function)) @definition.function
 
 ; Lambda expressions
@@ -70,4 +81,8 @@ export default `
   (assignment
     left: (identifier) @name.definition.type
     type: (type))) @definition.type_annotation
+
+; Docstrings - string expressions at the beginning of functions/classes
+(expression_statement
+  (string) @docstring)
 `

@@ -1,11 +1,15 @@
 import http from 'http';
 
+const collection = 'ws-d7947ff78f9f219d';
+const filePath = 'model.py';
+// const collection = 'ws-0111688d7ed1a21b';
+// const filePath = 'ultralytics/engine/model.py';
 // 配置
 const config = {
     host: 'localhost',
     port: 6333,
-    collection: 'ws-d7947ff78f9f219d',
-    endpoint: '/collections/ws-d7947ff78f9f219d/points/scroll'
+    collection: collection,
+    endpoint: `/collections/${collection}/points/scroll`
 };
 
 /**
@@ -168,16 +172,16 @@ function makeQdrantRequest() {
         // with_payload: true,  // 包含payload
         // with_vector: false,   // 不包含向量数据（通常很大）
         // "query": "",
-        // "filter": {
-        //     "should": [
-        //         {
-        //             "key": "filePath",
-        //             "match": {
-        //                 "text": "package"
-        //             }
-        //         }
-        //     ]
-        // }
+        "filter": {
+            "should": [
+                {
+                    "key": "filePath",
+                    "match": {
+                        "text": filePath
+                    }
+                }
+            ]
+        }
     });
     console.log('请求体:', requestBody);
 
@@ -194,8 +198,8 @@ function makeQdrantRequest() {
         res.on('end', () => {
             try {
                 const response = JSON.parse(data);
-                console.log('\n=== Qdrant 原始响应数据 ===');
-                console.log(data);
+                // console.log('\n=== Qdrant 原始响应数据 ===');
+                // console.log(data);
 
                 if (response.result && response.result.points) {
                     console.log(`\n找到 ${response.result.points.length} 个点`);
@@ -233,11 +237,13 @@ function makeQdrantRequest() {
 function checkQdrantHealth() {
     console.log('检查Qdrant服务状态...');
 
+    // 使用Qdrant的正确健康检查端点 - 检查collections列表
     const options = {
         hostname: config.host,
         port: config.port,
-        path: '/health',
-        method: 'GET'
+        path: '/collections',
+        method: 'GET',
+        timeout: 5000
     };
 
     const req = http.request(options, (res) => {
@@ -248,8 +254,30 @@ function checkQdrantHealth() {
 
         res.on('end', () => {
             if (res.statusCode === 200) {
-                console.log('✅ Qdrant服务正常运行');
-                makeQdrantRequest();
+                try {
+                    const response = JSON.parse(data);
+                    console.log('✅ Qdrant服务正常运行');
+                    console.log(`📋 可用集合数量: ${response.result?.collections?.length || 0}`);
+
+                    // 检查目标集合是否存在
+                    const targetCollection = response.result?.collections?.find(
+                        col => col.name === config.collection
+                    );
+
+                    if (targetCollection) {
+                        console.log(`✅ 找到目标集合: ${config.collection}`);
+                        console.log(`📊 集合信息: ${targetCollection.points_count || 0} 个点`);
+                    } else {
+                        console.log(`⚠️  目标集合不存在: ${config.collection}`);
+                        console.log('可用集合:', response.result?.collections?.map(col => col.name) || []);
+                    }
+
+                    makeQdrantRequest();
+                } catch (parseError) {
+                    console.log('⚠️  响应解析失败，但服务似乎正在运行');
+                    console.log('响应内容:', data);
+                    makeQdrantRequest();
+                }
             } else {
                 console.log(`❌ Qdrant健康检查失败: ${res.statusCode}`);
                 console.log('响应内容:', data);
@@ -262,9 +290,15 @@ function checkQdrantHealth() {
     req.on('error', (error) => {
         console.error('❌ 无法连接到Qdrant服务:', error.message);
         console.log('\n请确保:');
-        console.log('1. Qdrant正在运行');
+        console.log('1. Qdrant正在运行 (docker run -p 6333:6333 qdrant/qdrant)');
         console.log('2. 端口6333未被占用');
         console.log('3. 防火墙允许访问');
+    });
+
+    req.on('timeout', () => {
+        console.error('❌ 健康检查超时');
+        req.destroy();
+        console.log('🚫 由于超时，跳过数据请求');
     });
 
     req.end();
@@ -272,7 +306,6 @@ function checkQdrantHealth() {
 
 // 运行脚本
 console.log('🔍 Qdrant 数据格式化器');
-console.log('基于 format-request-results.js 的输出格式');
 console.log('='.repeat(60));
 console.log(`目标服务器: ${config.host}:${config.port}`);
 console.log(`集合: ${config.collection}`);

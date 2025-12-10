@@ -310,16 +310,22 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 	captures.forEach((capture) => {
 		const { node, name } = capture
 
-		// Skip captures that don't represent definitions
-		if (!name.includes("definition") && !name.includes("name")) {
+		// Skip captures that don't represent definitions or docstrings
+		if (!name.includes("definition") && !name.includes("name") && name !== "docstring") {
 			return
 		}
 
-		// Get the parent node that contains the full definition
-		const definitionNode = name.includes("name") ? node.parent : node
+		// Skip name definitions to avoid duplicates - we'll process the parent definition instead
+		if (name.includes("name.definition")) {
+			return
+		}
+
+		// For docstrings, use the actual node
+		// For definitions, use the definition node itself
+		const definitionNode = name === "docstring" ? node : node
 		if (!definitionNode) return
 
-		// Get the start and end lines of the full definition
+		// Get the start and end lines of the definition
 		const startLine = definitionNode.startPosition.row
 		const endLine = definitionNode.endPosition.row
 		const lineCount = endLine - startLine + 1
@@ -341,37 +347,27 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 		// Check if this is a valid component definition (not an HTML element)
 		const startLineContent = lines[startLine].trim()
 
-		// Special handling for component name definitions
-		if (name.includes("name.definition")) {
-			// Extract component name
-			const componentName = node.text
-
-			// Add component name to output regardless of HTML filtering
-			if (!processedLines.has(lineKey) && componentName) {
-				formattedOutput += `${startLine + 1}--${endLine + 1} | ${lines[startLine]}\n`
-				processedLines.add(lineKey)
-			}
-		}
-		// For other component definitions
-		else if (isNotHtmlElement(startLineContent)) {
-			formattedOutput += `${startLine + 1}--${endLine + 1} | ${lines[startLine]}\n`
-			processedLines.add(lineKey)
-
-			// If this is part of a larger definition, include its non-HTML context
-			if (node.parent && node.parent.lastChild) {
-				const contextEnd = node.parent.lastChild.endPosition.row
-				const contextSpan = contextEnd - node.parent.startPosition.row + 1
-
-				// Only include context if it spans multiple lines
-				if (contextSpan >= getMinComponentLines()) {
-					// Add the full range first
-					const rangeKey = `${node.parent.startPosition.row}-${contextEnd}`
-					if (!processedLines.has(rangeKey)) {
-						formattedOutput += `${node.parent.startPosition.row + 1}--${contextEnd + 1} | ${lines[node.parent.startPosition.row]}\n`
-						processedLines.add(rangeKey)
-					}
+		// Special handling for docstrings
+		if (name === "docstring") {
+			// For docstrings, only show the docstring itself
+			const docstringEndLine = node.endPosition.row
+			const docstringLineCount = docstringEndLine - startLine + 1
+			
+			// Only include if the docstring spans at least the minimum lines
+			if (docstringLineCount >= getMinComponentLines()) {
+				const docstringKey = `${startLine}-${docstringEndLine}`
+				if (!processedLines.has(docstringKey)) {
+					formattedOutput += `${startLine + 1}--${docstringEndLine + 1} | ${lines[startLine]}\n`
+					processedLines.add(docstringKey)
 				}
 			}
+			return
+		}
+
+		// For other component definitions (classes, functions, etc.)
+		if (isNotHtmlElement(startLineContent)) {
+			formattedOutput += `${startLine + 1}--${endLine + 1} | ${lines[startLine]}\n`
+			processedLines.add(lineKey)
 		}
 	})
 

@@ -168,7 +168,7 @@ async function loadLanguage(langName: string) {
 let isParserInitialized = false
 let initializationPromise: Promise<void> | null = null
 
-async function initializeParser() {
+export async function initializeParser() {
 	// If already initialized, return immediately
 	if (isParserInitialized) {
 		return
