@@ -9,6 +9,38 @@ import { scannerExtensions, shouldUseFallbackChunking } from "../shared/supporte
 import { MAX_BLOCK_CHARS, MIN_BLOCK_CHARS, MIN_CHUNK_REMAINDER_CHARS, MAX_CHARS_TOLERANCE_FACTOR } from "../constants"
 
 /**
+ * Node types that represent "leaf" definitions - functions/methods that should not drill down
+ * to children when oversized. Instead, they should be chunked by lines to preserve implementation.
+ * 
+ * Container types like class_declaration, module, namespace are NOT included here,
+ * as they should continue to drill down to process their members.
+ */
+const LEAF_DEFINITION_TYPES = new Set([
+	// JavaScript/TypeScript
+	'function_declaration',
+	'function_definition',
+	'method_definition',
+	'arrow_function',
+	'function_expression',
+	// Python
+	'function_definition',
+	// Go
+	'function_declaration',
+	'method_declaration',
+	// Rust
+	'function_item',
+	// Java/C#/C++
+	'method_declaration',
+	'constructor_declaration',
+	'function_definition',
+	// Ruby
+	'method',
+	// PHP
+	'function_definition',
+	'method_declaration',
+])
+
+/**
  * Markdown header information for building parent chains
  */
 interface MarkdownHeader {
@@ -214,17 +246,31 @@ export class CodeParser implements ICodeParser {
 			if (currentNode.text && currentNode.text.length >= MIN_BLOCK_CHARS) {
 				// If it also exceeds the maximum character limit, try to break it down
 				if (currentNode.text.length > MAX_BLOCK_CHARS * MAX_CHARS_TOLERANCE_FACTOR) {
-					if (currentNode.children && currentNode.children.length > 0) {
-						// If it has children, process them instead
+					// Check if this is a "leaf" definition (function/method) that should not drill down
+					const isLeafDefinition = LEAF_DEFINITION_TYPES.has(currentNode.type)
+					
+					if (isLeafDefinition) {
+						// For functions/methods: chunk by lines instead of drilling down to children
+						// This ensures implementation is captured, not just docstrings
+						const chunkedBlocks = this._chunkDefinitionNodeByLines(
+							currentNode,
+							filePath,
+							fileHash,
+							seenSegmentHashes,
+							nodeIdentifierMap,
+						)
+						results.push(...chunkedBlocks)
+					} else if (currentNode.children && currentNode.children.length > 0) {
+						// For containers (classes, modules): drill down to process members
 						queue.push(...currentNode.children)
 					} else {
-						// If it's a leaf node, chunk it (passing MIN_BLOCK_CHARS as per Task 1 Step 5)
-						// Note: _chunkLeafNodeByLines logic might need further adjustment later
+						// For other leaf nodes: chunk by lines
 						const chunkedBlocks = this._chunkLeafNodeByLines(
 							currentNode,
 							filePath,
 							fileHash,
 							seenSegmentHashes,
+							nodeIdentifierMap,
 						)
 						results.push(...chunkedBlocks)
 					}
@@ -466,6 +512,7 @@ export class CodeParser implements ICodeParser {
 		filePath: string,
 		fileHash: string,
 		seenSegmentHashes: Set<string>,
+		nodeIdentifierMap: Map<treeSitter.SyntaxNode, string>
 	): CodeBlock[] {
 		if (!node.text) {
 			console.warn(`Node text is undefined for ${node.type} in ${filePath}`)
@@ -473,13 +520,74 @@ export class CodeParser implements ICodeParser {
 		}
 		const lines = node.text.split("\n")
 		const baseStartLine = node.startPosition.row + 1
+		
+		// Build parent chain and hierarchy display to preserve context
+		// For non-definition nodes (like string_content), we still want to show
+		// which class/function they belong to
+		const parentChain = this.buildParentChain('tree-sitter', node, nodeIdentifierMap)
+		const identifier = null // Leaf nodes like string_content don't have their own identifier
+		const type = node.type
+		const hierarchyDisplay = this.buildHierarchyDisplay(parentChain, identifier, type)
+		
 		return this._chunkTextByLines(
 			lines,
 			filePath,
 			fileHash,
-			node.type, // Use the node's type
+			type,
 			seenSegmentHashes,
 			baseStartLine,
+			{
+				identifier,
+				parentChain,
+				hierarchyDisplay,
+				chunkSourceOverride: 'tree-sitter'
+			}
+		)
+	}
+
+	/**
+	 * Chunks a definition node (function/method) by lines while preserving metadata.
+	 * This method is used for oversized leaf definition nodes to ensure their entire
+	 * implementation is captured, not just docstrings or large child nodes.
+	 */
+	private _chunkDefinitionNodeByLines(
+		node: treeSitter.SyntaxNode,
+		filePath: string,
+		fileHash: string,
+		seenSegmentHashes: Set<string>,
+		nodeIdentifierMap: Map<treeSitter.SyntaxNode, string>
+	): CodeBlock[] {
+		if (!node.text) {
+			console.warn(`Node text is undefined for ${node.type} in ${filePath}`)
+			return []
+		}
+
+		const lines = node.text.split("\n")
+		const baseStartLine = node.startPosition.row + 1
+
+		// Extract definition metadata to preserve across all chunks
+		const identifier = nodeIdentifierMap.get(node) ||
+			node.childForFieldName("name")?.text ||
+			node.children?.find((c) => c.type === "identifier")?.text ||
+			null
+		const type = node.type
+		const parentChain = this.buildParentChain('tree-sitter', node, nodeIdentifierMap)
+		const hierarchyDisplay = this.buildHierarchyDisplay(parentChain, identifier, type)
+
+		// Call line chunking with metadata so all chunks share the same hierarchy
+		return this._chunkTextByLines(
+			lines,
+			filePath,
+			fileHash,
+			type,
+			seenSegmentHashes,
+			baseStartLine,
+			{
+				identifier,
+				parentChain,
+				hierarchyDisplay,
+				chunkSourceOverride: 'tree-sitter'
+			}
 		)
 	}
 

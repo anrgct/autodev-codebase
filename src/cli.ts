@@ -140,6 +140,101 @@ ${codeChunk}`;
   return summary + formattedResults.join('\n\n');
 }
 
+function formatSearchResultsAsJson(results: SearchResult[], query: string): string {
+  if (!results) {
+    return JSON.stringify({
+      query,
+      totalResults: 0,
+      totalFiles: 0,
+      results: []
+    }, null, 2);
+  }
+
+  // 按文件路径分组搜索结果
+  const resultsByFile = new Map<string, SearchResult[]>();
+  results.forEach((result: SearchResult) => {
+    const filePath = result.payload?.filePath || 'Unknown file';
+    if (!resultsByFile.has(filePath)) {
+      resultsByFile.set(filePath, []);
+    }
+    resultsByFile.get(filePath)!.push(result);
+  });
+
+  // 对每个文件的结果进行处理
+  const fileResults = Array.from(resultsByFile.entries()).map(([filePath, fileResults]) => {
+    // 对同一文件的结果按行号排序
+    fileResults.sort((a, b) => {
+      const lineA = a.payload?.startLine || 0;
+      const lineB = b.payload?.startLine || 0;
+      return lineA - lineB;
+    });
+
+    // 去重：移除被其他片段包含的重复片段
+    const deduplicatedResults = [];
+    for (let i = 0; i < fileResults.length; i++) {
+      const current = fileResults[i];
+      const currentStart = current.payload?.startLine || 0;
+      const currentEnd = current.payload?.endLine || 0;
+
+      // 检查当前片段是否被其他片段包含
+      let isContained = false;
+      for (let j = 0; j < fileResults.length; j++) {
+        if (i === j) continue; // 跳过自己
+
+        const other = fileResults[j];
+        const otherStart = other.payload?.startLine || 0;
+        const otherEnd = other.payload?.endLine || 0;
+
+        // 如果当前片段被其他片段完全包含，则标记为重复
+        if (otherStart <= currentStart && otherEnd >= currentEnd &&
+            !(otherStart === currentStart && otherEnd === currentEnd)) {
+          isContained = true;
+          break;
+        }
+      }
+
+      // 如果没有被包含，则保留这个片段
+      if (!isContained) {
+        deduplicatedResults.push(current);
+      }
+    }
+
+    // 计算平均分数
+    const avgScore = deduplicatedResults.length > 0
+      ? deduplicatedResults.reduce((sum, r) => sum + (r.score || 0), 0) / deduplicatedResults.length
+      : 0;
+
+    return {
+      filePath,
+      avgScore: parseFloat(avgScore.toFixed(3)),
+      snippetCount: deduplicatedResults.length,
+      originalCount: fileResults.length,
+      duplicatesRemoved: fileResults.length - deduplicatedResults.length,
+      snippets: deduplicatedResults.map((result: SearchResult) => {
+        const startLine = result.payload?.startLine;
+        const endLine = result.payload?.endLine;
+        return {
+          code: result.payload?.codeChunk || '',
+          startLine: startLine,
+          endLine: endLine,
+          lineRange: startLine !== undefined && endLine !== undefined ? `L${startLine}-${endLine}` : '',
+          hierarchy: result.payload?.hierarchyDisplay || '',
+          score: parseFloat((result.score || 0).toFixed(3))
+        };
+      })
+    };
+  });
+
+  const jsonResponse = {
+    query,
+    totalResults: results.length,
+    totalFiles: resultsByFile.size,
+    files: fileResults
+  };
+
+  return JSON.stringify(jsonResponse, null, 2);
+}
+
 // CLI Options interface
 interface SimpleCliOptions {
   path: string;
@@ -154,6 +249,7 @@ interface SimpleCliOptions {
   force: boolean;
   storage?: string;
   cache?: string;
+  json: boolean;
 }
 
 // Parse command line arguments using Node.js native parseArgs
@@ -183,6 +279,8 @@ const { values, positionals } = parseArgs({
     // Storage paths
     storage: { type: 'string' },
     cache: { type: 'string' },
+    // JSON output
+    json: { type: 'boolean' },
   },
   allowPositionals: true
 });
@@ -215,6 +313,7 @@ Options:
   --force                       Force reindex all files, ignoring cache
   --storage <path>              Storage directory path
   --cache <path>                Cache directory path
+  --json                        Output search results in JSON format
 
 Examples:
   # Start MCP server
@@ -228,6 +327,9 @@ Examples:
 
   # Search for code
   codebase --search="user authentication"
+
+  # Search for code in JSON format
+  codebase --search="user authentication" --json
 
   # Clear index
   codebase --clear --path=/my/project
@@ -264,6 +366,7 @@ function resolveOptions(): SimpleCliOptions {
     force: !!values.force,
     storage: values.storage,
     cache: values.cache,
+    json: !!values.json,
   };
 }
 
@@ -514,9 +617,14 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
       }
     }
 
-    // 使用新的格式化函数显示搜索结果，即使没有结果也会显示友好的提示
-    const formattedOutput = formatSearchResults(results as SearchResult[], query);
-    console.log(formattedOutput);
+    // 根据json选项选择输出格式
+    if (options.json) {
+      const jsonOutput = formatSearchResultsAsJson(results as SearchResult[], query);
+      console.log(jsonOutput);
+    } else {
+      const formattedOutput = formatSearchResults(results as SearchResult[], query);
+      console.log(formattedOutput);
+    }
 
     if (!results || results.length === 0) {
       getLogger().info('No results found');

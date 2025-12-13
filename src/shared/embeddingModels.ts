@@ -28,8 +28,9 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
 		"mxbai-embed-large": { dimension: 1024 },
 		"all-minilm": { dimension: 384 },
 		"qwen3-embedding:0.6b": { dimension: 1024 },
-		"qwen3-embedding:4b": { dimension: 4096 },
-		"qwen3-embedding:8b": { dimension: 2560 },
+		"qwen3-embedding:4b": { dimension: 2560 },
+		"qwen3-embedding:8b": { dimension: 4096 },
+		"embeddinggemma": { dimension: 768 },
 		// Add default Ollama model if applicable, e.g.:
 		// 'default': { dimension: 768 } // Assuming a default dimension
 	},
@@ -170,6 +171,11 @@ export function getModelScoreThreshold(provider: EmbedderProvider, modelId: stri
 		"nomic-embed-text": 0.45,
 		"mxbai-embed-large": 0.40,
 		"all-minilm": 0.50,
+
+		// Qwen3 embedding models - smaller models need lower thresholds
+		"qwen3-embedding:0.6b": 0.25,  // Smallest model, lowest threshold
+		"qwen3-embedding:4b": 0.30,    // Medium model
+		"qwen3-embedding:8b": 0.35,    // Largest model, similar to high-quality models
 
 		// Gemini models
 		"text-embedding-004": 0.45,
