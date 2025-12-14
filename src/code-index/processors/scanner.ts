@@ -371,6 +371,7 @@ export class DirectoryScanner implements IDirectoryScanner {
 			
 			itemToPoint: (block, embedding) => {
 				const normalizedAbsolutePath = generateNormalizedAbsolutePath(block.file_path, scanWorkspace)
+				const filePath = generateRelativeFilePath(normalizedAbsolutePath, scanWorkspace)
 
 				// Use segmentHash for unique ID generation to handle multiple segments from same line
 				const pointId = uuidv5(block.segmentHash, QDRANT_CODE_BLOCK_NAMESPACE)
@@ -379,7 +380,8 @@ export class DirectoryScanner implements IDirectoryScanner {
 					id: pointId,
 					vector: embedding,
 					payload: {
-						filePath: generateRelativeFilePath(normalizedAbsolutePath, scanWorkspace),
+						filePath: filePath,
+						filePathLower: filePath.toLowerCase(),
 						codeChunk: block.content,
 						startLine: block.start_line,
 						endLine: block.end_line,

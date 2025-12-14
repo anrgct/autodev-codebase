@@ -39,19 +39,8 @@ export class CodeIndexSearchService {
 			throw new Error(`Code index is not ready for search. Current state: ${currentState}`)
 		}
 
-		// Handle directory prefix from filter
-		let normalizedPrefix = ""
-		if (filter?.directoryPrefix) {
-			normalizedPrefix = filter.directoryPrefix
-			// Ensure prefix ends with path separator
-			if (!normalizedPrefix.endsWith(path.sep)) {
-				normalizedPrefix += path.sep
-			}
-			// Remove leading separator to ensure consistent matching
-			if (normalizedPrefix.startsWith(path.sep)) {
-				normalizedPrefix = normalizedPrefix.slice(1)
-			}
-		}
+		// 使用统一的filter对象，不再单独处理directoryPrefix
+		// 所有过滤条件都通过pathFilters参数传递
 
 		try {
 			// Generate embedding for query
@@ -61,8 +50,15 @@ export class CodeIndexSearchService {
 				throw new Error("Failed to generate embedding for query.")
 			}
 
-			// Perform search
-			let results = await this.vectorStore.search(vector, normalizedPrefix, minScore, maxResults)
+			// Perform search - 直接传递filter对象
+			let results = await this.vectorStore.search(vector, {
+				...filter,
+				minScore: filter?.minScore ?? minScore,
+				limit: filter?.limit ?? maxResults
+			})
+
+			// 确保结果按分数降序排序
+			results.sort((a, b) => b.score - a.score)
 
 			// If reranker is enabled, rerank the results
 			if (this.reranker && results.length > 0) {

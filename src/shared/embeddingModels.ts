@@ -81,7 +81,7 @@ export function getModelDimension(provider: EmbedderProvider, modelId: string): 
 	const modelProfile = providerProfiles[modelId]
 
 	if (!modelProfile) {
-		console.warn(`Model not found for provider ${provider}: ${modelId}`)
+		// console.warn(`Model not found for provider ${provider}: ${modelId}`)
 		return undefined // Or potentially return a default/fallback dimension?
 	}
 

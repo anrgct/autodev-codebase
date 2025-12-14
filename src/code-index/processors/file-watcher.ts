@@ -373,6 +373,7 @@ export class FileWatcher implements ICodeFileWatcher {
 					itemToPoint: (block, embedding) => {
 						// Use the same logic as DirectoryScanner
 						const normalizedAbsolutePath = generateNormalizedAbsolutePath(block.file_path, this.workspacePath)
+						const filePath = generateRelativeFilePath(normalizedAbsolutePath, this.workspacePath)
 						const stableName = `${normalizedAbsolutePath}:${block.start_line}`
 						const pointId = uuidv5(stableName, QDRANT_CODE_BLOCK_NAMESPACE)
 
@@ -380,7 +381,8 @@ export class FileWatcher implements ICodeFileWatcher {
 							id: pointId,
 							vector: embedding,
 							payload: {
-								filePath: generateRelativeFilePath(normalizedAbsolutePath, this.workspacePath),
+								filePath: filePath,
+								filePathLower: filePath.toLowerCase(),
 								codeChunk: block.content,
 								startLine: block.start_line,
 								endLine: block.end_line,
@@ -538,6 +540,7 @@ export class FileWatcher implements ICodeFileWatcher {
 
 				pointsToUpsert = blocks.map((block, index) => {
 					const normalizedAbsolutePath = generateNormalizedAbsolutePath(block.file_path, this.workspacePath)
+					const filePath = generateRelativeFilePath(normalizedAbsolutePath, this.workspacePath)
 					const stableName = `${normalizedAbsolutePath}:${block.start_line}`
 					const pointId = uuidv5(stableName, QDRANT_CODE_BLOCK_NAMESPACE)
 
@@ -545,7 +548,8 @@ export class FileWatcher implements ICodeFileWatcher {
 						id: pointId,
 						vector: embeddings[index],
 						payload: {
-							filePath: generateRelativeFilePath(normalizedAbsolutePath, this.workspacePath),
+							filePath: filePath,
+							filePathLower: filePath.toLowerCase(),
 							codeChunk: block.content,
 							startLine: block.start_line,
 							endLine: block.end_line,

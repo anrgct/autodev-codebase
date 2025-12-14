@@ -143,7 +143,7 @@ describe("QdrantVectorStore", () => {
 					field_schema: "keyword",
 				})
 			}
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(6)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(7)
 		})
 		it("should not create a new collection if one exists with matching vectorSize and return false", async () => {
 			// Mock getCollection to return existing collection info with matching vector size
@@ -177,7 +177,7 @@ describe("QdrantVectorStore", () => {
 					field_schema: "keyword",
 				})
 			}
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(6)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(7)
 		})
 		it("should recreate collection if it exists but vectorSize mismatches and return true", async () => {
 			const differentVectorSize = 768
@@ -231,7 +231,7 @@ describe("QdrantVectorStore", () => {
 					field_schema: "keyword",
 				})
 			}
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(6)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(7)
 			;(console.warn as any).mockRestore() // Restore console.warn
 		})
 		it("should log warning for non-404 errors but still create collection", async () => {
@@ -245,7 +245,7 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.getCollection).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.deleteCollection).not.toHaveBeenCalled()
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(6)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(7)
 			expect(console.warn).toHaveBeenCalledWith(
 				expect.stringContaining(`Warning during getCollectionInfo for "${expectedCollectionName}"`),
 				genericError.message,
@@ -292,10 +292,10 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledTimes(1)
 
 			// Verify all payload index creations were attempted (type + 5 pathSegments)
-			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(6)
+			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledTimes(7)
 
-			// Verify warnings were logged for each failed index
-			expect(console.warn).toHaveBeenCalledTimes(6)
+			    // Verify warnings were logged for each failed index
+			    expect(console.warn).toHaveBeenCalledTimes(7)
 			// First call for 'type'
 			expect(console.warn).toHaveBeenCalledWith(
 				expect.stringContaining(`Could not create payload index for type`),
@@ -623,22 +623,20 @@ describe("QdrantVectorStore", () => {
 						id: "test-id-1",
 						score: 0.85,
 						payload: {
-							filePath: "src/test.ts",
-							codeChunk: "test code",
+							filePath: "src/components/Button.tsx",
+							codeChunk: "button code",
 							startLine: 1,
 							endLine: 5,
-							pathSegments: { "0": "src", "1": "test.ts" },
 						},
 					},
 					{
 						id: "test-id-2",
 						score: 0.75,
 						payload: {
-							filePath: "src/utils.ts",
-							codeChunk: "utility code",
-							startLine: 10,
-							endLine: 15,
-							pathSegments: { "0": "src", "1": "utils.ts" },
+							filePath: "src/components/Input.tsx",
+							codeChunk: "input code",
+							startLine: 1,
+							endLine: 3,
 						},
 					},
 				],
@@ -668,7 +666,7 @@ describe("QdrantVectorStore", () => {
 
 		it("should apply pathFilters correctly", async () => {
 			const queryVector = [0.1, 0.2, 0.3]
-			const directoryPrefix = "src/components"
+			const filter = { pathFilters: ["src/components"] }
 			const mockQdrantResults = {
 				points: [
 					{
@@ -676,10 +674,10 @@ describe("QdrantVectorStore", () => {
 						score: 0.85,
 						payload: {
 							filePath: "src/components/Button.tsx",
+							filePathLower: "src/components/button.tsx",
 							codeChunk: "button code",
 							startLine: 1,
 							endLine: 5,
-							pathSegments: { "0": "src", "1": "components", "2": "Button.tsx" },
 						},
 					},
 				],
@@ -687,14 +685,13 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			const results = await vectorStore.search(queryVector, directoryPrefix)
+			const results = await vectorStore.search(queryVector, filter)
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
 				filter: {
 					must: [
-						{ key: "pathSegments.0", match: { value: "src" } },
-						{ key: "pathSegments.1", match: { value: "components" } },
+						{ key: "filePathLower", match: { text: "src/components" } },
 					],
 					must_not: [{ key: "type", match: { value: "metadata" } }],
 				},
@@ -713,11 +710,12 @@ describe("QdrantVectorStore", () => {
 		it("should use custom minScore when provided", async () => {
 			const queryVector = [0.1, 0.2, 0.3]
 			const customMinScore = 0.8
+			const filter = { minScore: customMinScore }
 			const mockQdrantResults = { points: [] }
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, undefined, customMinScore)
+			await vectorStore.search(queryVector, filter)
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
@@ -838,23 +836,20 @@ describe("QdrantVectorStore", () => {
 			expect(results).toEqual([])
 		})
 
-		it("should handle complex directory prefix with multiple segments", async () => {
+		it("should handle complex path filters with multiple segments", async () => {
 			const queryVector = [0.1, 0.2, 0.3]
-			const directoryPrefix = "src/components/ui/forms"
+			const filter = { pathFilters: ["src/components/ui/forms"] }
 			const mockQdrantResults = { points: [] }
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, directoryPrefix)
+			await vectorStore.search(queryVector, filter)
 
 			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
 				query: queryVector,
 				filter: {
 					must: [
-						{ key: "pathSegments.0", match: { value: "src" } },
-						{ key: "pathSegments.1", match: { value: "components" } },
-						{ key: "pathSegments.2", match: { value: "ui" } },
-						{ key: "pathSegments.3", match: { value: "forms" } },
+						{ key: "filePathLower", match: { text: "src/components/ui/forms" } },
 					],
 					must_not: [{ key: "type", match: { value: "metadata" } }],
 				},

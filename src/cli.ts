@@ -11,7 +11,7 @@ import { CodebaseHTTPMCPServer } from './mcp/http-server.js';
 import { StdioToStreamableHTTPAdapter } from './mcp/stdio-adapter.js';
 import createSampleFiles from './examples/create-sample-files';
 import { getGlobalLogger, setGlobalLogger, Logger, LogLevel } from './utils/logger';
-import { VectorStoreSearchResult } from './code-index/interfaces';
+import { VectorStoreSearchResult, SearchFilter } from './code-index/interfaces';
 
 // Initialize global logger with CLI settings
 function initGlobalLogger(level: LogLevel) {
@@ -65,11 +65,11 @@ function formatSearchResults(results: SearchResult[], query: string): string {
   });
 
   const formattedResults = Array.from(resultsByFile.entries()).map(([filePath, fileResults]) => {
-    // 对同一文件的结果按行号排序
+    // 对同一文件的结果按分数降序排序
     fileResults.sort((a, b) => {
-      const lineA = a.payload?.startLine || 0;
-      const lineB = b.payload?.startLine || 0;
-      return lineA - lineB;
+      const scoreA = a.score || 0;
+      const scoreB = b.score || 0;
+      return scoreB - scoreA; // 降序排列
     });
 
     // 去重：移除被其他片段包含的重复片段
@@ -127,13 +127,24 @@ ${codeChunk}`;
       ? ` (${fileResults.length - deduplicatedResults.length} duplicates removed)`
       : '';
 
-    return `${'='.repeat(50)}\nFile: "${filePath}" | Avg Score: ${avgScore.toFixed(3)}${snippetInfo}${duplicateInfo}\n${'='.repeat(50)}\n${codeChunks}`;
+    return {
+      filePath,
+      avgScore,
+      formattedText: `${'='.repeat(50)}\nFile: "${filePath}" | Avg Score: ${avgScore.toFixed(3)}${snippetInfo}${duplicateInfo}\n${'='.repeat(50)}\n${codeChunks}`
+    };
   });
+
+  // 按文件平均分降序排序
+  formattedResults.sort((a, b) => b.avgScore - a.avgScore);
 
   const fileCount = resultsByFile.size;
   const summary = `Found ${results.length} result${results.length > 1 ? 's' : ''} in ${fileCount} file${fileCount > 1 ? 's' : ''} for: "${query}"
 
 `;
+
+  // 提取格式化后的文本
+  const formattedTexts = formattedResults.map(r => r.formattedText);
+  return summary + formattedTexts.join('\n\n');
 
 
 
@@ -145,91 +156,68 @@ function formatSearchResultsAsJson(results: SearchResult[], query: string): stri
     return JSON.stringify({
       query,
       totalResults: 0,
-      totalFiles: 0,
-      results: []
+      snippets: []
     }, null, 2);
   }
 
-  // 按文件路径分组搜索结果
-  const resultsByFile = new Map<string, SearchResult[]>();
-  results.forEach((result: SearchResult) => {
-    const filePath = result.payload?.filePath || 'Unknown file';
-    if (!resultsByFile.has(filePath)) {
-      resultsByFile.set(filePath, []);
-    }
-    resultsByFile.get(filePath)!.push(result);
+  // 首先确保结果按分数降序排序
+  results.sort((a, b) => {
+    const scoreA = a.score || 0;
+    const scoreB = b.score || 0;
+    return scoreB - scoreA; // 降序排列
   });
 
-  // 对每个文件的结果进行处理
-  const fileResults = Array.from(resultsByFile.entries()).map(([filePath, fileResults]) => {
-    // 对同一文件的结果按行号排序
-    fileResults.sort((a, b) => {
-      const lineA = a.payload?.startLine || 0;
-      const lineB = b.payload?.startLine || 0;
-      return lineA - lineB;
-    });
+  // 去重：移除被其他片段包含的重复片段
+  const deduplicatedResults = [];
+  for (let i = 0; i < results.length; i++) {
+    const current = results[i];
+    const currentStart = current.payload?.startLine || 0;
+    const currentEnd = current.payload?.endLine || 0;
 
-    // 去重：移除被其他片段包含的重复片段
-    const deduplicatedResults = [];
-    for (let i = 0; i < fileResults.length; i++) {
-      const current = fileResults[i];
-      const currentStart = current.payload?.startLine || 0;
-      const currentEnd = current.payload?.endLine || 0;
+    // 检查当前片段是否被其他片段包含
+    let isContained = false;
+    for (let j = 0; j < results.length; j++) {
+      if (i === j) continue; // 跳过自己
 
-      // 检查当前片段是否被其他片段包含
-      let isContained = false;
-      for (let j = 0; j < fileResults.length; j++) {
-        if (i === j) continue; // 跳过自己
+      const other = results[j];
+      const otherStart = other.payload?.startLine || 0;
+      const otherEnd = other.payload?.endLine || 0;
 
-        const other = fileResults[j];
-        const otherStart = other.payload?.startLine || 0;
-        const otherEnd = other.payload?.endLine || 0;
-
-        // 如果当前片段被其他片段完全包含，则标记为重复
-        if (otherStart <= currentStart && otherEnd >= currentEnd &&
-            !(otherStart === currentStart && otherEnd === currentEnd)) {
-          isContained = true;
-          break;
-        }
-      }
-
-      // 如果没有被包含，则保留这个片段
-      if (!isContained) {
-        deduplicatedResults.push(current);
+      // 如果当前片段被其他片段完全包含，则标记为重复
+      if (otherStart <= currentStart && otherEnd >= currentEnd &&
+          !(otherStart === currentStart && otherEnd === currentEnd)) {
+        isContained = true;
+        break;
       }
     }
 
-    // 计算平均分数
-    const avgScore = deduplicatedResults.length > 0
-      ? deduplicatedResults.reduce((sum, r) => sum + (r.score || 0), 0) / deduplicatedResults.length
-      : 0;
+    // 如果没有被包含，则保留这个片段
+    if (!isContained) {
+      deduplicatedResults.push(current);
+    }
+  }
 
+  // 转换格式
+  const snippets = deduplicatedResults.map((result: SearchResult) => {
+    const startLine = result.payload?.startLine;
+    const endLine = result.payload?.endLine;
     return {
-      filePath,
-      avgScore: parseFloat(avgScore.toFixed(3)),
-      snippetCount: deduplicatedResults.length,
-      originalCount: fileResults.length,
-      duplicatesRemoved: fileResults.length - deduplicatedResults.length,
-      snippets: deduplicatedResults.map((result: SearchResult) => {
-        const startLine = result.payload?.startLine;
-        const endLine = result.payload?.endLine;
-        return {
-          code: result.payload?.codeChunk || '',
-          startLine: startLine,
-          endLine: endLine,
-          lineRange: startLine !== undefined && endLine !== undefined ? `L${startLine}-${endLine}` : '',
-          hierarchy: result.payload?.hierarchyDisplay || '',
-          score: parseFloat((result.score || 0).toFixed(3))
-        };
-      })
+      filePath: result.payload?.filePath || 'Unknown file',
+      code: result.payload?.codeChunk || '',
+      startLine: startLine,
+      endLine: endLine,
+      lineRange: startLine !== undefined && endLine !== undefined ? `L${startLine}-${endLine}` : '',
+      hierarchy: result.payload?.hierarchyDisplay || '',
+      score: parseFloat((result.score || 0).toFixed(3))
     };
   });
 
   const jsonResponse = {
     query,
     totalResults: results.length,
-    totalFiles: resultsByFile.size,
-    files: fileResults
+    totalSnippets: deduplicatedResults.length,
+    duplicatesRemoved: results.length - deduplicatedResults.length,
+    snippets: snippets
   };
 
   return JSON.stringify(jsonResponse, null, 2);
@@ -240,7 +228,6 @@ interface SimpleCliOptions {
   path: string;
   port: number;
   host: string;
-  // Optional adapter settings (used when running in stdio adapter mode)
   serverUrl?: string;
   timeoutMs?: number;
   config?: string;
@@ -250,6 +237,7 @@ interface SimpleCliOptions {
   storage?: string;
   cache?: string;
   json: boolean;
+  pathFilters?: string;
 }
 
 // Parse command line arguments using Node.js native parseArgs
@@ -265,6 +253,8 @@ const { values, positionals } = parseArgs({
     // Path and config options
     path: { type: 'string', short: 'p', default: '.' },
     config: { type: 'string', short: 'c' },
+    // Search filtering options
+    'path-filters': { type: 'string', short: 'f' },
     // MCP server options
     port: { type: 'string', default: '3001' },
     host: { type: 'string', default: 'localhost' },
@@ -311,9 +301,16 @@ Options:
   --log-level <level>           Log level: debug|info|warn|error (default: info)
   --demo                        Create demo files in workspace
   --force                       Force reindex all files, ignoring cache
-  --storage <path>              Storage directory path
-  --cache <path>                Cache directory path
-  --json                        Output search results in JSON format
+  --storage <path>              Custom storage path
+  --cache <path>                Custom cache path
+  --json                        Output results in JSON format
+  --path-filters, -f <filters>   Filter search results by file path patterns (comma-separated)
+                                Examples:
+                                  -f ".ts,.js"                     # Only TypeScript and JavaScript files
+                                  -f "src/,.ts"                    # Only TypeScript files in src directory
+                                  -f "!.md,!.txt"                  # Exclude markdown and text files
+                                  -f "src/,.ts,!.test"             # TypeScript files in src, excluding test files
+
 
 Examples:
   # Start MCP server
@@ -367,6 +364,7 @@ function resolveOptions(): SimpleCliOptions {
     storage: values.storage,
     cache: values.cache,
     json: !!values.json,
+    pathFilters: values['path-filters'],
   };
 }
 
@@ -588,6 +586,21 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
   getLogger().info(`Query: "${query}"`);
   getLogger().info(`Workspace: ${options.path}`);
 
+  // Parse path filters if provided
+  const filter: SearchFilter = {};
+  if (options.pathFilters) {
+    const filters = options.pathFilters.split(',')
+      .map((f: string) => f.trim())
+      .map((f: string) => f.startsWith('=') ? f.slice(1) : f) // Remove leading '=' from short format args
+      .filter((f: string) => f.length > 0);
+    filter.pathFilters = filters;
+    getLogger().info(`Path filters: ${filters.join(', ')}`);
+  }
+  
+  // Debug: Log parsed options
+  getLogger().info(`Debug: pathFilters value = "${options.pathFilters}"`);
+  getLogger().info(`Debug: filter object =`, filter);
+
   // Use searchOnly to prevent background indexing from starting
   const manager = await initializeManager(options, { searchOnly: true });
   if (!manager) {
@@ -604,14 +617,14 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
     let results: VectorStoreSearchResult[];
 
     try {
-      results = await manager.searchIndex(query);
+      results = await manager.searchIndex(query, filter);
     } catch (error) {
       // 如果索引尚未准备好，则先执行一次索引再重试搜索
       if (error instanceof Error && error.message.startsWith('Code index is not ready for search')) {
         getLogger().info('Index is not ready. Running indexing before search...');
         await waitForIndexingCompletion(manager);
         getLogger().info('Retrying search after indexing...');
-        results = await manager.searchIndex(query);
+        results = await manager.searchIndex(query, filter);
       } else {
         throw error;
       }

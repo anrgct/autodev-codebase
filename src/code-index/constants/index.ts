@@ -8,7 +8,7 @@ const CODEBASE_INDEX_DEFAULTS = {
 } as const
 
 /**Parser */
-export const MAX_BLOCK_CHARS = 2000
+export const MAX_BLOCK_CHARS = 1000
 export const MIN_BLOCK_CHARS = 100
 export const MIN_CHUNK_REMAINDER_CHARS = 200 // Minimum characters for the *next* chunk after a split
 export const MAX_CHARS_TOLERANCE_FACTOR = 1.15 // 15% tolerance for max chars

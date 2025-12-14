@@ -23,16 +23,12 @@ export interface IVectorStore {
 	/**
 	 * Searches for similar vectors
 	 * @param queryVector Vector to search for
-	 * @param directoryPrefix Optional directory prefix to filter results
-	 * @param minScore Optional minimum score threshold
-	 * @param maxResults Optional maximum number of results to return
+	 * @param filter Optional search filter options
 	 * @returns Promise resolving to search results
 	 */
 	search(
 		queryVector: number[],
-		directoryPrefix?: string,
-		minScore?: number,
-		maxResults?: number,
+		filter?: SearchFilter,
 	): Promise<VectorStoreSearchResult[]>
 
 	/**
@@ -87,7 +83,6 @@ export interface IVectorStore {
 
 export interface SearchFilter {
 	pathFilters?: string[]
-	directoryPrefix?: string
 	minScore?: number
 	limit?: number
 }

@@ -297,6 +297,22 @@ export class QdrantVectorStore implements IVectorStore {
 				}
 			}
 		}
+
+		// Create index for filePathLower field for case-insensitive path filtering
+		try {
+			await this.client.createPayloadIndex(this.collectionName, {
+				field_name: "filePathLower",
+				field_schema: "keyword",
+			})
+		} catch (indexError: any) {
+			const errorMessage = (indexError?.message || "").toLowerCase()
+			if (!errorMessage.includes("already exists")) {
+				console.warn(
+					`[QdrantVectorStore] Could not create payload index for filePathLower on ${this.collectionName}. Details:`,
+					indexError?.message || indexError,
+				)
+			}
+		}
 	}
 
 	/**
@@ -372,63 +388,66 @@ export class QdrantVectorStore implements IVectorStore {
 	/**
 	 * Searches for similar vectors
 	 * @param queryVector Vector to search for
-	 * @param directoryPrefix Optional directory prefix to filter results
-	 * @param minScore Optional minimum score threshold
-	 * @param maxResults Optional maximum number of results to return
+	 * @param filter Optional search filter options
 	 * @returns Promise resolving to search results
 	 */
 	async search(
 		queryVector: number[],
-		directoryPrefix?: string,
-		minScore?: number,
-		maxResults?: number,
+		filter?: SearchFilter,
 	): Promise<VectorStoreSearchResult[]> {
 		try {
-			let filter:
-				| {
-						must: Array<{ key: string; match: { value: string } }>
-						must_not?: Array<{ key: string; match: { value: string } }>
-				  }
-				| undefined = undefined
+			const conditions: Array<{ key: string; match: { text: string } }> = []
+			const excludeConditions: Array<{ key: string; match: { text: string } }> = []
 
-			if (directoryPrefix) {
-				// Check if the path represents current directory
-				const normalizedPrefix = path.posix.normalize(directoryPrefix.replace(/\\/g, "/"))
-				// Note: path.posix.normalize("") returns ".", and normalize("./") returns "./"
-				if (normalizedPrefix === "." || normalizedPrefix === "./") {
-					// Don't create a filter - search entire workspace
-					filter = undefined
-				} else {
-					// Remove leading "./" from paths like "./src" to normalize them
-					const cleanedPrefix = path.posix.normalize(
-						normalizedPrefix.startsWith("./") ? normalizedPrefix.slice(2) : normalizedPrefix,
-					)
-					const segments = cleanedPrefix.split("/").filter(Boolean)
-					if (segments.length > 0) {
-						filter = {
-							must: segments.map((segment, index) => ({
-								key: `pathSegments.${index}`,
-								match: { value: segment },
-							})),
-						}
+			// 处理pathFilters（统一过滤）
+			if (filter?.pathFilters && filter.pathFilters.length > 0) {
+				for (const pattern of filter.pathFilters) {
+					const isExclude = pattern.startsWith('!')
+					const actualPattern = isExclude ? pattern.slice(1) : pattern
+					
+					// 使用小写字段进行大小写不敏感匹配
+					const condition = {
+						key: "filePathLower",
+						match: { text: actualPattern.toLowerCase() }
+					}
+					
+					if (isExclude) {
+						excludeConditions.push(condition)
+					} else {
+						conditions.push(condition)
 					}
 				}
 			}
 
-			// Always exclude metadata points at query-time to avoid wasting top-k
+			// 构建Qdrant过滤器
+			let qdrantFilter: any = undefined
+			
+			if (conditions.length > 0 || excludeConditions.length > 0) {
+				qdrantFilter = {}
+				
+				if (conditions.length > 0) {
+					qdrantFilter.must = conditions
+				}
+				
+				if (excludeConditions.length > 0) {
+					qdrantFilter.must_not = excludeConditions
+				}
+			}
+
+			// 合并现有的metadata排除
 			const metadataExclusion = {
 				must_not: [{ key: "type", match: { value: "metadata" } }],
 			}
 
-			const mergedFilter = filter
-				? { ...filter, must_not: [...(filter.must_not || []), ...metadataExclusion.must_not] }
+			const finalFilter = qdrantFilter
+				? { ...qdrantFilter, must_not: [...(qdrantFilter.must_not || []), ...metadataExclusion.must_not] }
 				: metadataExclusion
 
 			const searchRequest = {
 				query: queryVector,
-				filter: mergedFilter,
-				score_threshold: minScore ?? DEFAULT_SEARCH_MIN_SCORE,
-				limit: maxResults ?? DEFAULT_MAX_SEARCH_RESULTS,
+				filter: finalFilter,
+				score_threshold: filter?.minScore ?? DEFAULT_SEARCH_MIN_SCORE,
+				limit: filter?.limit ?? DEFAULT_MAX_SEARCH_RESULTS,
 				params: {
 					hnsw_ef: 128,
 					exact: false,
