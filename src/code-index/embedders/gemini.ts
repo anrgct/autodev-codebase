@@ -78,4 +78,12 @@ export class GeminiEmbedder implements IEmbedder {
             name: "gemini",
         }
     }
+
+    /**
+     * Gets the optimal batch size for this Gemini embedder
+     */
+    get optimalBatchSize(): number {
+        // Return recommended batch size for Gemini
+        return 40
+    }
 }

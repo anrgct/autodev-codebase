@@ -8,7 +8,7 @@ const CODEBASE_INDEX_DEFAULTS = {
 } as const
 
 /**Parser */
-export const MAX_BLOCK_CHARS = 1000
+export const MAX_BLOCK_CHARS = 2000
 export const MIN_BLOCK_CHARS = 100
 export const MIN_CHUNK_REMAINDER_CHARS = 200 // Minimum characters for the *next* chunk after a split
 export const MAX_CHARS_TOLERANCE_FACTOR = 1.15 // 15% tolerance for max chars
@@ -23,9 +23,37 @@ export const MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024 // 1MB
 
 /**Directory Scanner */
 export const MAX_LIST_FILES_LIMIT_CODE_INDEX = 50_000
-export const BATCH_SEGMENT_THRESHOLD = 60 // Number of code segments to batch for embeddings/upserts
+export const BATCH_SEGMENT_THRESHOLD = 60 // Number of code segments to batch for embeddings/upserts (default for OpenAI)
 export const MAX_BATCH_RETRIES = 3
 export const INITIAL_RETRY_DELAY_MS = 500
+
+// Dynamic batch sizes for different embedder types
+export const EMBEDDER_BATCH_SIZES: { [key: string]: number } = {
+    "openai": 60,
+    "openai-compatible": 60,
+    "jina": 30,
+    "gemini": 40,
+    "mistral": 30,
+    "vercel-ai-gateway": 60,
+    "openrouter": 60,
+    "ollama": 20, // Smaller batch size for Ollama to prevent timeouts with large local models
+}
+
+/**
+ * Gets the optimal batch size for a specific embedder type or embedder instance
+ * @param embedderType The embedder provider type, or an embedder instance with optimalBatchSize property
+ * @returns The optimal batch size for the embedder
+ */
+export function getBatchSizeForEmbedder(embedder: any): number {
+    // Check if embedder has an optimalBatchSize property
+    if (embedder && typeof embedder.optimalBatchSize === 'number') {
+        return embedder.optimalBatchSize
+    }
+    
+    // Check if embedder has an embedderInfo property with name
+    const embedderType = embedder?.embedderInfo?.name || embedder
+    return EMBEDDER_BATCH_SIZES[embedderType] || BATCH_SEGMENT_THRESHOLD
+}
 export const PARSING_CONCURRENCY = 10
 export const MAX_PENDING_BATCHES = 20 // Maximum number of batches to accumulate before waiting
 

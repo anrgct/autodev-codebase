@@ -1,9 +1,10 @@
 import { IEmbedder, IVectorStore, PointStruct, FileProcessingResult } from "../interfaces"
 import { CacheManager } from "../cache-manager"
-import { 
-	BATCH_SEGMENT_THRESHOLD, 
-	MAX_BATCH_RETRIES, 
-	INITIAL_RETRY_DELAY_MS 
+import {
+	BATCH_SEGMENT_THRESHOLD,
+	MAX_BATCH_RETRIES,
+	INITIAL_RETRY_DELAY_MS,
+	getBatchSizeForEmbedder
 } from "../constants"
 
 export interface BatchProcessingResult {
@@ -17,17 +18,17 @@ export interface BatchProcessorOptions<T> {
 	embedder: IEmbedder
 	vectorStore: IVectorStore
 	cacheManager: CacheManager
-	
+
 	// Strategy functions for converting input data
 	itemToText: (item: T) => string
 	itemToPoint: (item: T, embedding: number[], index: number) => PointStruct
 	itemToFilePath: (item: T) => string
 	getFileHash?: (item: T) => string
-	
+
 	// Optional callbacks
 	onProgress?: (processed: number, total: number, currentItem?: string) => void
 	onError?: (error: Error) => void
-	
+
 	// Optional file deletion logic
 	getFilesToDelete?: (items: T[]) => string[]
 	// Optional path conversion for cache deletion (relative -> absolute)
@@ -43,15 +44,15 @@ export interface BatchProcessorOptions<T> {
  * - Retry logic
  */
 export class BatchProcessor<T> {
-	
+
 	async processBatch(
-		items: T[], 
+		items: T[],
 		options: BatchProcessorOptions<T>
 	): Promise<BatchProcessingResult> {
 		// console.log(`[BatchProcessor] Starting batch processing for ${items.length} items`)
-		
+
 		const result: BatchProcessingResult = { processed: 0, failed: 0, errors: [], processedFiles: [] }
-		
+
 		// Report initial progress
 		options.onProgress?.(0, items.length)
 
@@ -86,11 +87,11 @@ export class BatchProcessor<T> {
 	): Promise<void> {
 		try {
 			await options.vectorStore.deletePointsByMultipleFilePaths(filesToDelete)
-			
+
 			// Clear cache for deleted files and record successful deletions
 			for (const filePath of filesToDelete) {
 				// Convert relative path to absolute path for cache deletion if converter is provided
-				const cacheFilePath = options.relativeCachePathToAbsolute ? 
+				const cacheFilePath = options.relativeCachePathToAbsolute ?
 					options.relativeCachePathToAbsolute(filePath) : filePath
 				options.cacheManager.deleteHash(cacheFilePath)
 				result.processedFiles.push({
@@ -102,7 +103,7 @@ export class BatchProcessor<T> {
 			const err = error as Error
 			result.errors.push(err)
 			options.onError?.(err)
-			
+
 			// Record failed deletions
 			for (const filePath of filesToDelete) {
 				result.processedFiles.push({
@@ -120,9 +121,14 @@ export class BatchProcessor<T> {
 		options: BatchProcessorOptions<T>,
 		result: BatchProcessingResult
 	): Promise<void> {
+		// Get dynamic batch size based on embedder instance
+		const batchSize = getBatchSizeForEmbedder(options.embedder)
+
+		// console.log(`[BatchProcessor] Using batch size ${batchSize} for embedder: ${options.embedder.embedderInfo.name}`)
+
 		// Process items in segments to avoid memory issues and respect batch limits
-		for (let i = 0; i < items.length; i += BATCH_SEGMENT_THRESHOLD) {
-			const batchItems = items.slice(i, i + BATCH_SEGMENT_THRESHOLD)
+		for (let i = 0; i < items.length; i += batchSize) {
+			const batchItems = items.slice(i, i + batchSize)
 			await this.processSingleBatch(batchItems, options, result, i)
 		}
 	}
@@ -139,16 +145,16 @@ export class BatchProcessor<T> {
 
 		while (attempts < MAX_BATCH_RETRIES && !success) {
 			attempts++
-			
+
 			try {
 				// Extract texts for embedding
 				const texts = batchItems.map(item => options.itemToText(item))
-				
+
 				// Create embeddings
 				const { embeddings } = await options.embedder.createEmbeddings(texts)
-				
+
 				// Convert to points
-				const points = batchItems.map((item, index) => 
+				const points = batchItems.map((item, index) =>
 					options.itemToPoint(item, embeddings[index], startIndex + index)
 				)
 
@@ -162,7 +168,7 @@ export class BatchProcessor<T> {
 					if (fileHash) {
 						options.cacheManager.updateHash(filePath, fileHash)
 					}
-					
+
 					result.processed++
 					result.processedFiles.push({
 						path: filePath,
@@ -187,12 +193,12 @@ export class BatchProcessor<T> {
 		if (!success && lastError) {
 			result.failed += batchItems.length
 			result.errors.push(lastError)
-			
+
 			const errorMessage = `Failed to process batch after ${MAX_BATCH_RETRIES} attempts: ${lastError.message}`
 			const batchError = new Error(errorMessage)
 			result.errors.push(batchError)
 			options.onError?.(batchError)
-			
+
 			// Record failed items and still report progress
 			for (const item of batchItems) {
 				const filePath = options.itemToFilePath(item)

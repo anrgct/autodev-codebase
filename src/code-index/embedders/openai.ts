@@ -18,6 +18,7 @@ import { fetch, ProxyAgent } from "undici"
 export class OpenAiEmbedder implements IEmbedder {
 	private embeddingsClient: OpenAI
 	private readonly defaultModelId: string
+	private readonly _optimalBatchSize: number
 
 	/**
 	 * Creates a new OpenAI embedder
@@ -25,6 +26,9 @@ export class OpenAiEmbedder implements IEmbedder {
 	 */
 	constructor(options: ApiHandlerOptions & { openAiEmbeddingModelId?: string }) {
 		const apiKey = options.openAiNativeApiKey ?? "not-provided"
+
+		// Initialize optimal batch size for OpenAI (can be customized via options)
+		this._optimalBatchSize = options.openaiBatchSize || 60
 
 		// Wrap OpenAI client creation to handle invalid API key characters
 		try {
@@ -245,5 +249,12 @@ export class OpenAiEmbedder implements IEmbedder {
 		return {
 			name: "openai",
 		}
+	}
+
+	/**
+	 * Gets the optimal batch size for this OpenAI embedder
+	 */
+	get optimalBatchSize(): number {
+		return this._optimalBatchSize
 	}
 }

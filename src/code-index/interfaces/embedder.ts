@@ -18,6 +18,11 @@ export interface IEmbedder {
 	validateConfiguration(): Promise<{ valid: boolean; error?: string }>
 
 	get embedderInfo(): EmbedderInfo
+	
+	/**
+	 * Gets the optimal batch size for this embedder
+	 */
+	get optimalBatchSize(): number
 }
 
 export interface EmbeddingResponse {

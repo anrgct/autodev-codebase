@@ -35,6 +35,7 @@ export class OpenRouterEmbedder implements IEmbedder {
     private readonly apiKey: string
     private readonly maxItemTokens: number
     private readonly baseUrl: string = "https://openrouter.ai/api/v1"
+    private readonly _optimalBatchSize: number
 
     // Global rate limiting state shared across all instances
     private static globalRateLimitState = {
@@ -52,7 +53,7 @@ export class OpenRouterEmbedder implements IEmbedder {
      * @param modelId Optional model identifier (defaults to "openai/text-embedding-3-large")
      * @param maxItemTokens Optional maximum tokens per item (defaults to MAX_ITEM_TOKENS)
      */
-    constructor(apiKey: string, modelId?: string, maxItemTokens?: number) {
+    constructor(apiKey: string, modelId?: string, maxItemTokens?: number, options?: { openrouterBatchSize?: number }) {
         if (!apiKey) {
             throw new Error("API key is required for OpenRouter embedder")
         }
@@ -76,6 +77,8 @@ export class OpenRouterEmbedder implements IEmbedder {
 
         this.defaultModelId = modelId || getDefaultModelId("openrouter")
         this.maxItemTokens = maxItemTokens || MAX_ITEM_TOKENS
+        // Initialize optimal batch size for OpenRouter (can be customized via options)
+        this._optimalBatchSize = options?.openrouterBatchSize || 60
     }
 
     /**
@@ -282,6 +285,13 @@ export class OpenRouterEmbedder implements IEmbedder {
         return {
             name: "openrouter",
         }
+    }
+
+    /**
+     * Gets the optimal batch size for this OpenRouter embedder
+     */
+    get optimalBatchSize(): number {
+        return this._optimalBatchSize
     }
 
     /**

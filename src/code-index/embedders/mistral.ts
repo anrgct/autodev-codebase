@@ -77,4 +77,12 @@ export class MistralEmbedder implements IEmbedder {
             name: "mistral",
         }
     }
+
+    /**
+     * Gets the optimal batch size for this Mistral embedder
+     */
+    get optimalBatchSize(): number {
+        // Return recommended batch size for Mistral
+        return 30
+    }
 }

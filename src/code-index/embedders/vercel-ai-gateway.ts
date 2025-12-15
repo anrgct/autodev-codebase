@@ -86,4 +86,12 @@ export class VercelAiGatewayEmbedder implements IEmbedder {
             name: "vercel-ai-gateway",
         }
     }
+
+    /**
+     * Gets the optimal batch size for this Vercel AI Gateway embedder
+     */
+    get optimalBatchSize(): number {
+        // Delegate to the underlying OpenAI-compatible embedder's optimal batch size
+        return this.openAICompatibleEmbedder.optimalBatchSize
+    }
 }

@@ -27,8 +27,9 @@ export class JinaEmbedder implements IEmbedder {
 	private readonly baseUrl: string
 	private readonly apiKey: string
 	private readonly modelId: string
+	private readonly _optimalBatchSize: number
 
-	constructor(apiKey: string, modelId: string = 'jina-embeddings-v2-base-code') {
+	constructor(apiKey: string, modelId: string = 'jina-embeddings-v2-base-code', options?: { jinaBatchSize?: number }) {
 		if (!apiKey) {
 			throw new Error("API key is required for Jina embedder")
 		}
@@ -36,6 +37,8 @@ export class JinaEmbedder implements IEmbedder {
 		this.baseUrl = 'https://api.jina.ai/v1'
 		this.apiKey = apiKey
 		this.modelId = modelId
+		// Initialize optimal batch size for Jina (can be customized via options)
+		this._optimalBatchSize = options?.jinaBatchSize || 30
 	}
 
 	/**
@@ -208,5 +211,12 @@ export class JinaEmbedder implements IEmbedder {
 		return {
 			name: "jina",
 		}
+	}
+
+	/**
+	 * Gets the optimal batch size for this Jina embedder
+	 */
+	get optimalBatchSize(): number {
+		return this._optimalBatchSize
 	}
 }

@@ -6,8 +6,10 @@ import { withValidationErrorHandling, sanitizeErrorMessage } from "../shared/val
 import { fetch, ProxyAgent } from "undici"
 
 // Timeout constants for Ollama API requests
-const OLLAMA_EMBEDDING_TIMEOUT_MS = 60000 // 60 seconds for embedding requests
+const OLLAMA_EMBEDDING_TIMEOUT_MS = 120000 // 120 seconds for embedding requests (increased for large models)
 const OLLAMA_VALIDATION_TIMEOUT_MS = 30000 // 30 seconds for validation requests
+const OLLAMA_MAX_RETRIES = 2 // Ollama-specific retry count
+const OLLAMA_RETRY_DELAY_MS = 1000 // Initial retry delay for Ollama
 
 /**
  * Implements the IEmbedder interface using a local Ollama instance.
@@ -15,6 +17,7 @@ const OLLAMA_VALIDATION_TIMEOUT_MS = 30000 // 30 seconds for validation requests
 export class CodeIndexOllamaEmbedder implements IEmbedder {
     private readonly baseUrl: string
     private readonly defaultModelId: string
+    private readonly batchSize: number
 
     constructor(options: ApiHandlerOptions) {
         // Ensure ollamaBaseUrl and ollamaModelId exist on ApiHandlerOptions or add defaults
@@ -25,6 +28,8 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
 
         this.baseUrl = baseUrl
         this.defaultModelId = options['ollamaModelId'] || "nomic-embed-text:latest"
+        // Use custom batch size if provided, otherwise use default optimized size
+        this.batchSize = options.ollamaBatchSize || 20
     }
 
     /**
@@ -34,6 +39,36 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
      * @returns A promise that resolves to an EmbeddingResponse containing the embeddings and usage data.
      */
     async createEmbeddings(texts: string[], model?: string): Promise<EmbeddingResponse> {
+        // Implement retry logic for Ollama embeddings
+        for (let attempts = 0; attempts < OLLAMA_MAX_RETRIES; attempts++) {
+            try {
+                return await this._createEmbeddingsWithTimeout(texts, model)
+            } catch (error: any) {
+                const hasMoreAttempts = attempts < OLLAMA_MAX_RETRIES - 1
+                
+                console.error(`Ollama embedding failed (attempt ${attempts + 1}/${OLLAMA_MAX_RETRIES}):`, error)
+                
+                // Check if this is a retryable error
+                if (this._isRetryableError(error) && hasMoreAttempts) {
+                    const delayMs = OLLAMA_RETRY_DELAY_MS * Math.pow(2, attempts)
+                    console.warn(`Retrying Ollama embedding in ${delayMs}ms (attempt ${attempts + 2}/${OLLAMA_MAX_RETRIES})`)
+                    await new Promise((resolve) => setTimeout(resolve, delayMs))
+                    continue
+                }
+                
+                // For non-retryable errors or no more attempts, throw the error
+                throw error
+            }
+        }
+        
+        // This should never be reached, but TypeScript requires it
+        throw new Error("Failed to create embeddings after all retries")
+    }
+
+    /**
+     * Internal method to create embeddings with timeout
+     */
+    private async _createEmbeddingsWithTimeout(texts: string[], model?: string): Promise<EmbeddingResponse> {
         const modelToUse = model || this.defaultModelId
         const url = `${this.baseUrl}/api/embed` // Endpoint as specified
 
@@ -58,14 +93,14 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
                 })
             : texts
 
+        // Note: Standard Ollama API uses 'prompt' for single text, not 'input' for array.
+        // Implementing based on user's specific request structure.
+
+        // Add timeout to prevent indefinite hanging
+        const controller = new AbortController()
+        const timeoutId = setTimeout(() => controller.abort(), OLLAMA_EMBEDDING_TIMEOUT_MS)
+
         try {
-            // Note: Standard Ollama API uses 'prompt' for single text, not 'input' for array.
-            // Implementing based on user's specific request structure.
-
-            // Add timeout to prevent indefinite hanging
-            const controller = new AbortController()
-            const timeoutId = setTimeout(() => controller.abort(), OLLAMA_EMBEDDING_TIMEOUT_MS)
-
             // 检查环境变量中的代理设置
             const httpsProxy = process.env['HTTPS_PROXY'] || process.env['https_proxy']
             const httpProxy = process.env['HTTP_PROXY'] || process.env['http_proxy']
@@ -100,7 +135,6 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
             }
 
             const response = await fetch(url, fetchOptions)
-            clearTimeout(timeoutId)
 
             if (!response.ok) {
                 let errorBody = "Could not read error body"
@@ -128,23 +162,61 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
                 embeddings: embeddings,
             }
         } catch (error: any) {
-            // TelemetryService calls removed as per requirements
-
-            // Log the original error for debugging purposes
-            console.error("Ollama embedding failed:", error)
-
-            // Handle specific error types with better messages
-            if (error.name === "AbortError") {
-                throw new Error("Connection failed due to timeout")
-            } else if (error.message?.includes("fetch failed") || error.code === "ECONNREFUSED") {
-                throw new Error(`Ollama service is not running at ${this.baseUrl}`)
-            } else if (error.code === "ENOTFOUND") {
-                throw new Error(`Host not found: ${this.baseUrl}`)
-            }
-
-            // Re-throw a more specific error for the caller
-            throw new Error(`Ollama embedding failed: ${error.message}`)
+            // Re-throw the error for the retry logic to handle
+            throw this._formatEmbeddingError(error)
+        } finally {
+            clearTimeout(timeoutId)
         }
+    }
+
+    /**
+     * Determines if an error is retryable
+     */
+    private _isRetryableError(error: any): boolean {
+        // Retry on timeout errors
+        if (error.name === "AbortError" || error.message?.includes("Connection failed due to timeout")) {
+            return true
+        }
+        
+        // Retry on connection errors
+        if (error.message?.includes("fetch failed") || 
+            error.code === "ECONNREFUSED" || 
+            error.code === "ECONNRESET" ||
+            error.message?.includes("Connection reset by peer")) {
+            return true
+        }
+        
+        // Don't retry on validation errors or model not found
+        if (error.message?.includes("not found") || 
+            error.message?.includes("Model") ||
+            error.message?.includes("API request failed with status 4") ||
+            error.status >= 400 && error.status < 500) {
+            return false
+        }
+        
+        // Default to retrying on other network errors
+        return true
+    }
+
+    /**
+     * Formats embedding errors consistently
+     */
+    private _formatEmbeddingError(error: any): Error {
+        // Handle specific error types with better messages
+        if (error.name === "AbortError") {
+            return new Error("Connection failed due to timeout")
+        } else if (error.message?.includes("fetch failed") || error.code === "ECONNREFUSED") {
+            return new Error(`Ollama service is not running at ${this.baseUrl}`)
+        } else if (error.code === "ENOTFOUND") {
+            return new Error(`Host not found: ${this.baseUrl}`)
+        }
+
+        // Re-throw a more specific error for the caller
+        if (error instanceof Error) {
+            return new Error(`Ollama embedding failed: ${error.message}`)
+        }
+        
+        return new Error(`Ollama embedding failed: ${String(error)}`)
     }
 
     /**
@@ -301,5 +373,12 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
         return {
             name: "ollama",
         }
+    }
+
+    /**
+     * Gets the optimal batch size for this Ollama embedder
+     */
+    get optimalBatchSize(): number {
+        return this.batchSize
     }
 }

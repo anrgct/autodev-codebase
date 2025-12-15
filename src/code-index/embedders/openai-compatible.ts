@@ -36,6 +36,7 @@ export class OpenAICompatibleEmbedder implements IEmbedder {
 	private readonly apiKey: string
 	private readonly isFullUrl: boolean
 	private readonly maxItemTokens: number
+	private readonly _optimalBatchSize: number
 
 	// Global rate limiting state shared across all instances
 	private static globalRateLimitState = {
@@ -64,6 +65,8 @@ export class OpenAICompatibleEmbedder implements IEmbedder {
 
 		this.baseUrl = baseUrl
 		this.apiKey = apiKey
+		// Initialize optimal batch size for OpenAI Compatible (can be customized via options)
+		this._optimalBatchSize = 60
 
 		// Wrap OpenAI client creation to handle invalid API key characters
 		try {
@@ -423,6 +426,13 @@ export class OpenAICompatibleEmbedder implements IEmbedder {
 		return {
 			name: "openai-compatible",
 		}
+	}
+
+	/**
+	 * Gets the optimal batch size for this OpenAI Compatible embedder
+	 */
+	get optimalBatchSize(): number {
+		return this._optimalBatchSize
 	}
 
 	/**

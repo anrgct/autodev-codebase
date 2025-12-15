@@ -21,6 +21,13 @@ export interface ApiHandlerOptions {
   maxRetries?: number
   openAiNativeApiKey?: string
   ollamaBaseUrl?: string
+  ollamaBatchSize?: number // Custom batch size for Ollama embedder
+  openaiBatchSize?: number // Custom batch size for OpenAI embedder
+  openaiCompatibleBatchSize?: number // Custom batch size for OpenAI Compatible embedder
+  jinaBatchSize?: number // Custom batch size for Jina embedder
+  geminiBatchSize?: number // Custom batch size for Gemini embedder
+  mistralBatchSize?: number // Custom batch size for Mistral embedder
+  openrouterBatchSize?: number // Custom batch size for OpenRouter embedder
   [key: string]: any
 }
 
