@@ -137,8 +137,9 @@ export class CodeIndexOrchestrator {
 
 	/**
 	 * Initiates the indexing process (initial scan and starts watcher).
+	 * @param force Force reindex all files, ignoring cache and metadata
 	 */
-	public async startIndexing(): Promise<void> {
+	public async startIndexing(force?: boolean): Promise<void> {
 		// Check if workspace is available first
 		if (!this.workspacePath) {
 			this.stateManager.setSystemState("Error", t("embeddings:orchestrator.indexingRequiresWorkspace"))
@@ -183,9 +184,16 @@ export class CodeIndexOrchestrator {
 				await this.cacheManager.clearCacheFile()
 			}
 
+			// Force mode: clear vector store + cache to ensure full reindex
+			if (force) {
+				this.info("[CodeIndexOrchestrator] Force mode: clearing vector store and cache...")
+				await this.vectorStore.clearCollection()
+				await this.cacheManager.clearCacheFile()
+			}
+
 			// Check if the collection already has indexed data
 			// If it does, we can skip the full scan and just start the watcher
-			const hasExistingData = await this.vectorStore.hasIndexedData()
+			const hasExistingData = force ? false : await this.vectorStore.hasIndexedData()
 
 			if (hasExistingData && !collectionCreated) {
 				// Collection exists with data - run incremental scan to catch any new/changed files
@@ -212,7 +220,7 @@ export class CodeIndexOrchestrator {
 					this.stateManager.reportBlockIndexingProgress(cumulativeBlocksIndexed, cumulativeBlocksFoundSoFar)
 				}
 
-				// Run incremental scan - scanner will skip unchanged files using cache
+				// Run incremental scan - scanner skips unchanged files using cache
 				const result = await this.scanner.scanDirectory(
 					this.workspacePath,
 					(batchError: Error) => {

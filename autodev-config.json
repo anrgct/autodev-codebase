@@ -1,28 +1,14 @@
-// 如无必要，请不要随意修改此配置
 {
   "isEnabled": true,
   "isConfigured": true,
-  // "embedderProvider": "openai-compatible",
-  // "modelId": "Qwen/Qwen3-Embedding-0.6B",
-  "embedderProvider": "ollama",
-  "modelId": "qwen3-embedding:0.6b",
-  "modelDimension": 1024,
+  "embedderProvider": "openai",
+  "modelId": "text-embedding-3-small",
+  "modelDimension": 1536,
   "ollamaOptions": {
     "ollamaBaseUrl": "http://localhost:11434"
   },
   "openAiOptions": {
     "openAiNativeApiKey": "test-key"
   },
-  "openAiCompatibleOptions": {
-    "baseUrl": "https://api.siliconflow.cn/v1",
-    "apiKey": "sk-ughiikqkayqxxwxfflddywnssdesczoggpdqjngfuojrcabd"
-  },
-  "qdrantUrl": "http://localhost:6333",
-  "rerankerEnabled": true,
-  "rerankerProvider": "ollama-llm",
-  "rerankerOllamaBaseUrl": "http://localhost:11434",
-  "rerankerOllamaModelId": "qwen3-vl:2b-instruct",
-  "rerankerMinScore": 5.0,
-  "rerankerBatchSize": 10,
-  "searchMaxResults": 50
+  "qdrantUrl": "http://localhost:6333"
 }

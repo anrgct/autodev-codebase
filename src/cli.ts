@@ -167,19 +167,25 @@ function formatSearchResultsAsJson(results: SearchResult[], query: string): stri
     return scoreB - scoreA; // 降序排列
   });
 
-  // 去重：移除被其他片段包含的重复片段
+  // 去重：移除被其他片段包含的重复片段（仅在同一个文件内）
   const deduplicatedResults = [];
   for (let i = 0; i < results.length; i++) {
     const current = results[i];
+    const currentFilePath = current.payload?.filePath;
     const currentStart = current.payload?.startLine || 0;
     const currentEnd = current.payload?.endLine || 0;
 
-    // 检查当前片段是否被其他片段包含
+    // 检查当前片段是否被其他片段包含（仅在同一个文件内）
     let isContained = false;
     for (let j = 0; j < results.length; j++) {
       if (i === j) continue; // 跳过自己
 
       const other = results[j];
+      const otherFilePath = other.payload?.filePath;
+      
+      // 只有在同文件内才检查包含关系
+      if (otherFilePath !== currentFilePath) continue;
+
       const otherStart = other.payload?.startLine || 0;
       const otherEnd = other.payload?.endLine || 0;
 
@@ -482,7 +488,7 @@ async function startMCPServer(options: SimpleCliOptions): Promise<void> {
   });
 
   if (manager.isFeatureEnabled && manager.isInitialized) {
-    manager.startIndexing()
+    manager.startIndexing(options.force)
       .then(() => {
         getLogger().info('Indexing completed');
       })

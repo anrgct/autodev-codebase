@@ -172,7 +172,8 @@ export class CodeIndexManager implements ICodeIndexManager {
 				(needsServiceRecreation && (!this._orchestrator || this._orchestrator.state !== "Indexing"))
 
 			if (shouldStartOrRestartIndexing) {
-				this._orchestrator?.startIndexing() // This method is async, but we don't await it here
+				// Pass force parameter from initialize options
+				this._orchestrator?.startIndexing(options?.force) // This method is async, but we don't await it here
 			}
 		}
 
@@ -194,8 +195,9 @@ export class CodeIndexManager implements ICodeIndexManager {
 	 *
 	 * @important This method should NEVER be awaited as it starts a long-running background process.
 	 * The indexing will continue asynchronously and progress will be reported through events.
+	 * @param force Force reindex all files, ignoring cache and metadata
 	 */
-	public async startIndexing(): Promise<void> {
+	public async startIndexing(force?: boolean): Promise<void> {
 		if (!this.isFeatureEnabled) {
 			return
 		}
@@ -211,7 +213,7 @@ export class CodeIndexManager implements ICodeIndexManager {
 		}
 
 		this.assertInitialized()
-		await this._orchestrator!.startIndexing()
+		await this._orchestrator!.startIndexing(force)
 	}
 
 	/**

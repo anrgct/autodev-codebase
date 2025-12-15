@@ -39,8 +39,9 @@ export interface ICodeIndexManager {
 
 	/**
 	 * Starts the indexing process
+	 * @param force Force reindex all files, ignoring cache and metadata
 	 */
-	startIndexing(): Promise<void>
+	startIndexing(force?: boolean): Promise<void>
 
 	/**
 	 * Stops the file watcher

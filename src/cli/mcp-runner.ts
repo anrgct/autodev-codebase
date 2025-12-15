@@ -169,7 +169,7 @@ export async function startMCPServerMode(options: CliOptions): Promise<void> {
     });
 
     if (manager.isFeatureEnabled && manager.isInitialized) {
-      manager.startIndexing()
+      manager.startIndexing(options.force)
         .then(() => {
           console.log('✅ Indexing completed');
         })
