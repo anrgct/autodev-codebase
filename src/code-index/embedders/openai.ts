@@ -28,7 +28,7 @@ export class OpenAiEmbedder implements IEmbedder {
 		const apiKey = options.openAiNativeApiKey ?? "not-provided"
 
 		// Initialize optimal batch size for OpenAI (can be customized via options)
-		this._optimalBatchSize = options.openaiBatchSize || 60
+		this._optimalBatchSize = options['openaiBatchSize'] || 60
 
 		// Wrap OpenAI client creation to handle invalid API key characters
 		try {

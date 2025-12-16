@@ -78,6 +78,7 @@ describe("FileWatcher", () => {
 			createEmbeddings: vi.fn().mockResolvedValue({ embeddings: [[0.1, 0.2, 0.3]] }),
 			embedderInfo: { name: "openai" },
 			validateConfiguration: vi.fn().mockResolvedValue({ isValid: true, errors: [] }),
+			optimalBatchSize: 60,
 		} as IEmbedder
 		mockVectorStore = {
 			upsertPoints: vi.fn().mockResolvedValue(undefined),

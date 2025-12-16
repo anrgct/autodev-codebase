@@ -115,13 +115,13 @@ async function main(): Promise<void> {
     .argument('<files...>', '要切分的文件路径')
     .option('-o, --output <path>', '输出文件路径')
     .option('-f, --format <format>', '输出格式 (json|csv|text)', 'json')
-    .option('--min-chars <number>', '最小块大小（字符数）', '50')
-    .option('--max-chars <number>', '最大块大小（字符数）', '2000')
-    .option('--min-remainder <number>', '最小剩余字符数', '20')
-    .option('--tolerance <number>', '最大字符容错因子', '1.5')
+    .option('--min-chars <number>', '最小块大小（字符数）', parseInt)
+    .option('--max-chars <number>', '最大块大小（字符数）', parseInt)
+    .option('--min-remainder <number>', '最小剩余字符数', parseInt)
+    .option('--tolerance <number>', '最大字符容错因子', parseFloat)
     .option('--chunk-type <type>', '块类型标识', 'chunk')
     .option('--skip-empty', '跳过空块')
-    .option('--overlap <number>', '行重叠数量', '0')
+    .option('--overlap <number>', '行重叠数量', parseInt)
     .option('--no-header', '不包含头部信息')
     .option('-v, --verbose', '详细输出')
     .action(async (files: string[], options: CLIOptions) => {
@@ -131,13 +131,13 @@ async function main(): Promise<void> {
         }
 
         const chunkerOptions = {
-          minChunkChars: options.minChars ? parseInt(options.minChars) : undefined,
-          maxChunkChars: options.maxChars ? parseInt(options.maxChars) : undefined,
-          minChunkRemainderChars: options.minRemainder ? parseInt(options.minRemainder) : undefined,
-          maxCharsToleranceFactor: options.tolerance ? parseFloat(options.tolerance) : undefined,
+          minChunkChars: options.minChars,
+          maxChunkChars: options.maxChars,
+          minChunkRemainderChars: options.minRemainder,
+          maxCharsToleranceFactor: options.tolerance,
           chunkType: options.chunkType,
           skipEmptyChunks: options.skipEmpty,
-          lineOverlap: options.overlap ? parseInt(options.overlap) : undefined
+          lineOverlap: options.overlap
         }
 
         const chunker = new FileChunker(chunkerOptions)
@@ -162,13 +162,13 @@ async function main(): Promise<void> {
     .option('-o, --output <path>', '输出文件路径')
     .option('-f, --format <format>', '输出格式 (json|csv|text)', 'json')
     .option('-r, --recursive', '递归搜索')
-    .option('--min-chars <number>', '最小块大小（字符数）', '50')
-    .option('--max-chars <number>', '最大块大小（字符数）', '2000')
-    .option('--min-remainder <number>', '最小剩余字符数', '20')
-    .option('--tolerance <number>', '最大字符容错因子', '1.5')
+    .option('--min-chars <number>', '最小块大小（字符数）', parseInt)
+    .option('--max-chars <number>', '最大块大小（字符数）', parseInt)
+    .option('--min-remainder <number>', '最小剩余字符数', parseInt)
+    .option('--tolerance <number>', '最大字符容错因子', parseFloat)
     .option('--chunk-type <type>', '块类型标识', 'chunk')
     .option('--skip-empty', '跳过空块')
-    .option('--overlap <number>', '行重叠数量', '0')
+    .option('--overlap <number>', '行重叠数量', parseInt)
     .option('--no-header', '不包含头部信息')
     .option('-v, --verbose', '详细输出')
     .action(async (pattern: string, options: CLIOptions) => {
@@ -189,13 +189,13 @@ async function main(): Promise<void> {
         }
 
         const chunkerOptions = {
-          minChunkChars: options.minChars ? parseInt(options.minChars) : undefined,
-          maxChunkChars: options.maxChars ? parseInt(options.maxChars) : undefined,
-          minChunkRemainderChars: options.minRemainder ? parseInt(options.minRemainder) : undefined,
-          maxCharsToleranceFactor: options.tolerance ? parseFloat(options.tolerance) : undefined,
+          minChunkChars: options.minChars,
+          maxChunkChars: options.maxChars,
+          minChunkRemainderChars: options.minRemainder,
+          maxCharsToleranceFactor: options.tolerance,
           chunkType: options.chunkType,
           skipEmptyChunks: options.skipEmpty,
-          lineOverlap: options.overlap ? parseInt(options.overlap) : undefined
+          lineOverlap: options.overlap
         }
 
         const chunker = new FileChunker(chunkerOptions)
@@ -220,7 +220,6 @@ async function main(): Promise<void> {
     .option('-v, --verbose', '详细输出')
     .action(async (file: string, options: CLIOptions) => {
       try {
-        const { stat } = await import('fs')
         const stats = await stat(file)
         const content = await readFile(file, 'utf-8')
         

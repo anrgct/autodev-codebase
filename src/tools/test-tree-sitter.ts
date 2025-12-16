@@ -111,7 +111,7 @@ function getFilePath(): string {
 	}
 	
 	// 其次使用环境变量
-	const envPath = process.env.TEST_FILE_PATH
+	const envPath = process.env['TEST_FILE_PATH']
 	if (envPath) {
 		return envPath
 	}

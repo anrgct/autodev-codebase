@@ -29,7 +29,7 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
         this.baseUrl = baseUrl
         this.defaultModelId = options['ollamaModelId'] || "nomic-embed-text:latest"
         // Use custom batch size if provided, otherwise use default optimized size
-        this.batchSize = options.ollamaBatchSize || 20
+        this.batchSize = options['ollamaBatchSize'] || 20
     }
 
     /**
