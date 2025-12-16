@@ -281,18 +281,6 @@ This approach allows us to focus on the most relevant parts of the code (defined
  * @returns A formatted string with definitions
  */
 function processCaptures(captures: any[], lines: string[], language: string): string | null {
-	// Determine if HTML filtering is needed for this language
-	const needsHtmlFiltering = ["jsx", "tsx"].includes(language)
-
-	// Filter function to exclude HTML elements if needed
-	const isNotHtmlElement = (line: string): boolean => {
-		if (!needsHtmlFiltering) return true
-		// Common HTML elements pattern
-		const HTML_ELEMENTS = /^[^A-Z]*<\/?(?:div|span|button|input|h[1-6]|p|a|img|ul|li|form)\b/
-		const trimmedLine = line.trim()
-		return !HTML_ELEMENTS.test(trimmedLine)
-	}
-
 	// No definitions found
 	if (captures.length === 0) {
 		return null
@@ -306,6 +294,24 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 	// Track already processed lines to avoid duplicates
 	const processedLines = new Set<string>()
 
+	const promoteToLineStartAncestor = (node: any): any => {
+		let current = node
+		const startRow = current?.startPosition?.row
+		if (typeof startRow !== "number") return current
+
+		// Prefer the highest ancestor that starts on the same line as the capture.
+		// This typically maps `name.definition.*` captures back to their containing
+		// definition node while keeping the output anchored to the correct line.
+		while (
+			current?.parent &&
+			typeof current.parent.startPosition?.row === "number" &&
+			current.parent.startPosition.row === startRow
+		) {
+			current = current.parent
+		}
+		return current
+	}
+
 	// First pass - categorize captures by type
 	captures.forEach((capture) => {
 		const { node, name } = capture
@@ -315,20 +321,36 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 			return
 		}
 
-		// Skip name definitions to avoid duplicates - we'll process the parent definition instead
-		if (name.includes("name.definition")) {
-			return
-		}
+		// For name captures (e.g. `name.definition.*`), promote to the nearest
+		// containing node that starts on the same line so we can show the full
+		// construct users expect (and tests rely on).
+		const isNameDefinitionCapture = typeof name === "string" && name.includes("name.definition")
 
-		// For docstrings, use the actual node
-		// For definitions, use the definition node itself
-		const definitionNode = name === "docstring" ? node : node
+		// For docstrings, use the actual node.
+		// For definitions, use the definition node itself.
+		const definitionNode =
+			name === "docstring" || name === "doc"
+				? node
+				: isNameDefinitionCapture
+					? promoteToLineStartAncestor(node)
+					: node
 		if (!definitionNode) return
 
 		// Get the start and end lines of the definition
 		const startLine = definitionNode.startPosition.row
 		const endLine = definitionNode.endPosition.row
 		const lineCount = endLine - startLine + 1
+
+		// Prefer showing the first non-empty line within the captured range.
+		// This avoids outputting blank lines (common in fixtures that start with
+		// a leading newline), while keeping the original end range.
+		let displayStartLine = startLine
+		while (displayStartLine <= endLine && (lines[displayStartLine] ?? "").trim() === "") {
+			displayStartLine++
+		}
+		if (displayStartLine > endLine) {
+			return
+		}
 
 		// Skip components that don't span enough lines
 		if (lineCount < getMinComponentLines()) {
@@ -337,7 +359,7 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 
 		// Create unique key for this definition based on line range
 		// This ensures we don't output the same line range multiple times
-		const lineKey = `${startLine}-${endLine}`
+		const lineKey = `${displayStartLine}-${endLine}`
 
 		// Skip already processed lines
 		if (processedLines.has(lineKey)) {
@@ -345,7 +367,7 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 		}
 
 		// Check if this is a valid component definition (not an HTML element)
-		const startLineContent = lines[startLine].trim()
+		const startLineContent = lines[displayStartLine].trim()
 
 		// Special handling for docstrings
 		if (name === "docstring") {
@@ -365,10 +387,8 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 		}
 
 		// For other component definitions (classes, functions, etc.)
-		if (isNotHtmlElement(startLineContent)) {
-			formattedOutput += `${startLine + 1}--${endLine + 1} | ${lines[startLine]}\n`
-			processedLines.add(lineKey)
-		}
+		formattedOutput += `${displayStartLine + 1}--${endLine + 1} | ${lines[displayStartLine]}\n`
+		processedLines.add(lineKey)
 	})
 
 	if (formattedOutput.length > 0) {

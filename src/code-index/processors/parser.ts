@@ -426,6 +426,8 @@ export class CodeParser implements ICodeParser {
 			const originalLineNumber = baseStartLine + i
 
 			// Handle oversized lines (longer than effectiveMaxChars)
+			// We allow some tolerance for chunk sizing, and only split single lines
+			// when they exceed the tolerated max.
 			if (lineLength > effectiveMaxChars) {
 				// Finalize any existing normal chunk before processing the oversized line
 				if (currentChunkLines.length > 0) {

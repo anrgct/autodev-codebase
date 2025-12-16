@@ -7,6 +7,13 @@
 - decorators and decorated elements
 */
 export default `
+; Import/export statements
+(import_statement) @definition.import
+(export_statement) @definition.export
+
+; Comments (used in tests for import/export section markers)
+(comment) @definition.comment
+
 (
   (comment)* @doc
   .

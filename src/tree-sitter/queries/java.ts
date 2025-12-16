@@ -17,6 +17,9 @@ export default `
 (class_declaration
   name: (identifier) @name.definition.class) @definition.class
 
+; Implements clauses (capture the implements clause line in multi-line class declarations)
+(super_interfaces) @definition.implements
+
 ; Interface declarations
 (interface_declaration
   name: (identifier) @name.definition.interface) @definition.interface

@@ -82,4 +82,9 @@ export default `
 ; Function-like macros
 (preproc_function_def
   name: (identifier) @name.definition.macro) @definition.macro
+
+; Conditional compilation directives
+; Note: some tree-sitter-c builds expose only preproc_if/preproc_ifdef nodes.
+(preproc_ifdef) @definition.preproc
+(preproc_if) @definition.preproc
 `

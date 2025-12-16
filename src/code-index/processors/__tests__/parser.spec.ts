@@ -214,15 +214,17 @@ describe("CodeParser", () => {
 		})
 	})
 
-	describe("_chunkTextByLines", () => {
-		it("should handle oversized lines by splitting them", async () => {
-			const longLine = "a".repeat(2000)
-			const lines = ["normal", longLine, "normal"]
-			const result = await parser["_chunkTextByLines"](lines, "test.js", "hash", "test_type", new Set())
+		describe("_chunkTextByLines", () => {
+			it("should handle oversized lines by splitting them", async () => {
+				// Oversized means exceeding the tolerated max: MAX_BLOCK_CHARS * MAX_CHARS_TOLERANCE_FACTOR
+				const toleratedMax = Math.floor(MAX_BLOCK_CHARS * MAX_CHARS_TOLERANCE_FACTOR)
+				const longLine = "a".repeat(toleratedMax + 100)
+				const lines = ["normal", longLine, "normal"]
+				const result = await parser["_chunkTextByLines"](lines, "test.js", "hash", "test_type", new Set())
 
-			const segments = result.filter((r) => r.type === "test_type_segment")
-			expect(segments.length).toBeGreaterThan(1)
-		})
+				const segments = result.filter((r) => r.type === "test_type_segment")
+				expect(segments.length).toBeGreaterThan(1)
+			})
 
 		it("should re-balance chunks when remainder is too small", async () => {
 			const lines = Array(100)

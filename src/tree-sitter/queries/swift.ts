@@ -24,6 +24,10 @@ export default `
 (protocol_declaration
   name: (type_identifier) @name) @definition.interface
 
+; Extension declarations - Swift grammar exposes extension as an anonymous token,
+; so we capture the keyword line directly.
+"extension" @definition.extension
+
 ; Method declarations in classes/structs/enums/extensions
 (function_declaration
   name: (simple_identifier) @name) @definition.method

@@ -38,21 +38,17 @@ describe("Go Source Code Definition Tests", () => {
 		parseResult = result as string
 	})
 
-	it("should capture the entire Go file as a single block", () => {
-		// With the universal 50-character threshold, the entire file is captured as one block
-		expect(parseResult).toMatch(/2--126 \| \/\/ Package declaration test/)
-	})
-
-	it("should contain package declaration in the captured content", () => {
-		// The captured block should contain the package declaration and file header
+	it("should capture key Go declarations", () => {
 		expect(parseResult).toContain("# file.go")
-		expect(parseResult).toContain("2--126")
+		expect(parseResult).toMatch(/\d+--\d+ \|\s*package main/)
+		expect(parseResult).toMatch(/\d+--\d+ \|\s*import \(/)
+		expect(parseResult).toMatch(/\d+--\d+ \|\s*type TestInterfaceDefinition interface/)
+		expect(parseResult).toMatch(/\d+--\d+ \|\s*func TestFunctionDefinition\(/)
 	})
 
-	it("should not have duplicate captures", () => {
-		// Should only have one capture for the entire file
-		const lineRanges = parseResult.match(/\d+--\d+ \|/g)
-		expect(lineRanges).toBeDefined()
-		expect(lineRanges!.length).toBe(1)
+	it("should not have duplicate line ranges", () => {
+		const lineRanges = parseResult.match(/\d+--\d+ \|/g) ?? []
+		expect(lineRanges.length).toBeGreaterThan(1)
+		expect(new Set(lineRanges).size).toBe(lineRanges.length)
 	})
 })
