@@ -35,11 +35,10 @@ async function main() {
         configPath: path.join(DEMO_FOLDER, '.autodev-config.json'),
         defaultConfig: {
           isEnabled: false, // Disable to avoid requiring external services
-          isConfigured: false,
           embedderProvider: "openai",
-          modelId: 'text-embedding-3-small',
-          modelDimension: 1536,
-          openAiOptions: { openAiNativeApiKey: '' }
+          embedderModelId: 'text-embedding-3-small',
+          embedderModelDimension: 1536,
+          embedderOpenAiApiKey: ''
         }
       }
     })

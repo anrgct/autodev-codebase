@@ -1,43 +1,67 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { CodeIndexConfigManager } from "../config-manager"
 import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "../constants"
+import type { IConfigProvider, CodeIndexConfig } from "../../../src/abstractions/config"
 
 describe("CodeIndexConfigManager", () => {
-	let mockConfigProvider: any
+	let mockConfigProvider: IConfigProvider & { getConfig: ReturnType<typeof vi.fn>, onConfigChange: ReturnType<typeof vi.fn> }
 	let configManager: CodeIndexConfigManager
+	let currentConfig: CodeIndexConfig
 
-	const setGlobalConfig = (config: any) => {
-		mockConfigProvider.getGlobalState.mockImplementation((key: string) => {
-			if (key === "codebaseIndexConfig") {
-				return config
-			}
-			return undefined
-		})
+	const setGlobalConfig = (config: Partial<CodeIndexConfig>) => {
+		currentConfig = {
+			isEnabled: true,
+			embedderProvider: "openai",
+			...config,
+		}
 	}
 
 	const setSecrets = (secrets: Record<string, string>) => {
-		mockConfigProvider.getSecret.mockImplementation((key: string) => {
-			return Promise.resolve(secrets[key] ?? "")
-		})
+		// Update secrets in the current config
+		if (secrets['codeIndexOpenAiKey'] !== undefined) {
+			currentConfig.embedderOpenAiApiKey = secrets['codeIndexOpenAiKey']
+		}
+		if (secrets['codeIndexQdrantApiKey'] !== undefined) {
+			currentConfig.qdrantApiKey = secrets['codeIndexQdrantApiKey']
+		}
+		if (secrets['codebaseIndexOpenAiCompatibleApiKey'] !== undefined) {
+			if (currentConfig.embedderProvider === "openai-compatible") {
+				currentConfig.embedderOpenAiCompatibleApiKey = secrets['codebaseIndexOpenAiCompatibleApiKey']
+			}
+		}
+		if (secrets['codebaseIndexGeminiApiKey'] !== undefined) {
+			if (currentConfig.embedderProvider === "gemini") {
+				currentConfig.embedderGeminiApiKey = secrets['codebaseIndexGeminiApiKey']
+			}
+		}
+		if (secrets['codebaseIndexMistralApiKey'] !== undefined) {
+			if (currentConfig.embedderProvider === "mistral") {
+				currentConfig.embedderMistralApiKey = secrets['codebaseIndexMistralApiKey']
+			}
+		}
+		if (secrets['codebaseIndexVercelAiGatewayApiKey'] !== undefined) {
+			if (currentConfig.embedderProvider === "vercel-ai-gateway") {
+				currentConfig.embedderVercelAiGatewayApiKey = secrets['codebaseIndexVercelAiGatewayApiKey']
+			}
+		}
+		if (secrets['codebaseIndexOpenRouterApiKey'] !== undefined) {
+			if (currentConfig.embedderProvider === "openrouter") {
+				currentConfig.embedderOpenRouterApiKey = secrets['codebaseIndexOpenRouterApiKey']
+			}
+		}
 	}
 
 	beforeEach(() => {
-		// Minimal mock compatible with CodeIndexConfigManager
+		// Mock IConfigProvider with the new interface
 		mockConfigProvider = {
-			getGlobalState: vi.fn(),
-			getSecret: vi.fn(),
-			refreshSecrets: vi.fn().mockResolvedValue(undefined),
+			getConfig: vi.fn().mockImplementation(() => Promise.resolve(currentConfig)),
+			onConfigChange: vi.fn().mockReturnValue(() => {}),
 		}
 
 		// Default configuration mirrors the extension's defaults
 		setGlobalConfig({
-			codebaseIndexEnabled: true,
-			codebaseIndexQdrantUrl: "http://localhost:6333",
-			codebaseIndexEmbedderProvider: "openai",
-			codebaseIndexEmbedderBaseUrl: "",
-			codebaseIndexEmbedderModelId: "",
-			codebaseIndexSearchMinScore: undefined,
-			codebaseIndexSearchMaxResults: undefined,
+			isEnabled: true,
+			qdrantUrl: "http://localhost:6333",
 		})
 
 		setSecrets({
@@ -65,13 +89,12 @@ describe("CodeIndexConfigManager", () => {
 	describe("loadConfiguration", () => {
 		it("should load OpenAI configuration from global state and secrets", async () => {
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.local",
-				codebaseIndexEmbedderProvider: "openai",
-				codebaseIndexEmbedderBaseUrl: "",
-				codebaseIndexEmbedderModelId: "text-embedding-3-small",
-				codebaseIndexSearchMinScore: 0.4,
-				codebaseIndexSearchMaxResults: 25,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.local",
+				embedderProvider: "openai",
+				embedderModelId: "text-embedding-3-small",
+				vectorSearchMinScore: 0.4,
+				vectorSearchMaxResults: 25,
 			})
 
 			setSecrets({
@@ -88,30 +111,25 @@ describe("CodeIndexConfigManager", () => {
 
 			expect(result.currentConfig).toMatchObject({
 				isEnabled: true,
-				isConfigured: true,
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-small",
-				openAiOptions: { openAiNativeApiKey: "test-openai-key" },
-				ollamaOptions: undefined,
-				openAiCompatibleOptions: undefined,
+				embedderModelId: "text-embedding-3-small",
+				embedderOpenAiApiKey: "test-openai-key",
 				qdrantUrl: "http://qdrant.local",
 				qdrantApiKey: "test-qdrant-key",
 			})
 
 			// Search configuration should be surfaced through helpers
-			expect(result.currentConfig.searchMinScore).toBe(0.4)
-			expect(result.currentConfig.searchMaxResults).toBe(25)
+			expect(result.currentConfig.vectorSearchMinScore).toBe(0.4)
+			expect(result.currentConfig.vectorSearchMaxResults).toBe(25)
 		})
 
 		it("should load Ollama configuration", async () => {
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.local",
-				codebaseIndexEmbedderProvider: "ollama",
-				codebaseIndexEmbedderBaseUrl: "http://ollama.local",
-				codebaseIndexEmbedderModelId: "nomic-embed-text",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.local",
+				embedderProvider: "ollama",
+				embedderModelId: "nomic-embed-text",
+				embedderOllamaBaseUrl: "http://ollama.local",
 			})
 
 			setSecrets({
@@ -128,26 +146,23 @@ describe("CodeIndexConfigManager", () => {
 
 			expect(result.currentConfig).toMatchObject({
 				isEnabled: true,
-				isConfigured: true,
 				embedderProvider: "ollama",
-				modelId: "nomic-embed-text",
-				openAiOptions: { openAiNativeApiKey: "" },
-				ollamaOptions: { ollamaBaseUrl: "http://ollama.local" },
+				embedderModelId: "nomic-embed-text",
+				embedderOpenAiApiKey: "",
+				embedderOllamaBaseUrl: "http://ollama.local",
 				qdrantUrl: "http://qdrant.local",
 			})
 		})
 
 		it("should load OpenAI Compatible configuration", async () => {
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.local",
-				codebaseIndexEmbedderProvider: "openai-compatible",
-				codebaseIndexEmbedderBaseUrl: "",
-				codebaseIndexEmbedderModelId: "text-embedding-3-large",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
-				codebaseIndexOpenAiCompatibleBaseUrl: "https://api.example.com/v1",
-				codebaseIndexEmbedderModelDimension: 1024,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.local",
+				embedderProvider: "openai-compatible",
+				embedderModelId: "text-embedding-3-large",
+				embedderModelDimension: 1024,
+				embedderOpenAiCompatibleBaseUrl: "https://api.example.com/v1",
+				embedderOpenAiCompatibleApiKey: "", // Will be set by secrets
 			})
 
 			setSecrets({
@@ -164,14 +179,11 @@ describe("CodeIndexConfigManager", () => {
 
 			expect(result.currentConfig).toMatchObject({
 				isEnabled: true,
-				isConfigured: true,
 				embedderProvider: "openai-compatible",
-				modelId: "text-embedding-3-large",
-				modelDimension: 1024,
-				openAiCompatibleOptions: {
-					baseUrl: "https://api.example.com/v1",
-					apiKey: "test-openai-compatible-key",
-				},
+				embedderModelId: "text-embedding-3-large",
+				embedderModelDimension: 1024,
+				embedderOpenAiCompatibleBaseUrl: "https://api.example.com/v1",
+				embedderOpenAiCompatibleApiKey: "test-openai-compatible-key",
 				qdrantUrl: "http://qdrant.local",
 				qdrantApiKey: "test-qdrant-key",
 			})
@@ -180,13 +192,10 @@ describe("CodeIndexConfigManager", () => {
 		it("should detect restart requirement when critical settings change", async () => {
 			// Initial configuration: OpenAI provider
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.local",
-				codebaseIndexEmbedderProvider: "openai",
-				codebaseIndexEmbedderBaseUrl: "",
-				codebaseIndexEmbedderModelId: "text-embedding-3-small",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.local",
+				embedderProvider: "openai",
+				embedderModelId: "text-embedding-3-small",
 			})
 
 			setSecrets({
@@ -203,13 +212,11 @@ describe("CodeIndexConfigManager", () => {
 
 			// Change provider and credentials
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.other",
-				codebaseIndexEmbedderProvider: "ollama",
-				codebaseIndexEmbedderBaseUrl: "http://ollama.local",
-				codebaseIndexEmbedderModelId: "nomic-embed-text",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.other",
+				embedderProvider: "ollama",
+				embedderModelId: "nomic-embed-text",
+				embedderOllamaBaseUrl: "http://ollama.local",
 			})
 
 			setSecrets({
@@ -230,13 +237,10 @@ describe("CodeIndexConfigManager", () => {
 	describe("isConfigured", () => {
 		it("should return true when OpenAI is fully configured", async () => {
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.local",
-				codebaseIndexEmbedderProvider: "openai",
-				codebaseIndexEmbedderBaseUrl: "",
-				codebaseIndexEmbedderModelId: "text-embedding-3-small",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.local",
+				embedderProvider: "openai",
+				embedderModelId: "text-embedding-3-small",
 			})
 
 			setSecrets({
@@ -255,13 +259,10 @@ describe("CodeIndexConfigManager", () => {
 
 		it("should return false when required values are missing", async () => {
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "",
-				codebaseIndexEmbedderProvider: "openai",
-				codebaseIndexEmbedderBaseUrl: "",
-				codebaseIndexEmbedderModelId: "",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
+				isEnabled: true,
+				qdrantUrl: "",
+				embedderProvider: "openai",
+				embedderModelId: "",
 			})
 
 			setSecrets({
@@ -282,13 +283,10 @@ describe("CodeIndexConfigManager", () => {
 	describe("getter properties", () => {
 		beforeEach(async () => {
 			setGlobalConfig({
-				codebaseIndexEnabled: true,
-				codebaseIndexQdrantUrl: "http://qdrant.local",
-				codebaseIndexEmbedderProvider: "openai",
-				codebaseIndexEmbedderBaseUrl: "",
-				codebaseIndexEmbedderModelId: "text-embedding-3-large",
-				codebaseIndexSearchMinScore: undefined,
-				codebaseIndexSearchMaxResults: undefined,
+				isEnabled: true,
+				qdrantUrl: "http://qdrant.local",
+				embedderProvider: "openai",
+				embedderModelId: "text-embedding-3-large",
 			})
 
 			setSecrets({
@@ -309,7 +307,7 @@ describe("CodeIndexConfigManager", () => {
 
 			expect(config.isEnabled).toBe(true)
 			expect(config.embedderProvider).toBe("openai")
-			expect(config.modelId).toBe("text-embedding-3-large")
+			expect(config.embedderModelId).toBe("text-embedding-3-large")
 			expect(config.qdrantUrl).toBe("http://qdrant.local")
 			expect(config.qdrantApiKey).toBe("qdrant-key")
 		})

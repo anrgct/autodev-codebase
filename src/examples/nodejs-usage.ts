@@ -36,11 +36,10 @@ export async function basicUsageExample() {
   // Example: Configuration
   await dependencies.configProvider.saveConfig({
     isEnabled: true,
-    isConfigured: true,
     embedderProvider: "openai",
-    modelId: 'text-embedding-3-small',
-    modelDimension: 1536,
-    openAiOptions: { openAiNativeApiKey: process.env['OPENAI_API_KEY'] || 'your-api-key-here' },
+    embedderModelId: 'text-embedding-3-small',
+    embedderModelDimension: 1536,
+    embedderOpenAiApiKey: process.env['OPENAI_API_KEY'] || 'your-api-key-here',
     qdrantUrl: 'http://localhost:6333'
   })
 
@@ -72,9 +71,9 @@ export async function advancedUsageExample() {
       defaultConfig: {
         isEnabled: true,
         embedderProvider: "ollama",
-        modelId: 'nomic-embed-text',
-        modelDimension: 768,
-        ollamaOptions: { ollamaBaseUrl: 'http://localhost:11434' }
+        embedderModelId: 'nomic-embed-text',
+        embedderModelDimension: 768,
+        embedderOllamaBaseUrl: 'http://localhost:11434'
       }
     }
   })
@@ -205,11 +204,10 @@ export async function cliExample() {
     case 'init':
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
-        isConfigured: false,
         embedderProvider: "ollama",
-        modelId: 'nomic-embed-text',
-        modelDimension: 768,
-        ollamaOptions: { ollamaBaseUrl: 'http://localhost:11434' }
+        embedderModelId: 'nomic-embed-text',
+        embedderModelDimension: 768,
+        embedderOllamaBaseUrl: 'http://localhost:11434'
       })
       console.log('Configuration initialized')
       break
@@ -218,7 +216,6 @@ export async function cliExample() {
       const config = await dependencies.configProvider.loadConfig()
       console.log('Code Index Status:')
       console.log('  Enabled:', config.isEnabled)
-      console.log('  Configured:', config.isConfigured)
       console.log('  Provider:', config.embedderProvider)
       break
 

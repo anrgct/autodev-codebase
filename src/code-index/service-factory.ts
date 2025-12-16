@@ -87,52 +87,54 @@ export class CodeIndexServiceFactory {
 		const provider = config.embedderProvider as EmbedderProvider
 
 		if (provider === "openai") {
-			const apiKey = config.openAiOptions?.openAiNativeApiKey
+			const apiKey = config.embedderOpenAiApiKey
 
 			if (!apiKey) {
 				throw new Error(t("embeddings:serviceFactory.openAiConfigMissing"))
 			}
 			return new OpenAiEmbedder({
-				...config.openAiOptions,
-				openAiEmbeddingModelId: config.modelId,
+				openAiNativeApiKey: apiKey,
+				openAiEmbeddingModelId: config.embedderModelId,
+				openAiBatchSize: config.embedderOpenAiBatchSize,
 			})
 		} else if (provider === "ollama") {
-			if (!config.ollamaOptions?.ollamaBaseUrl) {
+			if (!config.embedderOllamaBaseUrl) {
 				throw new Error(t("embeddings:serviceFactory.ollamaConfigMissing"))
 			}
 			return new CodeIndexOllamaEmbedder({
-				...config.ollamaOptions,
-				ollamaModelId: config.modelId,
+				ollamaBaseUrl: config.embedderOllamaBaseUrl,
+				ollamaModelId: config.embedderModelId,
+				ollamaBatchSize: config.embedderOllamaBatchSize,
 			})
 		} else if (provider === "openai-compatible") {
-			if (!config.openAiCompatibleOptions?.baseUrl || !config.openAiCompatibleOptions?.apiKey) {
+			if (!config.embedderOpenAiCompatibleBaseUrl || !config.embedderOpenAiCompatibleApiKey) {
 				throw new Error(t("embeddings:serviceFactory.openAiCompatibleConfigMissing"))
 			}
 			return new OpenAICompatibleEmbedder(
-				config.openAiCompatibleOptions.baseUrl,
-				config.openAiCompatibleOptions.apiKey,
-				config.modelId,
+				config.embedderOpenAiCompatibleBaseUrl,
+				config.embedderOpenAiCompatibleApiKey,
+				config.embedderModelId,
 			)
 		} else if (provider === "gemini") {
-			if (!config.geminiOptions?.apiKey) {
+			if (!config.embedderGeminiApiKey) {
 				throw new Error(t("embeddings:serviceFactory.geminiConfigMissing"))
 			}
-			return new GeminiEmbedder(config.geminiOptions.apiKey, config.modelId)
+			return new GeminiEmbedder(config.embedderGeminiApiKey, config.embedderModelId)
 		} else if (provider === "mistral") {
-			if (!config.mistralOptions?.apiKey) {
+			if (!config.embedderMistralApiKey) {
 				throw new Error(t("embeddings:serviceFactory.mistralConfigMissing"))
 			}
-			return new MistralEmbedder(config.mistralOptions.apiKey, config.modelId)
+			return new MistralEmbedder(config.embedderMistralApiKey, config.embedderModelId)
 		} else if (provider === "vercel-ai-gateway") {
-			if (!config.vercelAiGatewayOptions?.apiKey) {
+			if (!config.embedderVercelAiGatewayApiKey) {
 				throw new Error(t("embeddings:serviceFactory.vercelAiGatewayConfigMissing"))
 			}
-			return new VercelAiGatewayEmbedder(config.vercelAiGatewayOptions.apiKey, config.modelId)
+			return new VercelAiGatewayEmbedder(config.embedderVercelAiGatewayApiKey, config.embedderModelId)
 		} else if (provider === "openrouter") {
-			if (!config.openRouterOptions?.apiKey) {
+			if (!config.embedderOpenRouterApiKey) {
 				throw new Error(t("embeddings:serviceFactory.openRouterConfigMissing"))
 			}
-			return new OpenRouterEmbedder(config.openRouterOptions.apiKey, config.modelId)
+			return new OpenRouterEmbedder(config.embedderOpenRouterApiKey, config.embedderModelId)
 		}
 
 		throw new Error(
@@ -165,7 +167,7 @@ export class CodeIndexServiceFactory {
 		this.debug(`Debug createVectorStore config:`, JSON.stringify(config, null, 2))
 
 		const provider = config.embedderProvider as EmbedderProvider
-		const modelId = config.modelId ?? getDefaultModelId(provider)
+		const modelId = config.embedderModelId ?? getDefaultModelId(provider)
 
 		let vectorSize: number | undefined
 
@@ -173,8 +175,8 @@ export class CodeIndexServiceFactory {
 		vectorSize = getModelDimension(provider, modelId)
 
 		// Only use manual dimension if model doesn't have a built-in dimension
-		if (!vectorSize && config.modelDimension && config.modelDimension > 0) {
-			vectorSize = config.modelDimension
+		if (!vectorSize && config.embedderModelDimension && config.embedderModelDimension > 0) {
+			vectorSize = config.embedderModelDimension
 		}
 
 		if (vectorSize === undefined || vectorSize <= 0) {

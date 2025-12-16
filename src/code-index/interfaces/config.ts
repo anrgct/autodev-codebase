@@ -109,21 +109,47 @@ export type EmbedderConfig =
  */
 export interface CodeIndexConfig {
 	isEnabled: boolean
-	isConfigured: boolean
+	// Embedder - 通用参数
 	embedderProvider: EmbedderProvider
-	modelId?: string
-	modelDimension?: number // Generic dimension property for all providers
-	openAiOptions?: ApiHandlerOptions
-	ollamaOptions?: ApiHandlerOptions
-	openAiCompatibleOptions?: { baseUrl: string; apiKey: string }
-	geminiOptions?: { apiKey: string }
-	mistralOptions?: { apiKey: string }
-	vercelAiGatewayOptions?: { apiKey: string }
-	openRouterOptions?: { apiKey: string }
+	embedderModelId?: string
+	embedderModelDimension?: number
+
+	// Embedder - Ollama 特定参数
+	embedderOllamaBaseUrl?: string
+	embedderOllamaBatchSize?: number
+
+	// Embedder - OpenAI 特定参数
+	embedderOpenAiApiKey?: string
+	embedderOpenAiBatchSize?: number
+
+	// Embedder - OpenAI Compatible 特定参数
+	embedderOpenAiCompatibleBaseUrl?: string
+	embedderOpenAiCompatibleApiKey?: string
+	embedderOpenAiCompatibleBatchSize?: number
+
+	// Embedder - Gemini 特定参数
+	embedderGeminiApiKey?: string
+	embedderGeminiBatchSize?: number
+
+	// Embedder - Mistral 特定参数
+	embedderMistralApiKey?: string
+	embedderMistralBatchSize?: number
+
+	// Embedder - Vercel AI Gateway 特定参数
+	embedderVercelAiGatewayApiKey?: string
+
+	// Embedder - OpenRouter 特定参数
+	embedderOpenRouterApiKey?: string
+	embedderOpenRouterBatchSize?: number
+
+	// Vector Store
 	qdrantUrl?: string
 	qdrantApiKey?: string
-	searchMinScore?: number
-	searchMaxResults?: number
+
+	// Vector Search
+	vectorSearchMinScore?: number
+	vectorSearchMaxResults?: number
+
 	// Reranker configuration
 	rerankerEnabled?: boolean
 	rerankerProvider?: 'ollama-llm' | 'none'
@@ -138,18 +164,82 @@ export interface CodeIndexConfig {
  */
 export type PreviousConfigSnapshot = {
 	enabled: boolean
-	configured: boolean
 	embedderProvider: EmbedderProvider
-	modelId?: string
-	modelDimension?: number // Generic dimension property
-	openAiKey?: string
-	ollamaBaseUrl?: string
-	openAiCompatibleBaseUrl?: string
-	openAiCompatibleApiKey?: string
-	geminiApiKey?: string
-	mistralApiKey?: string
-	vercelAiGatewayApiKey?: string
-	openRouterApiKey?: string
+	embedderModelId?: string
+	embedderModelDimension?: number
+	embedderOllamaBaseUrl?: string
+	embedderOllamaBatchSize?: number
+	embedderOpenAiApiKey?: string
+	embedderOpenAiBatchSize?: number
+	embedderOpenAiCompatibleBaseUrl?: string
+	embedderOpenAiCompatibleApiKey?: string
+	embedderOpenAiCompatibleBatchSize?: number
+	embedderGeminiApiKey?: string
+	embedderGeminiBatchSize?: number
+	embedderMistralApiKey?: string
+	embedderMistralBatchSize?: number
+	embedderVercelAiGatewayApiKey?: string
+	embedderOpenRouterApiKey?: string
+	embedderOpenRouterBatchSize?: number
 	qdrantUrl?: string
 	qdrantApiKey?: string
+	vectorSearchMinScore?: number
+	vectorSearchMaxResults?: number
+	rerankerEnabled?: boolean
+	rerankerProvider?: 'ollama-llm' | 'none'
+	rerankerOllamaBaseUrl?: string
+	rerankerOllamaModelId?: string
+	rerankerMinScore?: number
+	rerankerBatchSize?: number
+}
+
+/**
+ * Vector store configuration
+ */
+export interface VectorStoreConfig {
+	qdrantUrl?: string
+	qdrantApiKey?: string
+}
+
+/**
+ * Search configuration
+ */
+export interface SearchConfig {
+	minScore?: number
+	maxResults?: number
+}
+
+/**
+ * Configuration snapshot for restart detection
+ * Using legacy format for backwards compatibility during transition
+ */
+export interface ConfigSnapshot {
+	enabled: boolean
+	embedderProvider: EmbedderProvider
+	embedderModelId?: string
+	embedderModelDimension?: number
+	embedderOllamaBaseUrl?: string
+	embedderOllamaBatchSize?: number
+	embedderOpenAiApiKey?: string
+	embedderOpenAiBatchSize?: number
+	embedderOpenAiCompatibleBaseUrl?: string
+	embedderOpenAiCompatibleApiKey?: string
+	embedderOpenAiCompatibleBatchSize?: number
+	embedderGeminiApiKey?: string
+	embedderGeminiBatchSize?: number
+	embedderMistralApiKey?: string
+	embedderMistralBatchSize?: number
+	embedderVercelAiGatewayApiKey?: string
+	embedderOpenRouterApiKey?: string
+	embedderOpenRouterBatchSize?: number
+	qdrantUrl?: string
+	qdrantApiKey?: string
+	vectorSearchMinScore?: number
+	vectorSearchMaxResults?: number
+	rerankerEnabled?: boolean
+	rerankerProvider?: 'ollama-llm' | 'none'
+	rerankerOllamaBaseUrl?: string
+	rerankerOllamaModelId?: string
+	rerankerMinScore?: number
+	rerankerBatchSize?: number
 }

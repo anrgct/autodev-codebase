@@ -1,14 +1,13 @@
 {
   "isEnabled": true,
-  "isConfigured": true,
   "embedderProvider": "openai",
-  "modelId": "text-embedding-3-small",
-  "modelDimension": 1536,
-  "ollamaOptions": {
-    "ollamaBaseUrl": "http://localhost:11434"
-  },
-  "openAiOptions": {
-    "openAiNativeApiKey": "test-key"
-  },
-  "qdrantUrl": "http://localhost:6333"
+  "embedderModelId": "text-embedding-3-small",
+  "embedderModelDimension": 1536,
+  "embedderOllamaBaseUrl": "http://localhost:11434",
+  "qdrantUrl": "http://localhost:6333",
+  "vectorSearchMinScore": 0.1,
+  "vectorSearchMaxResults": 20,
+  "rerankerEnabled": false,
+  "rerankerProvider": "none",
+  "embedderOpenAiApiKey": "test-key"
 }

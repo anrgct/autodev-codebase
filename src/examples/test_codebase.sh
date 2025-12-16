@@ -1,5 +1,5 @@
 #!/bin/bash
-query='Instruct: Given a codebase search query, retrieve relevant code snippets or document that answer the query. \nQuery: where is the actual train method implementation in the source code?'
+query='where is the actual train method implementation in the source code?'
 filter='model.py'
 echo "=== 开始 codebase 搜索测试 ==="
 echo "搜索查询: $query"

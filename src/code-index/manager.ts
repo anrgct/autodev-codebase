@@ -1,6 +1,7 @@
 import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner, IReranker } from "./interfaces"
 import { IndexingState, ICodeIndexManager } from "./interfaces/manager"
-import { CodeIndexConfigManager, ICodeIndexConfigProvider } from "./config-manager"
+import { CodeIndexConfigManager } from "./config-manager"
+import { IConfigProvider } from "../abstractions/config"
 import { CodeIndexStateManager } from "./state-manager"
 import { CodeIndexServiceFactory } from "./service-factory"
 import { CodeIndexSearchService } from "./search-service"
@@ -21,7 +22,7 @@ export interface CodeIndexManagerDependencies {
 	eventBus: IEventBus
 	workspace: IWorkspace
 	pathUtils: IPathUtils
-	configProvider: ICodeIndexConfigProvider
+	configProvider: IConfigProvider
 	logger?: LoggerLike
 }
 

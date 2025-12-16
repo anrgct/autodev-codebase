@@ -149,9 +149,9 @@ describe('Core Library Integration', () => {
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
         embedderProvider: "openai",
-        modelId: "text-embedding-3-small",
-        modelDimension: 1536,
-        openAiOptions: { openAiNativeApiKey: "test-api-key" }
+        embedderModelId: "text-embedding-3-small",
+        embedderModelDimension: 1536,
+        embedderOpenAiApiKey: "test-api-key"
       })
 
       await configManager.initialize() // Reload config

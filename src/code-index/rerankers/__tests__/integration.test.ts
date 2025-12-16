@@ -9,8 +9,9 @@ import { CodeIndexStateManager } from '../../state-manager'
 import { CodeIndexSearchService } from '../../search-service'
 import { OllamaLLMReranker } from '../ollama-llm'
 import type { IEmbedder, IVectorStore } from '../../interfaces'
-import type { ICodeIndexConfigProvider } from '../../config-manager'
+import type { IConfigProvider } from '../../../abstractions/config'
 import type { IEventBus } from '../../../abstractions/core'
+import type { CodeIndexConfig } from '../../interfaces/config'
 
 // Mock dependencies
 const mockEmbedder: IEmbedder = {
@@ -42,10 +43,18 @@ const mockEventBus: IEventBus = {
   once: vi.fn()
 }
 
-const mockConfigProvider: ICodeIndexConfigProvider = {
-  getGlobalState: vi.fn(),
-  getSecret: vi.fn().mockResolvedValue(''),
-  refreshSecrets: vi.fn().mockResolvedValue(undefined)
+const mockConfigProvider: IConfigProvider = {
+  getConfig: vi.fn().mockResolvedValue({
+    isEnabled: true,
+    isConfigured: true,
+    embedderProvider: 'openai',
+    modelId: 'text-embedding-ada-002',
+    modelDimension: 1536,
+    qdrantUrl: 'http://localhost:6333',
+    rerankerEnabled: false,
+    rerankerProvider: 'none'
+  } as CodeIndexConfig),
+  onConfigChange: vi.fn().mockReturnValue(() => {})
 }
 
 describe('LLM Reranker Integration Tests', () => {
@@ -63,16 +72,6 @@ describe('LLM Reranker Integration Tests', () => {
       clearCacheFile: vi.fn(),
       deleteHashes: vi.fn()
     }
-
-    // Setup default config via getGlobalState
-    ;(mockConfigProvider.getGlobalState as any) = vi.fn().mockReturnValue({
-      codebaseIndexEnabled: true,
-      codebaseIndexQdrantUrl: 'http://localhost:6333',
-      codebaseIndexEmbedderProvider: 'openai',
-      codebaseIndexEmbedderModelId: 'text-embedding-ada-002',
-      codebaseIndexRerankerEnabled: false,
-      codebaseIndexRerankerProvider: 'none'
-    })
 
     configManager = new CodeIndexConfigManager(mockConfigProvider)
     serviceFactory = new CodeIndexServiceFactory(

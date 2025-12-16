@@ -299,8 +299,8 @@ describe('Node.js Adapters Integration', () => {
         defaultConfig: {
           isEnabled: false,
           embedderProvider: "openai" as const,
-          modelId: "text-embedding-3-small",
-          modelDimension: 1536
+          embedderModelId: "text-embedding-3-small",
+          embedderModelDimension: 1536
         }
       })
     })
@@ -308,11 +308,10 @@ describe('Node.js Adapters Integration', () => {
     it('should save and load configuration', async () => {
       const testConfig = {
         isEnabled: true,
-        isConfigured: true,
         embedderProvider: "ollama" as const,
-        modelId: "qwen3-embedding:0.6b",
-        modelDimension: 1024,
-        ollamaOptions: { ollamaBaseUrl: 'http://localhost:11434' }
+        embedderModelId: "qwen3-embedding:0.6b",
+        embedderModelDimension: 1024,
+        embedderOllamaBaseUrl: 'http://localhost:11434'
       }
 
       await configProvider.saveConfig(testConfig)
@@ -320,17 +319,18 @@ describe('Node.js Adapters Integration', () => {
 
       expect(loadedConfig.isEnabled).toBe(true)
       expect(loadedConfig.embedderProvider).toBe("ollama")
-      expect(loadedConfig.ollamaOptions?.ollamaBaseUrl).toBe('http://localhost:11434')
+      expect(loadedConfig.embedderOllamaBaseUrl).toBe('http://localhost:11434')
     })
 
     it('should validate configuration', async () => {
-      // Test invalid configuration - missing OpenAI API key
+      // Test invalid configuration - missing OpenAI API key and Qdrant URL
       await configProvider.saveConfig({
         isEnabled: true,
         embedderProvider: "openai",
-        modelId: "text-embedding-3-small",
-        modelDimension: 1536
-        // Missing required openAiOptions
+        embedderModelId: "text-embedding-3-small",
+        embedderModelDimension: 1536,
+        qdrantUrl: null as any
+        // Missing required embedderOpenAiApiKey, explicitly set qdrantUrl to null
       })
 
       const validation = await configProvider.validateConfig()
@@ -392,11 +392,10 @@ describe('Node.js Adapters Integration', () => {
       // 1. Configure the system
       await dependencies.configProvider.saveConfig({
         isEnabled: true,
-        isConfigured: true,
         embedderProvider: "openai",
-        modelId: "text-embedding-3-small",
-        modelDimension: 1536,
-        openAiOptions: { openAiNativeApiKey: 'test-key' },
+        embedderModelId: "text-embedding-3-small",
+        embedderModelDimension: 1536,
+        embedderOpenAiApiKey: 'test-key',
         qdrantUrl: 'http://localhost:6333'
       })
 
@@ -424,7 +423,6 @@ describe('Node.js Adapters Integration', () => {
       // 4. Verify configuration
       const config = await dependencies.configProvider.loadConfig()
       expect(config.isEnabled).toBe(true)
-      expect(config.isConfigured).toBe(true)
 
       // 5. Test event system
       let eventReceived = false

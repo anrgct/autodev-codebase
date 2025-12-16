@@ -96,10 +96,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should create OpenAI embedder with correct configuration", () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-large",
-				openAiOptions: {
-					openAiNativeApiKey: "test-api-key",
-				},
+				embedderModelId: "text-embedding-3-large",
+				embedderOpenAiApiKey: "test-api-key",
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -119,10 +117,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should create Ollama embedder with correct configuration", () => {
 			const config = {
 				embedderProvider: "ollama",
-				modelId: "nomic-embed-text",
-				ollamaOptions: {
-					ollamaBaseUrl: "http://localhost:11434",
-				},
+				embedderModelId: "nomic-embed-text",
+				embedderOllamaBaseUrl: "http://localhost:11434",
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -142,11 +138,9 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should create OpenAI Compatible embedder with correct configuration", () => {
 			const config = {
 				embedderProvider: "openai-compatible",
-				modelId: "text-embedding-3-large",
-				openAiCompatibleOptions: {
-					baseUrl: "https://api.example.com/v1",
-					apiKey: "test-api-key",
-				},
+				embedderModelId: "text-embedding-3-large",
+				embedderOpenAiCompatibleBaseUrl: "https://api.example.com/v1",
+				embedderOpenAiCompatibleApiKey: "test-api-key",
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -165,8 +159,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw when OpenAI API key is missing", () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-small",
-				openAiOptions: {},
+				embedderModelId: "text-embedding-3-small",
 				qdrantUrl: "http://localhost:6333",
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
@@ -177,8 +170,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw when Ollama base URL is missing", () => {
 			const config = {
 				embedderProvider: "ollama",
-				modelId: "nomic-embed-text",
-				ollamaOptions: {},
+				embedderModelId: "nomic-embed-text",
 				qdrantUrl: "http://localhost:6333",
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
@@ -189,11 +181,9 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw when OpenAI Compatible base URL or API key is missing", () => {
 			const config = {
 				embedderProvider: "openai-compatible",
-				modelId: "text-embedding-3-large",
-				openAiCompatibleOptions: {
-					baseUrl: "",
-					apiKey: "",
-				},
+				embedderModelId: "text-embedding-3-large",
+				embedderOpenAiCompatibleBaseUrl: "",
+				embedderOpenAiCompatibleApiKey: "",
 				qdrantUrl: "http://localhost:6333",
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
@@ -206,7 +196,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw for invalid embedder provider", () => {
 			const config = {
 				embedderProvider: "invalid-provider",
-				modelId: "some-model",
+				embedderModelId: "some-model",
 				qdrantUrl: "http://localhost:6333",
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
@@ -223,8 +213,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should use model profile dimension when available", () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-small",
-				modelDimension: 2048,
+				embedderModelId: "text-embedding-3-small",
+				embedderModelDimension: 2048,
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -245,12 +235,10 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should fall back to manual modelDimension when model has no profile", () => {
 			const config = {
 				embedderProvider: "openai-compatible",
-				modelId: "custom-model",
-				modelDimension: 1024,
-				openAiCompatibleOptions: {
-					baseUrl: "https://api.example.com/v1",
-					apiKey: "test-api-key",
-				},
+				embedderModelId: "custom-model",
+				embedderModelDimension: 1024,
+				embedderOpenAiCompatibleBaseUrl: "https://api.example.com/v1",
+				embedderOpenAiCompatibleApiKey: "test-api-key",
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -269,12 +257,10 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw specialized error when OpenAI Compatible dimension cannot be determined", () => {
 			const config = {
 				embedderProvider: "openai-compatible",
-				modelId: "custom-model",
-				modelDimension: 0,
-				openAiCompatibleOptions: {
-					baseUrl: "https://api.example.com/v1",
-					apiKey: "test-api-key",
-				},
+				embedderModelId: "custom-model",
+				embedderModelDimension: 0,
+				embedderOpenAiCompatibleBaseUrl: "https://api.example.com/v1",
+				embedderOpenAiCompatibleApiKey: "test-api-key",
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -288,11 +274,9 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw generic error when dimension cannot be determined for OpenAI", () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "unknown-model",
-				modelDimension: undefined,
-				openAiOptions: {
-					openAiNativeApiKey: "test-key",
-				},
+				embedderModelId: "unknown-model",
+				embedderModelDimension: undefined,
+				embedderOpenAiApiKey: "test-key",
 				qdrantUrl: "http://localhost:6333",
 				qdrantApiKey: "test-key",
 			}
@@ -306,11 +290,9 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should throw when Qdrant URL is missing", () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-small",
-				modelDimension: 1536,
-				openAiOptions: {
-					openAiNativeApiKey: "test-key",
-				},
+				embedderModelId: "text-embedding-3-small",
+				embedderModelDimension: 1536,
+				embedderOpenAiApiKey: "test-key",
 				qdrantUrl: undefined,
 				qdrantApiKey: "test-key",
 			}
@@ -324,10 +306,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should return validation result from embedder", async () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-small",
-				openAiOptions: {
-					openAiNativeApiKey: "test-key",
-				},
+				embedderModelId: "text-embedding-3-small",
+				embedderOpenAiApiKey: "test-key",
 				qdrantUrl: "http://localhost:6333",
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
@@ -341,10 +321,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 		it("should preserve error message when validation throws", async () => {
 			const config = {
 				embedderProvider: "openai",
-				modelId: "text-embedding-3-small",
-				openAiOptions: {
-					openAiNativeApiKey: "test-key",
-				},
+				embedderModelId: "text-embedding-3-small",
+				embedderOpenAiApiKey: "test-key",
 				qdrantUrl: "http://localhost:6333",
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)

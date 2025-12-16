@@ -14,23 +14,20 @@ export interface NodeConfigOptions {
   configPath?: string
   globalConfigPath?: string
   defaultConfig?: Partial<CodeIndexConfig>
-  cliOverrides?: {
-    ollamaUrl?: string
-    model?: string
-    qdrantUrl?: string
-  }
 }
 
 // Default configuration constants
 const DEFAULT_CONFIG: CodeIndexConfig = {
   isEnabled: true,
-  isConfigured: true,
   embedderProvider: "ollama",
-  modelId: "qwen3-embedding:0.6b",
-  modelDimension: 1024,
-  ollamaOptions: {
-    ollamaBaseUrl: "http://localhost:11434",
-  }
+  embedderModelId: "qwen3-embedding:0.6b",
+  embedderModelDimension: 1024,
+  embedderOllamaBaseUrl: "http://localhost:11434",
+  qdrantUrl: "http://localhost:6333",
+  vectorSearchMinScore: 0.1,
+  vectorSearchMaxResults: 20,
+  rerankerEnabled: false,
+  rerankerProvider: "none"
 }
 
 
@@ -40,11 +37,6 @@ export class NodeConfigProvider implements IConfigProvider {
   private config: CodeIndexConfig | null = null
   private configLoaded: boolean = false
   private changeCallbacks: Array<(config: CodeIndexConfig) => void> = []
-  private cliOverrides: NodeConfigOptions['cliOverrides']
-  // Global state storage for CodeIndexConfigManager compatibility
-  private globalState: Map<string, any> = new Map()
-  // Secrets storage for CodeIndexConfigManager compatibility
-  private secrets: Map<string, string> = new Map()
 
   constructor(
     private fileSystem: IFileSystem,
@@ -53,7 +45,6 @@ export class NodeConfigProvider implements IConfigProvider {
   ) {
     this.configPath = options.configPath || './autodev-config.json'
     this.globalConfigPath = options.globalConfigPath || path.join(os.homedir(), '.autodev-cache', 'autodev-config.json')
-    this.cliOverrides = options.cliOverrides
 
     // Set default configuration
     this.config = {
@@ -62,128 +53,39 @@ export class NodeConfigProvider implements IConfigProvider {
     }
   }
 
-  /**
-   * Get global state value (for CodeIndexConfigManager compatibility)
-   * Maps to the loaded configuration
-   */
-  getGlobalState(key: string): any {
-    // Return from globalState if explicitly set
-    if (this.globalState.has(key)) {
-      return this.globalState.get(key)
-    }
-
-    // For codebaseIndexConfig, return a compatible format
-    if (key === "codebaseIndexConfig" && this.config) {
-      return {
-        codebaseIndexEnabled: this.config.isEnabled ?? true,
-        codebaseIndexQdrantUrl: this.config.qdrantUrl ?? "http://localhost:6333",
-        codebaseIndexEmbedderProvider: this.config.embedderProvider ?? "ollama",
-        codebaseIndexEmbedderBaseUrl: this.config.ollamaOptions?.ollamaBaseUrl ?? "",
-        codebaseIndexEmbedderModelId: this.config.modelId ?? "",
-        codebaseIndexEmbedderModelDimension: this.config.modelDimension,
-        codebaseIndexSearchMinScore: this.config.searchMinScore,
-        codebaseIndexSearchMaxResults: this.config.searchMaxResults,
-        codebaseIndexOpenAiCompatibleBaseUrl: this.config.openAiCompatibleOptions?.baseUrl ?? "",
-        // Reranker configuration mapping
-        codebaseIndexRerankerEnabled: this.config.rerankerEnabled ?? false,
-        codebaseIndexRerankerProvider: this.config.rerankerProvider ?? 'none',
-        codebaseIndexRerankerOllamaBaseUrl: this.config.rerankerOllamaBaseUrl,
-        codebaseIndexRerankerOllamaModelId: this.config.rerankerOllamaModelId,
-        codebaseIndexRerankerMinScore: this.config.rerankerMinScore,
-        codebaseIndexRerankerBatchSize: this.config.rerankerBatchSize,
-      }
-    }
-
-    return undefined
-  }
-
-  /**
-   * Set global state value (for CodeIndexConfigManager compatibility)
-   */
-  setGlobalState(key: string, value: any): void {
-    this.globalState.set(key, value)
-  }
-
-  /**
-   * Get secret value (for CodeIndexConfigManager compatibility)
-   * Returns empty string for secrets in Node.js environment
-   */
-  async getSecret(key: string): Promise<string> {
-    // Return from secrets if explicitly set
-    if (this.secrets.has(key)) {
-      return this.secrets.get(key) ?? ""
-    }
-
-    // Map secrets to config values where applicable
-    if (this.config) {
-      switch (key) {
-        case "codeIndexOpenAiKey":
-          return this.config.openAiOptions?.openAiNativeApiKey ?? ""
-        case "codeIndexQdrantApiKey":
-          return this.config.qdrantApiKey ?? ""
-        case "codebaseIndexOpenAiCompatibleApiKey":
-          return this.config.openAiCompatibleOptions?.apiKey ?? ""
-        case "codebaseIndexGeminiApiKey":
-          return this.config.geminiOptions?.apiKey ?? ""
-        case "codebaseIndexMistralApiKey":
-          return this.config.mistralOptions?.apiKey ?? ""
-        case "codebaseIndexVercelAiGatewayApiKey":
-          return this.config.vercelAiGatewayOptions?.apiKey ?? ""
-        case "codebaseIndexOpenRouterApiKey":
-          return this.config.openRouterOptions?.apiKey ?? ""
-      }
-    }
-
-    return ""
-  }
-
-  /**
-   * Set secret value (for CodeIndexConfigManager compatibility)
-   */
-  setSecret(key: string, value: string): void {
-    this.secrets.set(key, value)
-  }
-
-  /**
-   * Refresh secrets from storage (for CodeIndexConfigManager compatibility)
-   * In Node.js environment, this reloads config from file
-   */
-  async refreshSecrets(): Promise<void> {
-    await this.reloadConfig()
-  }
-
   async getEmbedderConfig(): Promise<EmbedderConfig> {
     const config = await this.ensureConfigLoaded()
     // Convert new config structure to legacy format for compatibility
     if (config.embedderProvider === "openai") {
       return {
         provider: "openai",
-        modelId: config.modelId,
-        dimension: config.modelDimension,
-        openAiOptions: config.openAiOptions
+        model: config.embedderModelId || "text-embedding-ada-002",
+        dimension: config.embedderModelDimension || 1536,
+        apiKey: config.embedderOpenAiApiKey || ""
       }
     } else if (config.embedderProvider === "ollama") {
       return {
         provider: "ollama",
-        modelId: config.modelId,
-        dimension: config.modelDimension,
-        ollamaOptions: config.ollamaOptions
+        model: config.embedderModelId || "nomic-embed-text",
+        dimension: config.embedderModelDimension || 768,
+        baseUrl: config.embedderOllamaBaseUrl || "http://localhost:11434"
       }
     } else if (config.embedderProvider === "openai-compatible") {
       return {
         provider: "openai-compatible",
-        modelId: config.modelId,
-        dimension: config.modelDimension,
-        openAiCompatibleOptions: config.openAiCompatibleOptions
+        model: config.embedderModelId || "text-embedding-ada-002",
+        dimension: config.embedderModelDimension || 1536,
+        baseUrl: config.embedderOpenAiCompatibleBaseUrl || "",
+        apiKey: config.embedderOpenAiCompatibleApiKey || ""
       }
     }
 
     // Fallback
     return {
       provider: "ollama",
-      modelId: DEFAULT_CONFIG.modelId,
-      dimension: DEFAULT_CONFIG.modelDimension,
-      ollamaOptions: DEFAULT_CONFIG.ollamaOptions
+      model: DEFAULT_CONFIG.embedderModelId || "nomic-embed-text",
+      dimension: DEFAULT_CONFIG.embedderModelDimension || 768,
+      baseUrl: DEFAULT_CONFIG.embedderOllamaBaseUrl || "http://localhost:11434"
     }
   }
 
@@ -202,8 +104,8 @@ export class NodeConfigProvider implements IConfigProvider {
   async getSearchConfig(): Promise<SearchConfig> {
     const config = await this.ensureConfigLoaded()
     return {
-      minScore: config.searchMinScore,
-      maxResults: config.searchMaxResults ?? 50 // Use config value or default to 50
+      minScore: config.vectorSearchMinScore,
+      maxResults: config.vectorSearchMaxResults ?? 50 // Use config value or default to 50
     }
   }
 
@@ -284,22 +186,6 @@ export class NodeConfigProvider implements IConfigProvider {
       console.warn(`Failed to load project config from ${this.configPath}:`, error)
     }
 
-    // 3. Apply CLI overrides (highest priority)
-    if (this.cliOverrides && this.config) {
-      if (this.cliOverrides.ollamaUrl && this.config.ollamaOptions) {
-        this.config.ollamaOptions.ollamaBaseUrl = this.cliOverrides.ollamaUrl
-      }
-      if (this.cliOverrides.model && this.cliOverrides.model.trim()) {
-        this.config.modelId = this.cliOverrides.model
-      }
-      if (this.cliOverrides.qdrantUrl) {
-        this.config.qdrantUrl = this.cliOverrides.qdrantUrl
-      }
-    }
-
-    // Auto-determine isConfigured based on provider requirements
-    this.config!.isConfigured = this.isConfigured()
-
     // Mark as loaded to enable caching
     this.configLoaded = true
 
@@ -377,17 +263,17 @@ export class NodeConfigProvider implements IConfigProvider {
 
     // Check embedder configuration
     if (embedderProvider === "openai") {
-      if (!this.config.openAiOptions?.openAiNativeApiKey || !this.config.modelId) {
+      if (!this.config.embedderOpenAiApiKey || !this.config.embedderModelId) {
         return false
       }
     } else if (embedderProvider === "ollama") {
-      if (!this.config.ollamaOptions?.ollamaBaseUrl || !this.config.modelId) {
+      if (!this.config.embedderOllamaBaseUrl || !this.config.embedderModelId) {
         return false
       }
     } else if (embedderProvider === "openai-compatible") {
-      if (!this.config.openAiCompatibleOptions?.baseUrl ||
-          !this.config.openAiCompatibleOptions?.apiKey ||
-          !this.config.modelId) {
+      if (!this.config.embedderOpenAiCompatibleBaseUrl ||
+          !this.config.embedderOpenAiCompatibleApiKey ||
+          !this.config.embedderModelId) {
         return false
       }
     }
@@ -415,38 +301,38 @@ export class NodeConfigProvider implements IConfigProvider {
     const { embedderProvider } = config
     switch (embedderProvider) {
       case "openai":
-        if (!config.openAiOptions?.openAiNativeApiKey) {
+        if (!config.embedderOpenAiApiKey) {
           errors.push('OpenAI API key is required')
         }
-        if (!config.modelId) {
+        if (!config.embedderModelId) {
           errors.push('OpenAI model is required')
         }
-        if (!config.modelDimension || config.modelDimension <= 0) {
+        if (!config.embedderModelDimension || config.embedderModelDimension <= 0) {
           errors.push('OpenAI model dimension is required and must be positive')
         }
         break
       case "ollama":
-        if (!config.ollamaOptions?.ollamaBaseUrl) {
+        if (!config.embedderOllamaBaseUrl) {
           errors.push('Ollama base URL is required')
         }
-        if (!config.modelId) {
+        if (!config.embedderModelId) {
           errors.push('Ollama model is required')
         }
-        if (!config.modelDimension || config.modelDimension <= 0) {
+        if (!config.embedderModelDimension || config.embedderModelDimension <= 0) {
           errors.push('Ollama model dimension is required and must be positive')
         }
         break
       case "openai-compatible":
-        if (!config.openAiCompatibleOptions?.baseUrl) {
+        if (!config.embedderOpenAiCompatibleBaseUrl) {
           errors.push('OpenAI Compatible base URL is required')
         }
-        if (!config.openAiCompatibleOptions?.apiKey) {
+        if (!config.embedderOpenAiCompatibleApiKey) {
           errors.push('OpenAI Compatible API key is required')
         }
-        if (!config.modelId) {
+        if (!config.embedderModelId) {
           errors.push('OpenAI Compatible model is required')
         }
-        if (!config.modelDimension || config.modelDimension <= 0) {
+        if (!config.embedderModelDimension || config.embedderModelDimension <= 0) {
           errors.push('OpenAI Compatible model dimension is required and must be positive')
         }
         break

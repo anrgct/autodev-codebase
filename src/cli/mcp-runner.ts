@@ -89,12 +89,7 @@ export async function startMCPServerMode(options: CliOptions): Promise<void> {
       colors: false // Disable colors for MCP server mode
     },
     configOptions: {
-      configPath,
-      cliOverrides: {
-        ollamaUrl: options.ollamaUrl,
-        model: options.model,
-        qdrantUrl: options.qdrantUrl
-      }
+      configPath
     }
   });
 

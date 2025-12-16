@@ -35,11 +35,10 @@ async function main() {
       configPath: path.join(process.cwd(), '.autodev-config.json'),
       defaultConfig: {
         isEnabled: true,
-        isConfigured: true,
         embedderProvider: "ollama",
-        modelId: OLLAMA_MODEL,
-        modelDimension: 768,
-        ollamaOptions: { ollamaBaseUrl: OLLAMA_BASE_URL },
+        embedderModelId: OLLAMA_MODEL,
+        embedderModelDimension: 768,
+        embedderOllamaBaseUrl: OLLAMA_BASE_URL,
         qdrantUrl: QDRANT_URL
       }
     }
