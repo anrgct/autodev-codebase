@@ -23,9 +23,12 @@ export interface RerankerInfo {
 
 export interface RerankerConfig {
 	enabled: boolean
-	provider: 'ollama-llm' | 'none'
+	provider: 'ollama-llm' | 'openai-compatible'
 	ollamaBaseUrl?: string
 	ollamaModelId?: string
+	openAiCompatibleBaseUrl?: string
+	openAiCompatibleModelId?: string
+	openAiCompatibleApiKey?: string
 	minScore?: number
 	batchSize?: number  // 新增：批次大小，默认10
 }

@@ -8,6 +8,5 @@
   "vectorSearchMinScore": 0.1,
   "vectorSearchMaxResults": 20,
   "rerankerEnabled": false,
-  "rerankerProvider": "none",
   "embedderOpenAiApiKey": "test-key"
 }

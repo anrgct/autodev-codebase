@@ -188,12 +188,13 @@ export class ConfigValidator {
 	 */
 	private static validateReranker(config: CodeIndexConfig, issues: ValidationIssue[]): void {
 		if (config.rerankerEnabled) {
-			if (!config.rerankerProvider || config.rerankerProvider === 'none') {
+			if (!config.rerankerProvider) {
 				issues.push({
 					path: 'rerankerProvider',
 					code: 'required',
 					message: 'Reranker provider is required when reranker is enabled'
 				})
+				return
 			}
 
 			if (config.rerankerProvider === 'ollama-llm') {
@@ -211,7 +212,34 @@ export class ConfigValidator {
 						message: 'Ollama model ID is required for ollama-llm reranker'
 					})
 				}
+				return
 			}
+
+			if (config.rerankerProvider === 'openai-compatible') {
+				if (!config.rerankerOpenAiCompatibleBaseUrl) {
+					issues.push({
+						path: 'rerankerOpenAiCompatibleBaseUrl',
+						code: 'required',
+						message: 'OpenAI-compatible base URL is required for openai-compatible reranker'
+					})
+				}
+				if (!config.rerankerOpenAiCompatibleModelId) {
+					issues.push({
+						path: 'rerankerOpenAiCompatibleModelId',
+						code: 'required',
+						message: 'OpenAI-compatible model ID is required for openai-compatible reranker'
+					})
+				}
+				// Note: API key may be optional for local servers
+				return
+			}
+
+			// Unknown provider
+			issues.push({
+				path: 'rerankerProvider',
+				code: 'invalid',
+				message: `Unknown reranker provider: ${config.rerankerProvider}`
+			})
 		}
 	}
 

@@ -51,8 +51,7 @@ const mockConfigProvider: IConfigProvider = {
     modelId: 'text-embedding-ada-002',
     modelDimension: 1536,
     qdrantUrl: 'http://localhost:6333',
-    rerankerEnabled: false,
-    rerankerProvider: 'none'
+    rerankerEnabled: false
   } as CodeIndexConfig),
   onConfigChange: vi.fn().mockReturnValue(() => {})
 }
@@ -136,37 +135,39 @@ describe('LLM Reranker Integration Tests', () => {
       expect(reranker).toBeInstanceOf(OllamaLLMReranker)
     })
 
-    it('should return undefined when reranker disabled', () => {
-      const mockConfigManager = {
-        rerankerConfig: {
-          enabled: false,
-          provider: 'none' as const
+    describe('createReranker', () => {
+      it('should return undefined when reranker config is undefined', () => {
+        const mockConfigManager = {
+          rerankerConfig: undefined
         }
-      }
 
-      const factory = new CodeIndexServiceFactory(
-        mockConfigManager as any,
-        '/test/workspace',
-        cacheManager
-      )
+        const factory = new CodeIndexServiceFactory(
+          mockConfigManager as any,
+          '/test/workspace',
+          cacheManager
+        )
 
-      const reranker = factory.createReranker()
-      expect(reranker).toBeUndefined()
-    })
+        const reranker = factory.createReranker()
+        expect(reranker).toBeUndefined()
+      })
 
-    it('should return undefined when reranker config is undefined', () => {
-      const mockConfigManager = {
-        rerankerConfig: undefined
-      }
+      it('should return undefined when reranker enabled but no provider specified', () => {
+        const mockConfigManager = {
+          rerankerConfig: {
+            enabled: true,
+            provider: undefined
+          }
+        }
 
-      const factory = new CodeIndexServiceFactory(
-        mockConfigManager as any,
-        '/test/workspace',
-        cacheManager
-      )
+        const factory = new CodeIndexServiceFactory(
+          mockConfigManager as any,
+          '/test/workspace',
+          cacheManager
+        )
 
-      const reranker = factory.createReranker()
-      expect(reranker).toBeUndefined()
+        const reranker = factory.createReranker()
+        expect(reranker).toBeUndefined()
+      })
     })
   })
 })

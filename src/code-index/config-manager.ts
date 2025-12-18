@@ -38,6 +38,9 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
 	'rerankerProvider',                   // Reranker provider change
 	'rerankerOllamaBaseUrl',              // Reranker Ollama URL
 	'rerankerOllamaModelId',              // Reranker Ollama model
+	'rerankerOpenAiCompatibleBaseUrl',    // Reranker OpenAI Compatible URL
+	'rerankerOpenAiCompatibleModelId',    // Reranker OpenAI Compatible model
+	'rerankerOpenAiCompatibleApiKey',     // Reranker OpenAI Compatible API key
 	'rerankerMinScore',                   // Reranker threshold
 	'rerankerBatchSize',                  // Reranker batch size
 	'embedderOllamaBatchSize',            // Batch sizes can be hot-reloaded
@@ -196,6 +199,9 @@ export class CodeIndexConfigManager {
 			rerankerProvider: config.rerankerProvider,
 			rerankerOllamaBaseUrl: config.rerankerOllamaBaseUrl,
 			rerankerOllamaModelId: config.rerankerOllamaModelId,
+			rerankerOpenAiCompatibleBaseUrl: config.rerankerOpenAiCompatibleBaseUrl,
+			rerankerOpenAiCompatibleModelId: config.rerankerOpenAiCompatibleModelId,
+			rerankerOpenAiCompatibleApiKey: config.rerankerOpenAiCompatibleApiKey,
 			rerankerMinScore: config.rerankerMinScore,
 			rerankerBatchSize: config.rerankerBatchSize,
 		}
@@ -410,30 +416,39 @@ export class CodeIndexConfigManager {
 		return this.config?.vectorSearchMaxResults ?? DEFAULT_MAX_SEARCH_RESULTS
 	}
 
-	/**
-	 * Gets whether the reranker is enabled
-	 */
-	public get isRerankerEnabled(): boolean {
-		return this.config?.rerankerEnabled === true && this.config?.rerankerProvider !== 'none'
-	}
+	  /**
+	   * Gets whether the reranker is enabled
+	   */
+	  public get isRerankerEnabled(): boolean {
+	    return this.config?.rerankerEnabled === true && !!this.config?.rerankerProvider
+	  }
 
-	/**
-	 * Gets the reranker configuration
-	 */
-	public get rerankerConfig(): RerankerConfig | undefined {
-		if (!this.config?.rerankerEnabled || this.config?.rerankerProvider === 'none') {
-			return undefined
-		}
+	  /**
+	   * Gets the reranker configuration
+	   */
+	  public get rerankerConfig(): RerankerConfig | undefined {
+	    if (!this.config?.rerankerEnabled) {
+	      return undefined
+	    }
 
-		return {
-			enabled: this.config.rerankerEnabled,
-			provider: this.config.rerankerProvider ?? 'none',
-			ollamaBaseUrl: this.config.rerankerOllamaBaseUrl,
-			ollamaModelId: this.config.rerankerOllamaModelId,
-			minScore: this.config.rerankerMinScore,
-			batchSize: this.config.rerankerBatchSize || 10
-		}
-	}
+	    // When enabled, provider should be specified (required by validator)
+	    const provider = this.config.rerankerProvider
+	    if (!provider) {
+	      return undefined
+	    }
+
+	    return {
+	      enabled: this.config.rerankerEnabled,
+	      provider: provider,
+	      ollamaBaseUrl: this.config.rerankerOllamaBaseUrl,
+	      ollamaModelId: this.config.rerankerOllamaModelId,
+	      openAiCompatibleBaseUrl: this.config.rerankerOpenAiCompatibleBaseUrl,
+	      openAiCompatibleModelId: this.config.rerankerOpenAiCompatibleModelId,
+	      openAiCompatibleApiKey: this.config.rerankerOpenAiCompatibleApiKey,
+	      minScore: this.config.rerankerMinScore,
+	      batchSize: this.config.rerankerBatchSize || 10
+	    }
+	  }
 
 	/**
 	 * Gets the current configuration status including validation issues

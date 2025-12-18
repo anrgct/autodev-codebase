@@ -26,8 +26,7 @@ const DEFAULT_CONFIG: CodeIndexConfig = {
   qdrantUrl: "http://localhost:6333",
   vectorSearchMinScore: 0.1,
   vectorSearchMaxResults: 20,
-  rerankerEnabled: false,
-  rerankerProvider: "none"
+  rerankerEnabled: false
 }
 
 

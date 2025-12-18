@@ -152,9 +152,12 @@ export interface CodeIndexConfig {
 
 	// Reranker configuration
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama-llm' | 'none'
+	rerankerProvider?: 'ollama-llm' | 'openai-compatible'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
+	rerankerOpenAiCompatibleBaseUrl?: string
+	rerankerOpenAiCompatibleModelId?: string
+	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 }
@@ -186,9 +189,12 @@ export type PreviousConfigSnapshot = {
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama-llm' | 'none'
+	rerankerProvider?: 'ollama-llm' | 'openai-compatible'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
+	rerankerOpenAiCompatibleBaseUrl?: string
+	rerankerOpenAiCompatibleModelId?: string
+	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 }
@@ -237,9 +243,12 @@ export interface ConfigSnapshot {
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama-llm' | 'none'
+	rerankerProvider?: 'ollama-llm' | 'openai-compatible'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
+	rerankerOpenAiCompatibleBaseUrl?: string
+	rerankerOpenAiCompatibleModelId?: string
+	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 }

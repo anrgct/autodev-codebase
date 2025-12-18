@@ -6,6 +6,7 @@ import { MistralEmbedder } from "./embedders/mistral"
 import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
 import { OllamaLLMReranker } from "./rerankers/ollama-llm"
+import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
 import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
@@ -282,7 +283,7 @@ export class CodeIndexServiceFactory {
 	 */
 	public createReranker(): IReranker | undefined {
 		const config = this.configManager.rerankerConfig
-		if (!config || !config.enabled || config.provider === 'none') {
+		if (!config || !config.enabled) {
 			return undefined
 		}
 
@@ -294,9 +295,17 @@ export class CodeIndexServiceFactory {
 			)
 		}
 
-		throw new Error(
-			t("embeddings:serviceFactory.invalidRerankerType", { provider: config.provider })
-		)
+		if (config.provider === 'openai-compatible') {
+			return new OpenAICompatibleReranker(
+				config.openAiCompatibleBaseUrl || 'http://localhost:8080/v1',
+				config.openAiCompatibleModelId || 'gpt-4',
+				config.openAiCompatibleApiKey || '',
+				config.batchSize || 10
+			)
+		}
+
+		// If provider is undefined or unknown, return undefined
+		return undefined
 	}
 
 	/**

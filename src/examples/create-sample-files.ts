@@ -447,7 +447,7 @@ class Model(nn.Module):
                 f"model='{self.model}' should be a *.pt PyTorch model to run this method, but is a different format. "
                 f"PyTorch models can train, val, predict and export, i.e. 'model.train(data=...)', but exported "
                 f"formats like ONNX, TensorRT etc. only support 'predict' and 'val' modes, "
-                f"i.e. 'yolo predict model=yolov8n.onnx'.\nTo run CUDA or MPS inference please pass the device "
+                f"i.e. 'yolo predict model=yolov8n.onnx'.\\nTo run CUDA or MPS inference please pass the device "
                 f"argument directly in your inference command, i.e. 'model.predict(source=..., device=0)'"
             )
 
@@ -1187,7 +1187,7 @@ class Model(nn.Module):
     # def __getattr__(self, attr):
     #    """Raises error if object has no requested attribute."""
     #    name = self.__class__.__name__
-    #    raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\n{self.__doc__}")
+    #    raise AttributeError(f"'{name}' object has no attribute '{attr}'. See valid attributes below.\\n{self.__doc__}")
 
     def _smart_load(self, key: str):
         """
