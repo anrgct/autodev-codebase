@@ -119,7 +119,7 @@ ${codeChunk}`;
         const duplicateInfo = results.length !== deduplicatedResults.length
             ? ` (${results.length - deduplicatedResults.length} duplicates removed)`
             : '';
-        return `File: \`${filePath}\` | Avg Score: ${avgScore.toFixed(3)}${snippetInfo}${duplicateInfo}
+        return `File: \`${filePath}\`${snippetInfo}${duplicateInfo}
 \`\`\`
 ${codeChunks}
 \`\`\`

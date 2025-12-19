@@ -130,7 +130,7 @@ ${codeChunk}`;
     return {
       filePath,
       avgScore,
-      formattedText: `${'='.repeat(50)}\nFile: "${filePath}" | Avg Score: ${avgScore.toFixed(3)}${snippetInfo}${duplicateInfo}\n${'='.repeat(50)}\n${codeChunks}`
+      formattedText: `${'='.repeat(50)}\nFile: "${filePath}"${snippetInfo}${duplicateInfo}\n${'='.repeat(50)}\n${codeChunks}`
     };
   });
 
