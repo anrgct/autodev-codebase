@@ -391,48 +391,50 @@ export class QdrantVectorStore implements IVectorStore {
 	 * @param filter Optional search filter options
 	 * @returns Promise resolving to search results
 	 */
-	async search(
-		queryVector: number[],
-		filter?: SearchFilter,
-	): Promise<VectorStoreSearchResult[]> {
-		try {
-			const conditions: Array<{ key: string; match: { text: string } }> = []
-			const excludeConditions: Array<{ key: string; match: { text: string } }> = []
+		async search(
+			queryVector: number[],
+			filter?: SearchFilter,
+		): Promise<VectorStoreSearchResult[]> {
+			try {
+				const includeConditions: Array<{ key: string; match: { text: string } }> = []
+				const excludeConditions: Array<{ key: string; match: { text: string } }> = []
 
-			// 处理pathFilters（统一过滤）
-			if (filter?.pathFilters && filter.pathFilters.length > 0) {
-				for (const pattern of filter.pathFilters) {
-					const isExclude = pattern.startsWith('!')
-					const actualPattern = isExclude ? pattern.slice(1) : pattern
-					
-					// 使用小写字段进行大小写不敏感匹配
-					const condition = {
-						key: "filePathLower",
-						match: { text: actualPattern.toLowerCase() }
-					}
-					
-					if (isExclude) {
-						excludeConditions.push(condition)
-					} else {
-						conditions.push(condition)
-					}
-				}
-			}
+				// 处理pathFilters（统一过滤）
+				if (filter?.pathFilters && filter.pathFilters.length > 0) {
+					for (const pattern of filter.pathFilters) {
+						const isExclude = pattern.startsWith('!')
+						const actualPattern = isExclude ? pattern.slice(1) : pattern
 
-			// 构建Qdrant过滤器
-			let qdrantFilter: any = undefined
-			
-			if (conditions.length > 0 || excludeConditions.length > 0) {
-				qdrantFilter = {}
-				
-				if (conditions.length > 0) {
-					qdrantFilter.must = conditions
+						// 使用小写字段进行大小写不敏感匹配
+						const condition = {
+							key: "filePathLower",
+							match: { text: actualPattern.toLowerCase() }
+						}
+
+						if (isExclude) {
+							excludeConditions.push(condition)
+						} else {
+							includeConditions.push(condition)
+						}
+					}
 				}
-				
-				if (excludeConditions.length > 0) {
-					qdrantFilter.must_not = excludeConditions
+
+				// 构建Qdrant过滤器
+				let qdrantFilter: any = undefined
+
+				if (includeConditions.length > 0 || excludeConditions.length > 0) {
+					qdrantFilter = {}
+
+					// Include filters are OR semantics (any include matches)
+					if (includeConditions.length > 0) {
+						qdrantFilter.should = includeConditions
+						// 不设置 minimum_should_match，让 should 使用默认的 OR 语义
+					}
+
+					if (excludeConditions.length > 0) {
+						qdrantFilter.must_not = excludeConditions
+					}
 				}
-			}
 
 			// 合并现有的metadata排除
 			const metadataExclusion = {

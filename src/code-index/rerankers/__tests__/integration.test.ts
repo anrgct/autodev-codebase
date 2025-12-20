@@ -7,7 +7,7 @@ import { CodeIndexServiceFactory } from '../../service-factory'
 import { CodeIndexConfigManager } from '../../config-manager'
 import { CodeIndexStateManager } from '../../state-manager'
 import { CodeIndexSearchService } from '../../search-service'
-import { OllamaLLMReranker } from '../ollama-llm'
+import { OllamaLLMReranker } from '../ollama'
 import type { IEmbedder, IVectorStore } from '../../interfaces'
 import type { IConfigProvider } from '../../../abstractions/config'
 import type { IEventBus } from '../../../abstractions/core'
@@ -119,7 +119,7 @@ describe('LLM Reranker Integration Tests', () => {
       const mockConfigManager = {
         rerankerConfig: {
           enabled: true,
-          provider: 'ollama-llm' as const,
+          provider: 'ollama' as const,
           ollamaBaseUrl: 'http://localhost:11434',
           ollamaModelId: 'qwen3-vl:4b-instruct'
         }

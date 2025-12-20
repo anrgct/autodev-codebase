@@ -1,2 +1,2 @@
-export * from "./ollama-llm"
+export * from "./ollama"
 export * from "./openai-compatible"

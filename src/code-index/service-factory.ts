@@ -5,7 +5,7 @@ import { GeminiEmbedder } from "./embedders/gemini"
 import { MistralEmbedder } from "./embedders/mistral"
 import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
-import { OllamaLLMReranker } from "./rerankers/ollama-llm"
+import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
@@ -287,7 +287,7 @@ export class CodeIndexServiceFactory {
 			return undefined
 		}
 
-		if (config.provider === 'ollama-llm') {
+		if (config.provider === 'ollama') {
 			return new OllamaLLMReranker(
 				config.ollamaBaseUrl || 'http://localhost:11434',
 				config.ollamaModelId || 'qwen3-vl:4b-instruct',

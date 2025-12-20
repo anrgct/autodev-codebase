@@ -432,7 +432,7 @@ Snippets:
 
     get rerankerInfo(): RerankerInfo {
         return {
-            name: "ollama-llm",
+            name: "ollama",
             model: this.modelId,
         }
     }

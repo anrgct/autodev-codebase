@@ -3,7 +3,7 @@
  * Tests LLM-based reranking functionality using Ollama
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { OllamaLLMReranker } from '../ollama-llm'
+import { OllamaLLMReranker } from '../ollama'
 import type { RerankerCandidate } from '../../interfaces/reranker'
 
 // Use vi.hoisted to ensure mocks are hoisted properly
@@ -77,7 +77,7 @@ describe('OllamaLLMReranker', () => {
 
       const info = reranker.rerankerInfo
 
-      expect(info.name).toBe('ollama-llm')
+      expect(info.name).toBe('ollama')
       expect(info.model).toBe('test-model')
     })
   })

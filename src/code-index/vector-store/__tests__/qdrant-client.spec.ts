@@ -664,11 +664,11 @@ describe("QdrantVectorStore", () => {
 			expect(results).toEqual(mockQdrantResults.points)
 		})
 
-		it("should apply pathFilters correctly", async () => {
-			const queryVector = [0.1, 0.2, 0.3]
-			const filter = { pathFilters: ["src/components"] }
-			const mockQdrantResults = {
-				points: [
+			it("should apply pathFilters correctly", async () => {
+				const queryVector = [0.1, 0.2, 0.3]
+				const filter = { pathFilters: ["src/components"] }
+				const mockQdrantResults = {
+					points: [
 					{
 						id: "test-id-1",
 						score: 0.85,
@@ -685,18 +685,18 @@ describe("QdrantVectorStore", () => {
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			const results = await vectorStore.search(queryVector, filter)
+				const results = await vectorStore.search(queryVector, filter)
 
-			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
-				query: queryVector,
-				filter: {
-					must: [
-						{ key: "filePathLower", match: { text: "src/components" } },
-					],
-					must_not: [{ key: "type", match: { value: "metadata" } }],
-				},
-				score_threshold: DEFAULT_SEARCH_MIN_SCORE,
-				limit: DEFAULT_MAX_SEARCH_RESULTS,
+				expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
+					query: queryVector,
+					filter: {
+						should: [
+							{ key: "filePathLower", match: { text: "src/components" } },
+						],
+						must_not: [{ key: "type", match: { value: "metadata" } }],
+					},
+					score_threshold: DEFAULT_SEARCH_MIN_SCORE,
+					limit: DEFAULT_MAX_SEARCH_RESULTS,
 				params: {
 					hnsw_ef: 128,
 					exact: false,
@@ -704,13 +704,41 @@ describe("QdrantVectorStore", () => {
 				with_payload: true,
 			})
 
-			expect(results).toEqual(mockQdrantResults.points)
-		})
+				expect(results).toEqual(mockQdrantResults.points)
+			})
 
-		it("should use custom minScore when provided", async () => {
-			const queryVector = [0.1, 0.2, 0.3]
-			const customMinScore = 0.8
-			const filter = { minScore: customMinScore }
+			it("should treat multiple include pathFilters as OR (should)", async () => {
+				const queryVector = [0.1, 0.2, 0.3]
+				const filter = { pathFilters: [".ts", ".js"] }
+				const mockQdrantResults = { points: [] }
+
+				mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
+
+				await vectorStore.search(queryVector, filter)
+
+				expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
+					query: queryVector,
+					filter: {
+						should: [
+							{ key: "filePathLower", match: { text: ".ts" } },
+							{ key: "filePathLower", match: { text: ".js" } },
+						],
+						must_not: [{ key: "type", match: { value: "metadata" } }],
+					},
+					score_threshold: DEFAULT_SEARCH_MIN_SCORE,
+					limit: DEFAULT_MAX_SEARCH_RESULTS,
+					params: {
+						hnsw_ef: 128,
+						exact: false,
+					},
+					with_payload: true,
+				})
+			})
+
+			it("should use custom minScore when provided", async () => {
+				const queryVector = [0.1, 0.2, 0.3]
+				const customMinScore = 0.8
+				const filter = { minScore: customMinScore }
 			const mockQdrantResults = { points: [] }
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
@@ -836,25 +864,25 @@ describe("QdrantVectorStore", () => {
 			expect(results).toEqual([])
 		})
 
-		it("should handle complex path filters with multiple segments", async () => {
-			const queryVector = [0.1, 0.2, 0.3]
-			const filter = { pathFilters: ["src/components/ui/forms"] }
-			const mockQdrantResults = { points: [] }
+			it("should handle complex path filters with multiple segments", async () => {
+				const queryVector = [0.1, 0.2, 0.3]
+				const filter = { pathFilters: ["src/components/ui/forms"] }
+				const mockQdrantResults = { points: [] }
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector, filter)
+				await vectorStore.search(queryVector, filter)
 
-			expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
-				query: queryVector,
-				filter: {
-					must: [
-						{ key: "filePathLower", match: { text: "src/components/ui/forms" } },
-					],
-					must_not: [{ key: "type", match: { value: "metadata" } }],
-				},
-				score_threshold: DEFAULT_SEARCH_MIN_SCORE,
-				limit: DEFAULT_MAX_SEARCH_RESULTS,
+				expect(mockQdrantClientInstance.query).toHaveBeenCalledWith(expectedCollectionName, {
+					query: queryVector,
+					filter: {
+						should: [
+							{ key: "filePathLower", match: { text: "src/components/ui/forms" } },
+						],
+						must_not: [{ key: "type", match: { value: "metadata" } }],
+					},
+					score_threshold: DEFAULT_SEARCH_MIN_SCORE,
+					limit: DEFAULT_MAX_SEARCH_RESULTS,
 				params: {
 					hnsw_ef: 128,
 					exact: false,

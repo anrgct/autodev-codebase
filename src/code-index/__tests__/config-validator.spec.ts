@@ -291,11 +291,11 @@ describe('ConfigValidator', () => {
 	})
 
 	describe('Reranker validation', () => {
-		it('should validate enabled reranker with ollama-llm provider', () => {
+		it('should validate enabled reranker with ollama provider', () => {
 			const config: CodeIndexConfig = {
 				...createValidConfig(),
 				rerankerEnabled: true,
-				rerankerProvider: 'ollama-llm',
+				rerankerProvider: 'ollama',
 				rerankerOllamaBaseUrl: 'http://localhost:11434',
 				rerankerOllamaModelId: 'llama3.1'
 			}
@@ -321,11 +321,11 @@ describe('ConfigValidator', () => {
 			} as ValidationIssue)
 		})
 
-		it('should require Ollama base URL for ollama-llm reranker', () => {
+		it('should require Ollama base URL for ollama reranker', () => {
 			const config: CodeIndexConfig = {
 				...createValidConfig(),
 				rerankerEnabled: true,
-				rerankerProvider: 'ollama-llm',
+				rerankerProvider: 'ollama',
 				rerankerOllamaModelId: 'llama3.1'
 			}
 			const result = ConfigValidator.validate(config)
@@ -334,15 +334,15 @@ describe('ConfigValidator', () => {
 			expect(result.issues).toContainEqual({
 				path: 'rerankerOllamaBaseUrl',
 				code: 'required',
-				message: 'Ollama base URL is required for ollama-llm reranker'
+				message: 'Ollama base URL is required for ollama reranker'
 			} as ValidationIssue)
 		})
 
-		it('should require Ollama model ID for ollama-llm reranker', () => {
+		it('should require Ollama model ID for ollama reranker', () => {
 			const config: CodeIndexConfig = {
 				...createValidConfig(),
 				rerankerEnabled: true,
-				rerankerProvider: 'ollama-llm',
+				rerankerProvider: 'ollama',
 				rerankerOllamaBaseUrl: 'http://localhost:11434'
 			}
 			const result = ConfigValidator.validate(config)
@@ -351,7 +351,7 @@ describe('ConfigValidator', () => {
 			expect(result.issues).toContainEqual({
 				path: 'rerankerOllamaModelId',
 				code: 'required',
-				message: 'Ollama model ID is required for ollama-llm reranker'
+				message: 'Ollama model ID is required for ollama reranker'
 			} as ValidationIssue)
 		})
 

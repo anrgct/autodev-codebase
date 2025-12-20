@@ -152,7 +152,7 @@ export interface CodeIndexConfig {
 
 	// Reranker configuration
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama-llm' | 'openai-compatible'
+	rerankerProvider?: 'ollama' | 'openai-compatible'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerOpenAiCompatibleBaseUrl?: string
@@ -189,7 +189,7 @@ export type PreviousConfigSnapshot = {
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama-llm' | 'openai-compatible'
+	rerankerProvider?: 'ollama' | 'openai-compatible'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerOpenAiCompatibleBaseUrl?: string
@@ -243,7 +243,7 @@ export interface ConfigSnapshot {
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama-llm' | 'openai-compatible'
+	rerankerProvider?: 'ollama' | 'openai-compatible'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerOpenAiCompatibleBaseUrl?: string

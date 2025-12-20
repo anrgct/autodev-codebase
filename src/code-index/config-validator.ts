@@ -197,19 +197,19 @@ export class ConfigValidator {
 				return
 			}
 
-			if (config.rerankerProvider === 'ollama-llm') {
+			if (config.rerankerProvider === 'ollama') {
 				if (!config.rerankerOllamaBaseUrl) {
 					issues.push({
 						path: 'rerankerOllamaBaseUrl',
 						code: 'required',
-						message: 'Ollama base URL is required for ollama-llm reranker'
+						message: 'Ollama base URL is required for ollama reranker'
 					})
 				}
 				if (!config.rerankerOllamaModelId) {
 					issues.push({
 						path: 'rerankerOllamaModelId',
 						code: 'required',
-						message: 'Ollama model ID is required for ollama-llm reranker'
+						message: 'Ollama model ID is required for ollama reranker'
 					})
 				}
 				return
