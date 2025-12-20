@@ -304,18 +304,28 @@ Options:
   --server-url <url>            Target MCP HTTP endpoint (default: http://<host>:<port>/mcp)
   --timeout <ms>                Stdio adapter request timeout in ms (default: 30000)
   --config, -c <path>           Configuration file path
-  --log-level <level>           Log level: debug|info|warn|error (default: info)
+  --log-level <level>           Log level: debug|info|warn|error (default: error)
   --demo                        Create demo files in workspace
   --force                       Force reindex all files, ignoring cache
   --storage <path>              Custom storage path
   --cache <path>                Custom cache path
   --json                        Output results in JSON format
-  --path-filters, -f <filters>   Filter search results by file path patterns (comma-separated)
-                                Examples:
-                                  -f ".ts,.js"                     # Only TypeScript and JavaScript files
-                                  -f "src/,.ts"                    # Only TypeScript files in src directory
-                                  -f "!.md,!.txt"                  # Exclude markdown and text files
-                                  -f "src/,.ts,!.test"             # TypeScript files in src, excluding test files
+  --path-filters, -f <filters>   Filter search results by path patterns (comma-separated)
+                                Top-level comma-separated patterns use OR logic.
+                                Within each pattern, all substrings must match (AND logic).
+                                Supports limited glob syntax compiled to Qdrant filters:
+                                  -f "src/**/*.ts"                # All .ts files in src
+                                  -f "components/*.tsx"           # All .tsx in components
+                                  -f "{src,lib}/**/*.js"          # .js files in multiple dirs
+                                  -f "!.md,!.txt"                 # Exclude markdown/text files
+                                  -f "src/**/*.ts,lib/**/*.ts"    # OR logic: either src or lib .ts files
+                                Supported syntax:
+                                  **  Recursive directories (e.g., src/**/*)
+                                  *   Single level wildcard (e.g., src/*)
+                                  {a,b}  Brace expansion for OR (e.g., {src,lib})
+                                  !   Exclusion prefix (e.g., !*.test.ts)
+                                Note: Uses substring matching, case-insensitive.
+                                Unsupported features ([]) are ignored, ? is treated as a regular character.
 
 
 Examples:
@@ -585,6 +595,46 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
 }
 
 /**
+ * Split path filters by comma, but respect brace expansion {a,b}
+ * @param filtersString Comma-separated filter string
+ * @returns Array of filter patterns
+ */
+function parsePathFilters(filtersString: string): string[] {
+  const filters: string[] = []
+  let current = ''
+  let braceDepth = 0
+
+  for (let i = 0; i < filtersString.length; i++) {
+    const char = filtersString[i]
+
+    if (char === '{') {
+      braceDepth++
+      current += char
+    } else if (char === '}') {
+      braceDepth--
+      current += char
+    } else if (char === ',' && braceDepth === 0) {
+      // Only split on comma when not inside braces
+      const trimmed = current.trim()
+      if (trimmed.length > 0) {
+        filters.push(trimmed)
+      }
+      current = ''
+    } else {
+      current += char
+    }
+  }
+
+  // Add the last segment
+  const trimmed = current.trim()
+  if (trimmed.length > 0) {
+    filters.push(trimmed)
+  }
+
+  return filters
+}
+
+/**
   * Search the index
   */
   async function searchIndex(query: string, options: SimpleCliOptions): Promise<void> {
@@ -595,8 +645,7 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
   // Parse path filters if provided
   const filter: SearchFilter = {};
   if (options.pathFilters) {
-    const filters = options.pathFilters.split(',')
-      .map((f: string) => f.trim())
+    const filters = parsePathFilters(options.pathFilters)
       .map((f: string) => f.startsWith('=') ? f.slice(1) : f) // Remove leading '=' from short format args
       .filter((f: string) => f.length > 0);
     filter.pathFilters = filters;

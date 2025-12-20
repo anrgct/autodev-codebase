@@ -50,7 +50,12 @@ export class CodebaseHTTPMCPServer {
                 query: z.string().describe("An English complete question about what you want to understand. Ask as if talking to a colleague: 'How does X work?', 'What happens when Y?', 'Where is Z handled?'"),
                 limit: z.number().optional().default(10).describe('Maximum number of results to return (default: 10)'),
                 filters: z.object({
-                    pathFilters: z.array(z.string()).optional().describe("Filter by path strings – directories, extensions, or file names. Case sensitive. This is NOT glob matching; wildcards and patterns (e.g., *, ?, []) are not supported. You can specify file paths here to perform semantic search within large files. Example: ['src/index.js', '.ts', 'src/', 'components']"),
+                    pathFilters: z.array(z.string()).optional().describe("Filter by path patterns with limited glob support. " +
+                        "Top-level patterns (array elements) use OR logic. Within each pattern, all substrings must match (AND logic). " +
+                        "Supports: ** (recursive), * (single level), {a,b} (brace expansion), ! (exclusion). " +
+                        "Use ! prefix for exclusion. Compiled to Qdrant substring filters (case-insensitive, not strict glob matching). " +
+                        "Examples: ['src/**/*.ts', 'components/*.tsx', '!**/*.test.ts']. " +
+                        "Unsupported features ([]) are ignored, ? is treated as a regular character."),
                     minScore: z.number().optional().describe('Minimum similarity score threshold (0-1)，default 0.4')
                 }).optional().describe('Optional filters for file types, paths, etc.')
             },

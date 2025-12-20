@@ -691,7 +691,7 @@ describe("QdrantVectorStore", () => {
 					query: queryVector,
 					filter: {
 						should: [
-							{ key: "filePathLower", match: { text: "src/components" } },
+							{ must: [{ key: "filePathLower", match: { text: "src/components" } }] },
 						],
 						must_not: [{ key: "type", match: { value: "metadata" } }],
 					},
@@ -720,8 +720,8 @@ describe("QdrantVectorStore", () => {
 					query: queryVector,
 					filter: {
 						should: [
-							{ key: "filePathLower", match: { text: ".ts" } },
-							{ key: "filePathLower", match: { text: ".js" } },
+							{ must: [{ key: "filePathLower", match: { text: ".ts" } }] },
+							{ must: [{ key: "filePathLower", match: { text: ".js" } }] },
 						],
 						must_not: [{ key: "type", match: { value: "metadata" } }],
 					},
@@ -877,7 +877,7 @@ describe("QdrantVectorStore", () => {
 					query: queryVector,
 					filter: {
 						should: [
-							{ key: "filePathLower", match: { text: "src/components/ui/forms" } },
+							{ must: [{ key: "filePathLower", match: { text: "src/components/ui/forms" } }] },
 						],
 						must_not: [{ key: "type", match: { value: "metadata" } }],
 					},

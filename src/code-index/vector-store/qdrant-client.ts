@@ -11,6 +11,114 @@ import {
 } from "../constants"
 
 /**
+ * Pattern Compiler for Glob-like Path Filtering
+ * Compiles glob patterns to Qdrant substring filters
+ */
+class PatternCompiler {
+  /**
+   * Compiles path filters to Qdrant filter structure
+   * @param pathFilters Array of path filter patterns
+   * @returns Qdrant filter object
+   */
+  static compile(pathFilters: string[]): any {
+    if (!pathFilters || pathFilters.length === 0) {
+      return {}
+    }
+
+    const includePatterns = pathFilters.filter(p => !p.startsWith('!'))
+    const excludePatterns = pathFilters.filter(p => p.startsWith('!')).map(p => p.slice(1))
+
+    const filter: any = {}
+
+    // Handle include patterns (OR semantics)
+    if (includePatterns.length > 0) {
+      const shouldClauses = includePatterns.flatMap(pattern =>
+        this.expandPattern(pattern).map(expanded => ({
+          must: this.extractSubstrings(expanded).map(s => ({
+            key: "filePathLower",
+            match: { text: s.toLowerCase() }
+          }))
+        }))
+      )
+
+      if (shouldClauses.length > 0) {
+        filter.should = shouldClauses
+        // Note: Qdrant's should clause defaults to OR logic, no min_should needed
+      }
+    }
+
+    // Handle exclude patterns
+    if (excludePatterns.length > 0) {
+      const mustNotClauses = excludePatterns.flatMap(pattern =>
+        this.expandPattern(pattern).map(expanded => ({
+          must: this.extractSubstrings(expanded).map(s => ({
+            key: "filePathLower",
+            match: { text: s.toLowerCase() }
+          }))
+        }))
+      )
+
+      if (mustNotClauses.length > 0) {
+        filter.must_not = mustNotClauses
+      }
+    }
+
+    return filter
+  }
+
+  /**
+   * Expands brace patterns like {a,b} into multiple patterns
+   * @param pattern Input pattern
+   * @returns Array of expanded patterns
+   */
+  private static expandPattern(pattern: string): string[] {
+    const braceRegex = /{([^}]+)}/g
+    let match = braceRegex.exec(pattern)
+
+    if (!match) return [pattern]
+
+    const options = match[1].split(',').map(opt => opt.trim()).filter(Boolean)
+    const prefix = pattern.substring(0, match.index)
+    const suffix = pattern.substring(match.index + match[0].length)
+
+    return options.flatMap(option =>
+      this.expandPattern(prefix + option + suffix)
+    )
+  }
+
+  /**
+   * Extracts substrings from a pattern by splitting on glob wildcards
+   * @param pattern Input pattern
+   * @returns Array of substrings to match
+   */
+  private static extractSubstrings(pattern: string): string[] {
+    const cleanPattern = pattern.replace(/^!/, '')
+
+    // First, remove unsupported character classes [] by removing entire segments containing them
+    // Split by ** and * first to identify segments
+    const segments = cleanPattern.split(/(\*\*|\*)/)
+
+    // Process segments: keep only valid substrings (not wildcards, not character classes)
+    const validParts = segments.filter(part => {
+      // Remove wildcard tokens themselves (they are separators, not substrings to match)
+      if (part === '**' || part === '*') return false
+      if (part.length === 0) return false
+      // Remove segments containing character classes [] - they are not supported
+      if (part.includes('[') || part.includes(']')) return false
+      // ? is treated as a regular character, keep it
+      return true
+    })
+
+    // Filter out standalone path separators (only "/" or "\")
+    // but keep segments that contain path separators with other content (e.g., "src/", "/b")
+    return validParts.filter(part => {
+      const isStandaloneSeparator = part === '/' || part === '\\'
+      return !isStandaloneSeparator
+    })
+  }
+}
+
+/**
  * Qdrant implementation of the vector store interface
  */
 export class QdrantVectorStore implements IVectorStore {
@@ -396,44 +504,12 @@ export class QdrantVectorStore implements IVectorStore {
 			filter?: SearchFilter,
 		): Promise<VectorStoreSearchResult[]> {
 			try {
-				const includeConditions: Array<{ key: string; match: { text: string } }> = []
-				const excludeConditions: Array<{ key: string; match: { text: string } }> = []
-
-				// 处理pathFilters（统一过滤）
-				if (filter?.pathFilters && filter.pathFilters.length > 0) {
-					for (const pattern of filter.pathFilters) {
-						const isExclude = pattern.startsWith('!')
-						const actualPattern = isExclude ? pattern.slice(1) : pattern
-
-						// 使用小写字段进行大小写不敏感匹配
-						const condition = {
-							key: "filePathLower",
-							match: { text: actualPattern.toLowerCase() }
-						}
-
-						if (isExclude) {
-							excludeConditions.push(condition)
-						} else {
-							includeConditions.push(condition)
-						}
-					}
-				}
-
-				// 构建Qdrant过滤器
+				// Build Qdrant filter using PatternCompiler for pathFilters
 				let qdrantFilter: any = undefined
 
-				if (includeConditions.length > 0 || excludeConditions.length > 0) {
-					qdrantFilter = {}
-
-					// Include filters are OR semantics (any include matches)
-					if (includeConditions.length > 0) {
-						qdrantFilter.should = includeConditions
-						// 不设置 minimum_should_match，让 should 使用默认的 OR 语义
-					}
-
-					if (excludeConditions.length > 0) {
-						qdrantFilter.must_not = excludeConditions
-					}
+				// Use PatternCompiler to compile path filters
+				if (filter?.pathFilters && filter.pathFilters.length > 0) {
+					qdrantFilter = PatternCompiler.compile(filter.pathFilters)
 				}
 
 			// 合并现有的metadata排除
