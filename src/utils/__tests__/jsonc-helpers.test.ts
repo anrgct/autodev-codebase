@@ -260,11 +260,11 @@ describe('jsonc-helpers', () => {
 
       const result = mergeConfig(base, update)
 
-      expect(result.plain).toEqual({ a: 1, b: 2 }) // Merged
-      expect(result.array).toEqual([3, 4])         // Replaced
-      expect(result.string).toBe("new")           // Replaced
-      expect(result.date).toBe("2024-01-01")      // Replaced
-      expect(result.nullValue).toBe(null)         // Replaced
+      expect(result['plain']).toEqual({ a: 1, b: 2 }) // Merged
+      expect(result['array']).toEqual([3, 4])         // Replaced
+      expect(result['string']).toBe("new")           // Replaced
+      expect(result['date']).toBe("2024-01-01")      // Replaced
+      expect(result['nullValue']).toBe(null)         // Replaced
     })
 
     it('should handle base being non-object but update being object', () => {
@@ -273,7 +273,7 @@ describe('jsonc-helpers', () => {
 
       const result = mergeConfig(base, update)
 
-      expect(result.key).toEqual({ nested: "value" })
+      expect(result['key']).toEqual({ nested: "value" })
     })
 
     it('should handle update being non-object but base being object', () => {
@@ -282,7 +282,7 @@ describe('jsonc-helpers', () => {
 
       const result = mergeConfig(base, update)
 
-      expect(result.key).toBe("string")
+      expect(result['key']).toBe("string")
     })
 
     it('should handle null values correctly', () => {
@@ -291,9 +291,9 @@ describe('jsonc-helpers', () => {
 
       const result = mergeConfig(base, update)
 
-      expect(result.a).toBe(1)
-      expect(result.b).toBe(null)
-      expect(result.c).toBe(null)
+      expect(result['a']).toBe(1)
+      expect(result['b']).toBe(null)
+      expect(result['c']).toBe(null)
     })
 
     it('should handle undefined in update (skipped by Object.entries)', () => {
@@ -302,8 +302,8 @@ describe('jsonc-helpers', () => {
 
       const result = mergeConfig(base, update)
 
-      expect(result.a).toBe(2)
-      expect(result.b).toBe(undefined)
+      expect(result['a']).toBe(2)
+      expect(result['b']).toBe(undefined)
     })
 
     it('should handle empty objects', () => {
@@ -338,10 +338,10 @@ describe('jsonc-helpers', () => {
 
       const result = mergeConfig(base, update)
 
-      expect(result.level1.level2.keep).toBe("value")
-      expect(result.level1.level2.replace).toBe("new")
-      expect(result.level1.level2.add).toBe("value")
-      expect(result.level1.array).toEqual([3, 4, 5])
+      expect(result['level1'].level2['keep']).toBe("value")
+      expect(result['level1'].level2['replace']).toBe("new")
+      expect(result['level1'].level2['add']).toBe("value")
+      expect(result['level1']['array']).toEqual([3, 4, 5])
     })
   })
 })

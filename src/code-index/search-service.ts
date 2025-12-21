@@ -4,6 +4,8 @@ import { IEmbedder } from "./interfaces/embedder"
 import { IVectorStore } from "./interfaces/vector-store"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CodeIndexStateManager } from "./state-manager"
+import { applyQueryPrefill } from "./search/query-prefill"
+import { getDefaultModelId } from "../shared/embeddingModels"
 
 /**
  * Service responsible for searching the code index.
@@ -43,8 +45,14 @@ export class CodeIndexSearchService {
 		// 所有过滤条件都通过pathFilters参数传递
 
 		try {
-			// Generate embedding for query
-			const embeddingResponse = await this.embedder.createEmbeddings([query])
+			// Apply query prefill for embedding generation
+			const embedderProvider = this.configManager.currentEmbedderProvider
+			// Get modelId with fallback to default if not configured
+			const modelId = this.configManager.currentModelId ?? getDefaultModelId(embedderProvider)
+			const prefillQuery = applyQueryPrefill(query, embedderProvider, modelId)
+
+			// Generate embedding for query (with prefill if applicable)
+			const embeddingResponse = await this.embedder.createEmbeddings([prefillQuery])
 			const vector = embeddingResponse?.embeddings[0]
 			if (!vector) {
 				throw new Error("Failed to generate embedding for query.")
