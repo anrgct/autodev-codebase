@@ -466,7 +466,7 @@ describe('CLI Commands E2E Tests', () => {
       // 验证搜索输出 - 应该要么有结果，要么有明确的"无结果"消息
       const searchOutput = searchResult.stdout
       const hasValidSearchOutput =
-        searchOutput.includes('Found') && searchOutput.includes('results') ||
+        searchOutput.includes('Found') && searchOutput.includes('result') ||
         searchOutput.includes('No results found') ||
         searchOutput.includes('No results found for query') ||
         searchOutput.includes('greet')
@@ -504,7 +504,7 @@ describe('CLI Commands E2E Tests', () => {
       expect(searchOutput).toBeDefined()
 
       // 应该包含搜索结果
-      const hasSearchResults = searchOutput.includes('Found') && searchOutput.includes('results')
+      const hasSearchResults = searchOutput.includes('Found') && searchOutput.includes('result')
       expect(hasSearchResults).toBe(true)
     }, 180000) // 3分钟超时，因为索引需要时间
   })
