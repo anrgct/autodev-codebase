@@ -125,7 +125,7 @@ Stdio Adapter Options:
 
   --ollama-url=<url>      Ollama API URL (default: http://localhost:11434)
   --qdrant-url=<url>      Qdrant vector DB URL (default: http://localhost:6333)
-  --model=<model>         Embedding model (default: qwen3-embedding:0.6b)
+  --model=<model>         Embedding model (default: nomic-embed-text)
 
   --config=<path>         Config file path
   --storage=<path>        Storage directory path

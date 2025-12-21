@@ -309,8 +309,8 @@ describe('Node.js Adapters Integration', () => {
       const testConfig = {
         isEnabled: true,
         embedderProvider: "ollama" as const,
-        embedderModelId: "qwen3-embedding:0.6b",
-        embedderModelDimension: 1024,
+        embedderModelId: "nomic-embed-text",
+        embedderModelDimension: 768,
         embedderOllamaBaseUrl: 'http://localhost:11434'
       }
 

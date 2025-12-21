@@ -32,7 +32,7 @@ brew install ollama
 ollama serve
 
 # In a new terminal, pull the embedding model
-ollama pull qwen3-embedding:0.6b
+ollama pull nomic-embed-text
 ```
 
 ### 2. Install ripgrep for fast files search
@@ -148,8 +148,8 @@ Create a global configuration file at `~/.autodev-cache/autodev-config.json`:
   "isEnabled": true,
   "embedder": {
     "provider": "ollama",
-    "model": "qwen3-embedding:0.6b",
-    "dimension": 1024,
+    "model": "nomic-embed-text",
+    "dimension": 768,
     "baseUrl": "http://localhost:11434"
   },
   "qdrantUrl": "http://localhost:6333",
@@ -181,8 +181,8 @@ Create a project-specific configuration file at `./autodev-config.json`:
 |--------|------|-------------|---------|
 | `isEnabled` | boolean | Enable/disable code indexing feature | `true` |
 | `embedder.provider` | string | Embedding provider (`ollama`, `openai`, `openai-compatible`) | `ollama` |
-| `embedder.model` | string | Embedding model name | `qwen3-embedding:0.6b` |
-| `embedder.dimension` | number | Vector dimension size | `1024` |
+| `embedder.model` | string | Embedding model name | `nomic-embed-text` |
+| `embedder.dimension` | number | Vector dimension size | `768` |
 | `embedder.baseUrl` | string | Provider API base URL | `http://localhost:11434` |
 | `embedder.apiKey` | string | API key (for OpenAI/compatible providers) | - |
 | `qdrantUrl` | string | Qdrant vector database URL | `http://localhost:6333` |

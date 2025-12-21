@@ -15,8 +15,8 @@ import { CodeIndexConfig } from '../interfaces/config'
 export const DEFAULT_CONFIG: CodeIndexConfig = {
 	isEnabled: true,
 	embedderProvider: "ollama",
-	embedderModelId: "qwen3-embedding:0.6b",
-	embedderModelDimension: 1024,
+	embedderModelId: "nomic-embed-text",
+	embedderModelDimension: 768,
 	embedderOllamaBaseUrl: "http://localhost:11434",
 	qdrantUrl: "http://localhost:6333",
 	vectorSearchMinScore: 0.1,
