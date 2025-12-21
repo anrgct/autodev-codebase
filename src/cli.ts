@@ -5,6 +5,9 @@
 import { parseArgs } from 'node:util';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as jsoncParser from 'jsonc-parser';
+import { saveJsoncPreservingComments } from './utils/jsonc-helpers';
 import { createNodeDependencies } from './adapters/nodejs';
 import { CodeIndexManager } from './code-index/manager';
 import { CodebaseHTTPMCPServer } from './mcp/http-server.js';
@@ -12,6 +15,9 @@ import { StdioToStreamableHTTPAdapter } from './mcp/stdio-adapter.js';
 import createSampleFiles from './examples/create-sample-files';
 import { getGlobalLogger, setGlobalLogger, Logger, LogLevel } from './utils/logger';
 import { VectorStoreSearchResult, SearchFilter } from './code-index/interfaces';
+import { DEFAULT_CONFIG } from './code-index/constants';
+import { CodeIndexConfig } from './code-index/interfaces/config';
+import { ConfigValidator } from './code-index/config-validator';
 
 // Initialize global logger with CLI settings
 function initGlobalLogger(level: LogLevel) {
@@ -277,6 +283,11 @@ const { values, positionals } = parseArgs({
     cache: { type: 'string' },
     // JSON output
     json: { type: 'boolean' },
+    // Configuration management
+    'get-config': { type: 'boolean' },
+    'set-config': { type: 'string' },
+    global: { type: 'boolean' },
+    'show-secrets': { type: 'boolean' },
   },
   allowPositionals: true
 });
@@ -294,7 +305,16 @@ Usage:
   codebase --index               Index the codebase
   codebase --search="query"      Search the index
   codebase --clear               Clear index data
+  codebase --get-config [items...] View all config layers (default → global → project → effective)
+  codebase --set-config k=v,...  Set project configuration
   codebase --help                Show this help
+
+Configuration Management:
+  --get-config [items...]        View all config layers (default → global → project → effective)
+  --get-config --json            Output in JSON format (script-friendly)
+  --set-config k=v,...           Set project configuration
+  --set-config --global          Set global configuration
+  --global                       Set global configuration (only used with --set-config)
 
 Options:
   --path, -p <path>             Working directory path (default: current directory)
@@ -347,8 +367,35 @@ Examples:
   # Clear index
   codebase --clear --path=/my/project
 
+  # Configuration Management Examples:
+  # View all config layers
+  codebase --get-config
+
+  # View specific config item layers
+  codebase --get-config embedderProvider qdrantUrl
+
+  # View in JSON format
+  codebase --get-config --json
+  codebase --get-config embedderProvider --json
+
+  # Show sensitive information (API keys, tokens)
+  codebase --get-config --show-secrets
+  codebase --get-config embedderOpenAiApiKey --show-secrets
+
+  # Set project config
+  codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
+
+  # Set global config
+  codebase --set-config --global embedderProvider=openai,embedderOpenAiApiKey=sk-xxx
+
+  # With custom paths
+  codebase --path /my/project --get-config
+  codebase --path /my/project --set-config key=value
+
   # Run with demo files
   codebase --serve --demo --log-level=debug
+
+Note: Values containing commas will be split and cause an error (missing '=' in subsequent parts). For complex values, edit config files directly.
 `);
 }
 
@@ -777,12 +824,445 @@ async function startStdioAdapter(options: SimpleCliOptions): Promise<void> {
 }
 
 /**
+ * Format configuration value for display
+ */
+function formatValue(value: any): string {
+  if (value === undefined) return 'undefined';
+  if (value === null) return 'null';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+/**
+ * Sanitize sensitive configuration values
+ */
+function sanitizeConfig(config: Record<string, any>): Record<string, any> {
+  const sanitized = { ...config };
+  const sensitiveKeys = ['key', 'token', 'password', 'secret', 'apiKey'];
+
+  for (const [key, value] of Object.entries(sanitized)) {
+    // Check if key contains any sensitive keyword
+    const isSensitive = sensitiveKeys.some(sensitive =>
+      key.toLowerCase().includes(sensitive.toLowerCase())
+    );
+
+    if (isSensitive && typeof value === 'string' && value.length > 0) {
+      // Show first 3 characters and last 3 characters, with asterisks in between
+      if (value.length <= 6) {
+        sanitized[key] = '***';
+      } else {
+        sanitized[key] = value.substring(0, 3) + '***' + value.substring(value.length - 3);
+      }
+    }
+  }
+
+  return sanitized;
+}
+
+function isSensitiveConfigKey(key: string): boolean {
+  const sensitiveKeys = ['key', 'token', 'password', 'secret', 'apiKey'];
+  return sensitiveKeys.some(sensitive => key.toLowerCase().includes(sensitive.toLowerCase()));
+}
+
+function formatConfigValueForDisplay(key: string, value: any, showSecrets: boolean): string {
+  if (showSecrets || !isSensitiveConfigKey(key)) return formatValue(value);
+  return formatValue(sanitizeConfig({ [key]: value })[key]);
+}
+
+/**
+ * Print all configuration layers in detail
+ */
+function printAllConfigLayers(
+  defaultConfig: Record<string, any>,
+  globalConfig: Record<string, any> | null,
+  projectConfig: Record<string, any> | null,
+  effectiveConfig: Record<string, any>,
+  globalConfigPath: string,
+  projectConfigPath: string,
+  showSecrets: boolean = false
+): void {
+  console.log('\n=== Configuration Layers ===\n');
+
+  // 1. Default values
+  console.log('【1. Default Values】');
+  console.log(JSON.stringify(defaultConfig, null, 2));
+  console.log();
+
+  // 2. Global configuration
+  console.log('【2. Global Configuration】');
+  if (globalConfig) {
+    console.log(`File path: ${globalConfigPath}`);
+    const displayConfig = showSecrets ? globalConfig : sanitizeConfig(globalConfig);
+    console.log(JSON.stringify(displayConfig, null, 2));
+  } else {
+    console.log('(Not configured)');
+  }
+  console.log();
+
+  // 3. Project configuration
+  console.log('【3. Project Configuration】');
+  if (projectConfig) {
+    console.log(`File path: ${projectConfigPath}`);
+    const displayConfig = showSecrets ? projectConfig : sanitizeConfig(projectConfig);
+    console.log(JSON.stringify(displayConfig, null, 2));
+  } else {
+    console.log('(Not configured)');
+  }
+  console.log();
+
+  // 4. Effective configuration
+  console.log('【4. Effective Configuration】');
+  const displayEffective = showSecrets ? effectiveConfig : sanitizeConfig(effectiveConfig);
+  console.log(JSON.stringify(displayEffective, null, 2));
+}
+
+/**
+ * Print detailed layers for specific configuration items
+ */
+function printConfigItemLayers(
+  keys: string[],
+  defaultConfig: Record<string, any>,
+  globalConfig: Record<string, any> | null,
+  projectConfig: Record<string, any> | null,
+  effectiveConfig: Record<string, any>,
+  showSecrets: boolean = false
+): void {
+  for (const key of keys) {
+    console.log(`\n=== ${key} ===`);
+
+    const defaultValue = defaultConfig[key];
+    const globalValue = globalConfig?.[key];
+    const projectValue = projectConfig?.[key];
+    const effectiveValue = effectiveConfig[key];
+
+    console.log(`Default: ${formatConfigValueForDisplay(key, defaultValue, showSecrets)}`);
+    console.log(`Global: ${globalValue !== undefined ? formatConfigValueForDisplay(key, globalValue, showSecrets) : '(Not set)'}`);
+    console.log(`Project: ${projectValue !== undefined ? formatConfigValueForDisplay(key, projectValue, showSecrets) : '(Not set)'}`);
+    console.log(`Effective: ${formatConfigValueForDisplay(key, effectiveValue, showSecrets)}`);
+  }
+}
+
+/**
+ * Handle --get-config command
+ */
+async function getConfigHandler(positionals: string[], json?: boolean, showSecrets?: boolean): Promise<void> {
+  const shouldShowSecrets = Boolean(showSecrets);
+  // 1. Determine configuration paths (supports --path and --config)
+  const options = resolveOptions();
+  const projectConfigPath = options.config || path.join(options.path, 'autodev-config.json');
+  const globalConfigPath = path.join(os.homedir(), '.autodev-cache', 'autodev-config.json');
+
+  // 2. Get default configuration
+  const defaultConfig = DEFAULT_CONFIG;
+
+  // 3. Get global configuration (if exists)
+  let globalConfig: Record<string, any> | null = null;
+  try {
+    if (fs.existsSync(globalConfigPath)) {
+      const content = fs.readFileSync(globalConfigPath, 'utf-8');
+      globalConfig = jsoncParser.parse(content);
+    }
+  } catch (error) {
+    console.error(`Failed to read global configuration: ${error}`);
+    console.error(`Path: ${globalConfigPath}`);
+    process.exit(1);
+  }
+
+  // 4. Get project configuration (if exists)
+  let projectConfig: Record<string, any> | null = null;
+  try {
+    if (fs.existsSync(projectConfigPath)) {
+      const content = fs.readFileSync(projectConfigPath, 'utf-8');
+      projectConfig = jsoncParser.parse(content);
+    }
+  } catch (error) {
+    console.error(`Failed to read project configuration: ${error}`);
+    console.error(`Path: ${projectConfigPath}`);
+    process.exit(1);
+  }
+
+  // 5. Calculate effective configuration (fix null merge bug)
+  const effectiveConfig = {
+    ...defaultConfig,
+    ...(globalConfig ?? {}),
+    ...(projectConfig ?? {})
+  };
+
+  // 6. Handle output
+  if (json) {
+    // JSON format output
+    if (positionals.length === 0) {
+      const displayGlobal = shouldShowSecrets ? globalConfig : sanitizeConfig(globalConfig || {});
+      const displayProject = shouldShowSecrets ? projectConfig : sanitizeConfig(projectConfig || {});
+      const displayEffective = shouldShowSecrets ? effectiveConfig : sanitizeConfig(effectiveConfig);
+
+      console.log(JSON.stringify({
+        paths: {
+          default: '(Built-in)',
+          global: globalConfigPath,
+          project: projectConfigPath
+        },
+        default: defaultConfig,
+        global: displayGlobal,
+        project: displayProject,
+        effective: displayEffective
+      }, null, 2));
+    } else {
+      // JSON output for specific configuration items
+      const result: Record<string, any> = {};
+      for (const key of positionals) {
+        const globalValue = globalConfig?.[key as keyof CodeIndexConfig] ?? null;
+        const projectValue = projectConfig?.[key as keyof CodeIndexConfig] ?? null;
+        const effectiveValue = effectiveConfig[key as keyof CodeIndexConfig];
+
+        // Check if this is a sensitive key
+        const isSensitive = ['key', 'token', 'password', 'secret', 'apiKey'].some(sensitive =>
+          key.toLowerCase().includes(sensitive.toLowerCase())
+        );
+
+        result[key] = {
+          default: defaultConfig[key as keyof CodeIndexConfig],
+          global: isSensitive && !shouldShowSecrets ?
+            (globalValue ? sanitizeConfig({ [key]: globalValue })[key] : null) :
+            globalValue,
+          project: isSensitive && !shouldShowSecrets ?
+            (projectValue ? sanitizeConfig({ [key]: projectValue })[key] : null) :
+            projectValue,
+          effective: isSensitive && !shouldShowSecrets ?
+            sanitizeConfig({ [key]: effectiveValue })[key] :
+            effectiveValue
+        };
+      }
+      console.log(JSON.stringify(result, null, 2));
+    }
+  } else {
+    // Human-readable format
+    if (positionals.length === 0) {
+      printAllConfigLayers(defaultConfig, globalConfig, projectConfig, effectiveConfig, globalConfigPath, projectConfigPath, shouldShowSecrets);
+    } else {
+      printConfigItemLayers(
+        positionals,
+        defaultConfig,
+        globalConfig,
+        projectConfig,
+        effectiveConfig,
+        shouldShowSecrets
+      );
+    }
+  }
+}
+
+/**
+ * Parse configuration value with type conversion and validation
+ */
+function parseConfigValue(key: string, value: string): any {
+  // Boolean validation
+  if (key === 'isEnabled' || key === 'rerankerEnabled') {
+    if (value !== 'true' && value !== 'false') {
+      console.error(`Invalid boolean value for ${key}: ${value} (must be 'true' or 'false')`);
+      process.exit(1);
+    }
+    return value === 'true';
+  }
+
+  // Numeric validation
+  const integerKeys = new Set([
+    'embedderModelDimension',
+    'embedderOllamaBatchSize',
+    'embedderOpenAiBatchSize',
+    'embedderOpenAiCompatibleBatchSize',
+    'embedderGeminiBatchSize',
+    'embedderMistralBatchSize',
+    'embedderOpenRouterBatchSize',
+    'rerankerBatchSize',
+    'vectorSearchMaxResults'
+  ]);
+  const numberKeys = new Set([
+    'vectorSearchMinScore',
+    'rerankerMinScore'
+  ]);
+
+  if (integerKeys.has(key) || numberKeys.has(key)) {
+    const isInteger = integerKeys.has(key);
+    const pattern = isInteger ? /^-?\d+$/ : /^-?\d+(?:\.\d+)?$/;
+    if (!pattern.test(value)) {
+      console.error(`Invalid numeric value for ${key}: ${value} (must be a ${isInteger ? 'integer' : 'number'})`);
+      process.exit(1);
+    }
+    const parsed = isInteger ? parseInt(value, 10) : parseFloat(value);
+    if (!Number.isFinite(parsed)) {
+      console.error(`Invalid numeric value for ${key}: ${value}`);
+      process.exit(1);
+    }
+    if (key === 'embedderModelDimension' && parsed <= 0) {
+      console.error(`Invalid value for ${key}: ${value} (must be positive)`);
+      process.exit(1);
+    }
+    return parsed;
+  }
+
+  // EmbedderProvider validation
+  if (key === 'embedderProvider') {
+    const validProviders = ['openai', 'ollama', 'openai-compatible', 'jina', 'gemini', 'mistral', 'vercel-ai-gateway', 'openrouter'];
+    if (!validProviders.includes(value)) {
+      console.error(`Invalid embedderProvider: ${value}`);
+      console.error(`Valid providers: ${validProviders.join(', ')}`);
+      process.exit(1);
+    }
+    return value;
+  }
+
+  // RerankerProvider validation
+  if (key === 'rerankerProvider') {
+    const validProviders = ['ollama', 'openai-compatible'];
+    if (!validProviders.includes(value)) {
+      console.error(`Invalid rerankerProvider: ${value}`);
+      console.error(`Valid providers: ${validProviders.join(', ')}`);
+      process.exit(1);
+    }
+    return value;
+  }
+
+  // String (return as-is)
+  return value;
+}
+
+/**
+ * Handle --set-config command
+ */
+async function setConfigHandler(configString: string, global?: boolean): Promise<void> {
+  // 1. Parse configuration string (split by first = to support = in values)
+  const configPairs = configString.split(',').map(s => s.trim());
+  const newConfig: Record<string, any> = {};
+
+  for (const pair of configPairs) {
+    const firstEqualIndex = pair.indexOf('=');
+    if (firstEqualIndex === -1) {
+      console.error(`Invalid configuration format: ${pair} (should be key=value)`);
+      process.exit(1);
+    }
+
+    const key = pair.substring(0, firstEqualIndex).trim();
+    const value = pair.substring(firstEqualIndex + 1).trim();
+
+    if (!key || value === '') {
+      console.error(`Invalid configuration format: ${pair} (empty key or value)`);
+      process.exit(1);
+    }
+
+    // Type conversion and validation
+    newConfig[key] = parseConfigValue(key, value);
+  }
+
+  // 2. Validate configuration item names (using TypeScript type checking)
+  type ConfigKey = keyof CodeIndexConfig;
+  const validKeys: ConfigKey[] = [
+    'isEnabled',
+    'embedderProvider', 'embedderModelId', 'embedderModelDimension',
+    'embedderOllamaBaseUrl', 'embedderOllamaBatchSize',
+    'embedderOpenAiApiKey', 'embedderOpenAiBatchSize',
+    'embedderOpenAiCompatibleBaseUrl', 'embedderOpenAiCompatibleApiKey', 'embedderOpenAiCompatibleBatchSize',
+    'embedderGeminiApiKey', 'embedderGeminiBatchSize',
+    'embedderMistralApiKey', 'embedderMistralBatchSize',
+    'embedderVercelAiGatewayApiKey',
+    'embedderOpenRouterApiKey', 'embedderOpenRouterBatchSize',
+    'qdrantUrl', 'qdrantApiKey',
+    'vectorSearchMinScore', 'vectorSearchMaxResults',
+    'rerankerEnabled', 'rerankerProvider',
+    'rerankerOllamaBaseUrl', 'rerankerOllamaModelId',
+    'rerankerOpenAiCompatibleBaseUrl', 'rerankerOpenAiCompatibleModelId', 'rerankerOpenAiCompatibleApiKey',
+    'rerankerMinScore', 'rerankerBatchSize'
+  ];
+
+  for (const key of Object.keys(newConfig)) {
+    if (!validKeys.includes(key as ConfigKey)) {
+      console.error(`Invalid configuration item: ${key}`);
+      console.error(`Supported configuration items: ${validKeys.join(', ')}`);
+      process.exit(1);
+    }
+  }
+
+  // 3. Determine configuration path (supports --path and --config)
+  const options = resolveOptions();
+  const projectConfigPath = options.config || path.join(options.path, 'autodev-config.json');
+  const globalConfigPath = path.join(os.homedir(), '.autodev-cache', 'autodev-config.json');
+  const configPath = global ? globalConfigPath : projectConfigPath;
+
+  // 4. Read existing configuration (using jsonc-parser, handle corrupted files)
+  let existingConfig: Record<string, any> = {};
+  try {
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      existingConfig = jsoncParser.parse(content);
+    }
+  } catch (error) {
+    console.error(`Failed to read existing configuration: ${error}`);
+    console.error(`File path: ${configPath}`);
+    console.error('Please check file format or fix manually using a text editor');
+    process.exit(1);
+  }
+
+  // 5. Merge configuration
+  // Use built-in defaults as baseline so users can set a subset of config keys
+  // without needing to redundantly specify required defaults (e.g. qdrantUrl).
+  const mergedConfig = { ...DEFAULT_CONFIG, ...existingConfig, ...newConfig };
+
+  // 6. Validate the complete configuration using ConfigValidator
+  const validationResult = ConfigValidator.validate(mergedConfig as CodeIndexConfig);
+  if (!validationResult.valid) {
+    console.error('Configuration validation failed:');
+    for (const issue of validationResult.issues) {
+      console.error(`  - ${issue.path}: ${issue.message}`);
+    }
+    process.exit(1);
+  }
+
+  // 7. Ensure directory exists
+  const dir = path.dirname(configPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+
+  // 8. Save configuration (preserving JSONC comments)
+  try {
+    // Read original content to preserve formatting and comments
+    const originalContent = fs.existsSync(configPath) 
+      ? fs.readFileSync(configPath, 'utf-8') 
+      : '';
+    
+    // Use helper to save while preserving comments
+    const content = saveJsoncPreservingComments(originalContent, mergedConfig);
+    
+    fs.writeFileSync(configPath, content);
+    console.log(`Configuration saved to: ${configPath}`);
+    console.log('Updated configuration items:');
+    for (const [key, value] of Object.entries(newConfig)) {
+      console.log(`  ${key}: ${value}`);
+    }
+  } catch (error) {
+    console.error(`Failed to save configuration: ${error}`);
+    process.exit(1);
+  }
+}
+
+/**
  * Main entry point
  */
 async function main(): Promise<void> {
   try {
     if (values.help) {
       printHelp();
+      process.exit(0);
+    }
+
+    // Handle configuration management commands
+    if (values['get-config']) {
+      // --global parameter is ignored for --get-config
+      await getConfigHandler(positionals, values.json, values['show-secrets']);
+      process.exit(0);
+    }
+    if (values['set-config']) {
+      await setConfigHandler(values['set-config'], values.global);
       process.exit(0);
     }
 

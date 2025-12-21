@@ -7,6 +7,23 @@ const CODEBASE_INDEX_DEFAULTS = {
 	DEFAULT_SEARCH_RESULTS: 50,
 } as const
 
+/**
+ * Default configuration for the code index
+ */
+import { CodeIndexConfig } from '../interfaces/config'
+
+export const DEFAULT_CONFIG: CodeIndexConfig = {
+	isEnabled: true,
+	embedderProvider: "ollama",
+	embedderModelId: "qwen3-embedding:0.6b",
+	embedderModelDimension: 1024,
+	embedderOllamaBaseUrl: "http://localhost:11434",
+	qdrantUrl: "http://localhost:6333",
+	vectorSearchMinScore: 0.1,
+	vectorSearchMaxResults: 20,
+	rerankerEnabled: false
+}
+
 /**Parser */
 export const MAX_BLOCK_CHARS = 2000
 export const MIN_BLOCK_CHARS = 100

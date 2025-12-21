@@ -5,28 +5,17 @@
 import * as path from 'path'
 import * as os from 'os'
 import * as jsoncParser from 'jsonc-parser'
+import { saveJsoncPreservingComments } from '../../utils/jsonc-helpers'
 import { IConfigProvider, EmbedderConfig, VectorStoreConfig, SearchConfig } from '../../abstractions/config'
 import { CodeIndexConfig, OllamaEmbedderConfig } from '../../code-index/interfaces/config'
 import { EmbedderProvider } from '../../code-index/interfaces/manager'
 import { IFileSystem, IEventBus } from '../../abstractions/core'
+import { DEFAULT_CONFIG } from '../../code-index/constants'
 
 export interface NodeConfigOptions {
   configPath?: string
   globalConfigPath?: string
   defaultConfig?: Partial<CodeIndexConfig>
-}
-
-// Default configuration constants
-const DEFAULT_CONFIG: CodeIndexConfig = {
-  isEnabled: true,
-  embedderProvider: "ollama",
-  embedderModelId: "qwen3-embedding:0.6b",
-  embedderModelDimension: 1024,
-  embedderOllamaBaseUrl: "http://localhost:11434",
-  qdrantUrl: "http://localhost:6333",
-  vectorSearchMinScore: 0.1,
-  vectorSearchMaxResults: 20,
-  rerankerEnabled: false
 }
 
 
@@ -193,7 +182,7 @@ export class NodeConfigProvider implements IConfigProvider {
 
 
   /**
-   * Save configuration to file
+   * Save configuration to file (preserving JSONC comments)
    */
   async saveConfig(config: Partial<CodeIndexConfig>): Promise<void> {
     try {
@@ -202,27 +191,41 @@ export class NodeConfigProvider implements IConfigProvider {
         ...this.config,
         ...config
       }
-      const content = JSON.stringify(newConfig, null, 2)
-      const encoded = new TextEncoder().encode(content)
-
-      await this.fileSystem.writeFile(this.configPath, encoded)
-      this.config = newConfig
-      this.configLoaded = true // Mark as loaded since we just set it
+      
+      // Read original content to preserve formatting and comments
+      let originalContent = '';
+      try {
+        if (await this.fileSystem.exists(this.configPath)) {
+          const fileContent = await this.fileSystem.readFile(this.configPath);
+          originalContent = new TextDecoder().decode(fileContent);
+        }
+      } catch (readError) {
+        // If we can't read the existing file, continue with new file creation
+      }
+      
+      // Use helper to save while preserving comments
+      const content = saveJsoncPreservingComments(originalContent, newConfig);
+      
+      const encoded = new TextEncoder().encode(content);
+      await this.fileSystem.writeFile(this.configPath, encoded);
+      
+      this.config = newConfig;
+      this.configLoaded = true; // Mark as loaded since we just set it
 
       // Notify listeners
       this.changeCallbacks.forEach(callback => {
         try {
-          callback(newConfig)
+          callback(newConfig);
         } catch (error) {
-          console.error('Error in config change callback:', error)
+          console.error('Error in config change callback:', error);
         }
       })
 
       // Emit event
-      this.eventBus.emit('config:changed', newConfig)
+      this.eventBus.emit('config:changed', newConfig);
 
     } catch (error) {
-      throw new Error(`Failed to save config to ${this.configPath}: ${error}`)
+      throw new Error(`Failed to save config to ${this.configPath}: ${error}`);
     }
   }
 
