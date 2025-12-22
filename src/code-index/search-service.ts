@@ -6,6 +6,7 @@ import { CodeIndexConfigManager } from "./config-manager"
 import { CodeIndexStateManager } from "./state-manager"
 import { applyQueryPrefill } from "./search/query-prefill"
 import { getDefaultModelId } from "../shared/embeddingModels"
+import { validateLimit, validateMinScore } from "./validate-search-params"
 
 /**
  * Service responsible for searching the code index.
@@ -32,8 +33,8 @@ export class CodeIndexSearchService {
 		}
 
 		// Get configuration values
-		const minScore = this.configManager.currentSearchMinScore
-		const maxResults = this.configManager.currentSearchMaxResults
+		const configMinScore = this.configManager.currentSearchMinScore
+		const configMaxResults = this.configManager.currentSearchMaxResults
 
 		const currentState = this.stateManager.getCurrentStatus().systemStatus
 		if (currentState !== "Indexed" && currentState !== "Indexing") {
@@ -58,11 +59,14 @@ export class CodeIndexSearchService {
 				throw new Error("Failed to generate embedding for query.")
 			}
 
-			// Perform search - 直接传递filter对象
+			// Perform search - 防止调用方传入未验证的参数
+			const finalLimit = validateLimit(filter?.limit ?? configMaxResults)
+			const finalMinScore = validateMinScore(filter?.minScore ?? configMinScore)
+			
 			let results = await this.vectorStore.search(vector, {
 				...filter,
-				minScore: filter?.minScore ?? minScore,
-				limit: filter?.limit ?? maxResults
+				minScore: finalMinScore,
+				limit: finalLimit
 			})
 
 			// 确保结果按分数降序排序

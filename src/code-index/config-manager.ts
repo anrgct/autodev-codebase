@@ -5,6 +5,8 @@ import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "./constant
 import { getDefaultModelId, getModelDimension, getModelScoreThreshold } from "../shared/embeddingModels"
 import { IConfigProvider } from "../abstractions/config"
 import { ConfigValidator } from "./config-validator"
+import { validateLimit, validateMinScore } from "./validate-search-params"
+import { SEARCH_CONFIG } from "./constants/search-config"
 
 /**
  * Keys that require a restart when changed
@@ -393,27 +395,30 @@ export class CodeIndexConfigManager {
 	/**
 	 * Gets the configured minimum search score based on user setting, model-specific threshold, or fallback.
 	 * Priority: 1) User setting, 2) Model-specific threshold, 3) Default DEFAULT_SEARCH_MIN_SCORE constant.
+	 * Uses unified validation to ensure [0,1] range.
 	 */
 	public get currentSearchMinScore(): number {
-		if (!this.config) return DEFAULT_SEARCH_MIN_SCORE
+		if (!this.config) return validateMinScore(DEFAULT_SEARCH_MIN_SCORE)
 
 		// First check if user has configured a custom score threshold
 		if (this.config.vectorSearchMinScore !== undefined) {
-			return this.config.vectorSearchMinScore
+			return validateMinScore(this.config.vectorSearchMinScore)
 		}
 
 		// Fall back to model-specific threshold
 		const currentModelId = this.config.embedderModelId ?? getDefaultModelId(this.config.embedderProvider)
 		const modelSpecificThreshold = getModelScoreThreshold(this.config.embedderProvider, currentModelId)
-		return modelSpecificThreshold ?? DEFAULT_SEARCH_MIN_SCORE
+		return validateMinScore(modelSpecificThreshold ?? DEFAULT_SEARCH_MIN_SCORE)
 	}
 
 	/**
 	 * Gets the configured maximum search results.
 	 * Returns user setting if configured, otherwise returns default.
+	 * Uses unified validation to ensure [1, MAX_LIMIT] range.
 	 */
 	public get currentSearchMaxResults(): number {
-		return this.config?.vectorSearchMaxResults ?? DEFAULT_MAX_SEARCH_RESULTS
+		const raw = this.config?.vectorSearchMaxResults
+		return validateLimit(raw ?? SEARCH_CONFIG.DEFAULT_LIMIT)
 	}
 
 	  /**

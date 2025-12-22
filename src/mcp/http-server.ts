@@ -11,6 +11,7 @@ import {
     isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { CodeIndexManager } from '../code-index/manager.js';
+import { validateLimit, validateMinScore } from '../code-index/validate-search-params.js';
 
 export interface HTTPMCPServerOptions {
     codeIndexManager: CodeIndexManager;
@@ -48,7 +49,12 @@ export class CodebaseHTTPMCPServer {
             "Search the codebase using semantic vector search to find relevant code snippets.",
             {
                 query: z.string().describe("An English complete question about what you want to understand. Ask as if talking to a colleague: 'How does X work?', 'What happens when Y?', 'Where is Z handled?'"),
-                limit: z.number().optional().default(10).describe('Maximum number of results to return (default: 10)'),
+                // 移除 default()，避免覆盖配置默认值
+                limit: z.union([
+                    z.coerce.number(),
+                    z.string().transform(s => Number(s))
+                ]).optional()
+                .describe('Maximum number of results to return (default from config, max 50)'),
                 filters: z.object({
                     pathFilters: z.array(z.string()).optional().describe("Filter by path patterns with limited glob support. " +
                         "Top-level patterns (array elements) use OR logic. Within each pattern, all substrings must match (AND logic). " +
@@ -56,13 +62,14 @@ export class CodebaseHTTPMCPServer {
                         "Use ! prefix for exclusion. Compiled to Qdrant substring filters (case-insensitive, not strict glob matching). " +
                         "Examples: ['src/**/*.ts', 'components/*.tsx', '!**/*.test.ts']. " +
                         "Unsupported features ([]) are ignored, ? is treated as a regular character."),
-                    minScore: z.number().optional().describe('Minimum similarity score threshold (0-1)，default 0.4')
+                    minScore: z.union([
+                        z.coerce.number(),
+                        z.string().transform(s => Number(s))
+                    ]).optional()
+                    .describe('Minimum similarity score threshold (0-1, default from config)')
                 }).optional().describe('Optional filters for file types, paths, etc.')
             },
-            async ({ query, limit = 10, filters }): Promise<CallToolResult> => {
-                if (limit === 0) {
-                    limit = 10; // Default limit if not provided
-                }
+            async ({ query, limit, filters }): Promise<CallToolResult> => {
                 if (!query || !query.trim() || typeof query !== 'string') {
                     throw new Error('Query parameter is required and must be a string');
                 }
@@ -100,7 +107,7 @@ export class CodebaseHTTPMCPServer {
     }
 
     private async handleSearchCodebase(args: any): Promise<CallToolResult> {
-        const { query, limit = 10, filters } = args;
+        const { query, limit, filters } = args;
 
         if (!query || typeof query !== 'string') {
             throw new Error('Query parameter is required and must be a string');
@@ -118,10 +125,14 @@ export class CodebaseHTTPMCPServer {
         }
 
         try {
+            // 只有传入时才验证，未传则让service层处理
+            const finalLimit = limit === undefined ? undefined : validateLimit(limit)
+            const finalMinScore = filters?.minScore === undefined ? undefined : validateMinScore(filters.minScore)
+            
             // Extract search filter from the filters parameter
             const searchFilter = {
-                limit: Math.min(limit, 50),
-                minScore: filters?.minScore,
+                limit: finalLimit,
+                minScore: finalMinScore,
                 pathFilters: filters?.pathFilters
             };
             const searchResults = await this.codeIndexManager.searchIndex(query, searchFilter);

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
 import { CodeIndexConfigManager } from "../config-manager"
 import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "../constants"
+import { SEARCH_CONFIG } from "../constants/search-config"
 import type { IConfigProvider, CodeIndexConfig } from "../../../src/abstractions/config"
 
 describe("CodeIndexConfigManager", () => {
@@ -323,7 +324,7 @@ describe("CodeIndexConfigManager", () => {
 			// We didn't set explicit search scores in this setup – value should come
 			// from model-specific threshold or the global default, but always be > 0.
 			expect(configManager.currentSearchMinScore).toBeGreaterThan(0)
-			expect(configManager.currentSearchMaxResults).toBe(DEFAULT_MAX_SEARCH_RESULTS)
+			expect(configManager.currentSearchMaxResults).toBe(SEARCH_CONFIG.DEFAULT_LIMIT)
 		})
 	})
 })

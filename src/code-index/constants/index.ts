@@ -31,7 +31,13 @@ export const MIN_CHUNK_REMAINDER_CHARS = 200 // Minimum characters for the *next
 export const MAX_CHARS_TOLERANCE_FACTOR = 1.15 // 15% tolerance for max chars
 
 /**Search */
+/**
+ * @deprecated Use SEARCH_CONFIG from './search-config' instead
+ */
 export const DEFAULT_SEARCH_MIN_SCORE = CODEBASE_INDEX_DEFAULTS.DEFAULT_SEARCH_MIN_SCORE
+/**
+ * @deprecated Use SEARCH_CONFIG from './search-config' instead
+ */
 export const DEFAULT_MAX_SEARCH_RESULTS = CODEBASE_INDEX_DEFAULTS.DEFAULT_SEARCH_RESULTS
 
 /**File Watcher */

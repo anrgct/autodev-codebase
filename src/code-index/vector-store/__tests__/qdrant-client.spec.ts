@@ -5,6 +5,8 @@ import { createHash } from "crypto"
 import * as path from "path"
 import { getWorkspacePath } from "../../../utils/path"
 import { DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_SEARCH_MIN_SCORE } from "../../constants"
+import { SEARCH_CONFIG } from "../../constants/search-config"
+import { vi } from 'vitest'
 import { Payload, VectorStoreSearchResult } from "../../interfaces"
 
 // Mocks
@@ -653,7 +655,7 @@ describe("QdrantVectorStore", () => {
 					must_not: [{ key: "type", match: { value: "metadata" } }],
 				},
 				score_threshold: DEFAULT_SEARCH_MIN_SCORE,
-				limit: DEFAULT_MAX_SEARCH_RESULTS,
+				limit: SEARCH_CONFIG.DEFAULT_LIMIT,
 				params: {
 					hnsw_ef: 128,
 					exact: false,
@@ -696,7 +698,7 @@ describe("QdrantVectorStore", () => {
 						must_not: [{ key: "type", match: { value: "metadata" } }],
 					},
 					score_threshold: DEFAULT_SEARCH_MIN_SCORE,
-					limit: DEFAULT_MAX_SEARCH_RESULTS,
+					limit: SEARCH_CONFIG.DEFAULT_LIMIT,
 				params: {
 					hnsw_ef: 128,
 					exact: false,
@@ -726,7 +728,7 @@ describe("QdrantVectorStore", () => {
 						must_not: [{ key: "type", match: { value: "metadata" } }],
 					},
 					score_threshold: DEFAULT_SEARCH_MIN_SCORE,
-					limit: DEFAULT_MAX_SEARCH_RESULTS,
+					limit: SEARCH_CONFIG.DEFAULT_LIMIT,
 					params: {
 						hnsw_ef: 128,
 						exact: false,
@@ -751,7 +753,7 @@ describe("QdrantVectorStore", () => {
 					must_not: [{ key: "type", match: { value: "metadata" } }],
 				},
 				score_threshold: customMinScore,
-				limit: DEFAULT_MAX_SEARCH_RESULTS,
+				limit: SEARCH_CONFIG.DEFAULT_LIMIT,
 				params: {
 					hnsw_ef: 128,
 					exact: false,
@@ -882,7 +884,7 @@ describe("QdrantVectorStore", () => {
 						must_not: [{ key: "type", match: { value: "metadata" } }],
 					},
 					score_threshold: DEFAULT_SEARCH_MIN_SCORE,
-					limit: DEFAULT_MAX_SEARCH_RESULTS,
+					limit: SEARCH_CONFIG.DEFAULT_LIMIT,
 				params: {
 					hnsw_ef: 128,
 					exact: false,
@@ -904,17 +906,31 @@ describe("QdrantVectorStore", () => {
 			;(console.error as any).mockRestore()
 		})
 
-		it("should use constants DEFAULT_MAX_SEARCH_RESULTS and DEFAULT_SEARCH_MIN_SCORE correctly", async () => {
+		it("should use validated defaults when limit and minScore are undefined", async () => {
 			const queryVector = [0.1, 0.2, 0.3]
 			const mockQdrantResults = { points: [] }
 
 			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
 
-			await vectorStore.search(queryVector)
+			await vectorStore.search(queryVector, {})
 
 			const callArgs = mockQdrantClientInstance.query.mock.calls[0][1]
-			expect(callArgs.limit).toBe(DEFAULT_MAX_SEARCH_RESULTS)
-			expect(callArgs.score_threshold).toBe(DEFAULT_SEARCH_MIN_SCORE)
+			expect(callArgs.limit).toBe(SEARCH_CONFIG.DEFAULT_LIMIT)
+			expect(callArgs.score_threshold).toBe(SEARCH_CONFIG.DEFAULT_MIN_SCORE)
+		})
+
+		it("should validate limit and minScore parameters", async () => {
+			const queryVector = [0.1, 0.2, 0.3]
+			const mockQdrantResults = { points: [] }
+
+			mockQdrantClientInstance.query.mockResolvedValue(mockQdrantResults)
+
+			// 测试超出范围的值被正确限制
+			await vectorStore.search(queryVector, { limit: 100, minScore: 1.5 })
+
+			const callArgs = mockQdrantClientInstance.query.mock.calls[0][1]
+			expect(callArgs.limit).toBe(SEARCH_CONFIG.MAX_LIMIT)
+			expect(callArgs.score_threshold).toBe(SEARCH_CONFIG.MAX_MIN_SCORE)
 		})
 	})
 })

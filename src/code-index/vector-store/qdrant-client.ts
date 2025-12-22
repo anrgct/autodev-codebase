@@ -9,6 +9,7 @@ import {
 	DEFAULT_MAX_SEARCH_RESULTS,
 	QDRANT_CODE_BLOCK_NAMESPACE
 } from "../constants"
+import { validateLimit, validateMinScore } from "../validate-search-params"
 
 /**
  * Pattern Compiler for Glob-like Path Filtering
@@ -524,8 +525,9 @@ export class QdrantVectorStore implements IVectorStore {
 			const searchRequest = {
 				query: queryVector,
 				filter: finalFilter,
-				score_threshold: filter?.minScore ?? DEFAULT_SEARCH_MIN_SCORE,
-				limit: filter?.limit ?? DEFAULT_MAX_SEARCH_RESULTS,
+				// 使用统一验证，确保参数合法
+				score_threshold: validateMinScore(filter?.minScore),
+				limit: validateLimit(filter?.limit),
 				params: {
 					hnsw_ef: 128,
 					exact: false,

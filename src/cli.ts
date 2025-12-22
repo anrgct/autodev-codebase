@@ -18,6 +18,7 @@ import { VectorStoreSearchResult, SearchFilter } from './code-index/interfaces';
 import { DEFAULT_CONFIG } from './code-index/constants';
 import { CodeIndexConfig } from './code-index/interfaces/config';
 import { ConfigValidator } from './code-index/config-validator';
+import { validateLimit, validateMinScore } from './code-index/validate-search-params';
 
 // Initialize global logger with CLI settings
 function initGlobalLogger(level: LogLevel) {
@@ -250,6 +251,8 @@ interface SimpleCliOptions {
   cache?: string;
   json: boolean;
   pathFilters?: string;
+  limit?: string;
+  'min-score'?: string;
 }
 
 // Parse command line arguments using Node.js native parseArgs
@@ -267,6 +270,9 @@ const { values, positionals } = parseArgs({
     config: { type: 'string', short: 'c' },
     // Search filtering options
     'path-filters': { type: 'string', short: 'f' },
+    // 添加limit和min-score参数
+    limit: { type: 'string', short: 'l' },
+    'min-score': { type: 'string', short: 's' },
     // MCP server options
     port: { type: 'string', default: '3001' },
     host: { type: 'string', default: 'localhost' },
@@ -346,6 +352,11 @@ Options:
                                   !   Exclusion prefix (e.g., !*.test.ts)
                                 Note: Uses substring matching, case-insensitive.
                                 Unsupported features ([]) are ignored, ? is treated as a regular character.
+  --limit, -l <number>           Maximum number of search results (default: from config, max 50)
+                                Examples: --limit=30, -l 20
+  --min-score, -s <number>       Minimum similarity score for search results (0-1, default: from config)
+                                Examples: --min-score=0.7, -s 0.5
+                                0 means accept all results, 1 means exact match only
 
 
 Examples:
@@ -428,6 +439,8 @@ function resolveOptions(): SimpleCliOptions {
     cache: values.cache,
     json: !!values.json,
     pathFilters: values['path-filters'],
+    limit: values.limit,
+    'min-score': values['min-score'],
   };
 }
 
@@ -699,8 +712,21 @@ function parsePathFilters(filtersString: string): string[] {
     getLogger().info(`Path filters: ${filters.join(', ')}`);
   }
   
+  // 只有用户显式传入才设置，否则让 service/config 决定
+  if (options.limit !== undefined) {
+    filter.limit = validateLimit(options.limit);
+    getLogger().info(`Limit: ${filter.limit}`);
+  }
+  
+  if (options['min-score'] !== undefined) {
+    filter.minScore = validateMinScore(options['min-score']);
+    getLogger().info(`Min score: ${filter.minScore}`);
+  }
+  
   // Debug: Log parsed options
   getLogger().info(`Debug: pathFilters value = "${options.pathFilters}"`);
+  getLogger().info(`Debug: limit value = "${options.limit}"`);
+  getLogger().info(`Debug: min-score value = "${options['min-score']}"`);
   getLogger().info(`Debug: filter object =`, filter);
 
   // Use searchOnly to prevent background indexing from starting
