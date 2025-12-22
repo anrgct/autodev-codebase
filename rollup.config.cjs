@@ -39,12 +39,12 @@ function copyFilesPlugin() {
       const srcDir = __dirname
       const nodeModulesDir = path.join(srcDir, "node_modules")
       const distDir = path.join(srcDir, "dist")
-      
+
       // Ensure dist directory exists
       if (!fs.existsSync(distDir)) {
         fs.mkdirSync(distDir, { recursive: true })
       }
-      
+
       // Find yoga.wasm in Ink's dependencies
       const yogaWasmPath = path.join(nodeModulesDir, "yoga-wasm-web", "dist", "yoga.wasm")
       if (fs.existsSync(yogaWasmPath)) {
@@ -58,13 +58,13 @@ function copyFilesPlugin() {
       // Copy tree-sitter WASM files from src/tree-sitter to dist
       const treeSitterSrcDir = path.join(srcDir, "src", "tree-sitter")
       const treeSitterDistDir = path.join(distDir, "tree-sitter")
-      
+
       if (fs.existsSync(treeSitterSrcDir)) {
         // Ensure tree-sitter directory exists in dist
         if (!fs.existsSync(treeSitterDistDir)) {
           fs.mkdirSync(treeSitterDistDir, { recursive: true })
         }
-        
+
         // Copy all WASM files
         const wasmFiles = fs.readdirSync(treeSitterSrcDir).filter(file => file.endsWith('.wasm'))
         wasmFiles.forEach(filename => {
@@ -72,7 +72,7 @@ function copyFilesPlugin() {
           const destPath = path.join(treeSitterDistDir, filename)
           fs.copyFileSync(srcPath, destPath)
         })
-        
+
         console.log(`[copyWasms] Copied ${wasmFiles.length} tree-sitter WASM files to ${treeSitterDistDir}`)
       } else {
         console.warn(`[copyWasms] tree-sitter source directory not found at ${treeSitterSrcDir}`)
@@ -107,14 +107,6 @@ module.exports = [
       if (id === 'vscode' || id.startsWith('vscode/')) {
         return true;
       }
-      // Externalize React and related dependencies to prevent devtools issues
-      if (id === 'react' || id.startsWith('react/') || id === 'react-devtools-core' || id.includes('react-devtools-core')) {
-        return true;
-      }
-      // Externalize Ink to prevent devtools bundling issues
-      if (id === 'ink' || id.startsWith('ink/')) {
-        return true;
-      }
       // Also externalize yoga-wasm-web to avoid bundling issues
       if (id.includes('yoga-wasm-web')) {
         return true;
@@ -135,7 +127,6 @@ module.exports = [
       json(),
       resolve({
         preferBuiltins: true,
-        ignoreMissing: ['react-devtools-core'],
       }),
       commonjs(),
       typescript({
@@ -160,18 +151,7 @@ module.exports = [
       if (id === 'vscode' || id.startsWith('vscode/')) {
         return true;
       }
-      // Externalize React and related dependencies to prevent devtools issues
-      if (id === 'react' || id.startsWith('react/') || id === 'react-devtools-core' || id.includes('react-devtools-core')) {
-        return true;
-      }
-      // Externalize Ink to prevent devtools bundling issues
-      if (id === 'ink' || id.startsWith('ink/')) {
-        return true;
-      }
-      // Also externalize yoga-wasm-web to avoid bundling issues
-      if (id.includes('yoga-wasm-web')) {
-        return true;
-      }
+
       // Externalize Node.js built-ins that shouldn't be bundled
       if (['fs', 'path', 'child_process', 'readline', 'crypto', 'os', 'stream', 'util'].includes(id)) {
         return true;
@@ -188,7 +168,6 @@ module.exports = [
       json(),
       resolve({
         preferBuiltins: true,
-        ignoreMissing: ['react-devtools-core'],
       }),
       commonjs(),
       typescript({

@@ -119,10 +119,9 @@ npx codebase /path/to/project \
 
 ### CLI Interface
 - **Entry Point**: `src/cli.ts` - Command-line interface launcher with polyfills
-- **TUI Runner**: `src/cli/tui-runner.ts` - Terminal UI application runner  
 - **CLI Features**:
-  - Interactive Terminal UI for code indexing
-  - Full CodeIndexManager initialization with React UI
+  - Code indexing and search functionality
+  - MCP server integration
   - Demo mode with sample file generation
   - Configurable storage, cache, and logging
   - Support for custom models and Qdrant endpoints
@@ -146,10 +145,4 @@ This codebase demonstrates enterprise-level abstraction patterns and clean archi
 3. `manager.initialize()` → Initializes internal services
 4. `manager.startIndexing()` → Triggers orchestrator
 
-### React Integration
-When integrating with React, use `useEffect` to sync prop changes:
-```typescript
-useEffect(() => {
-  setState(prev => ({ ...prev, codeIndexManager }));
-}, [codeIndexManager]);
-```
+

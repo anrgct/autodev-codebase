@@ -1,234 +1,267 @@
-
-
 # @autodev/codebase
 
 <div align="center">
-  <img src="src/images/image2.png" alt="Image 2" style="display: inline-block; width: 350px; margin: 0 10px;" />
-  <img src="src/images/image3.png" alt="Image 3" style="display: inline-block; width: 200px; margin: 0 10px;" />
+
+[![npm version](https://img.shields.io/npm/v/@autodev/codebase)](https://www.npmjs.com/package/@autodev/codebase)
+[![GitHub stars](https://img.shields.io/github/stars/anrgct/autodev-codebase)](https://github.com/anrgct/autodev-codebase)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 </div>
 
-<br />
+```sh
+╭─ ~/workspace/autodev-codebase 
+╰─❯ codebase --demo --search="user manage"
+Found 3 results in 2 files for: "user manage"
 
-A platform-agnostic code analysis library with semantic search capabilities and MCP (Model Context Protocol) server support. This library provides intelligent code indexing, vector-based semantic search, and can be integrated into various development tools and IDEs.
+==================================================
+File: "hello.js"
+==================================================
+< class UserManager > (L7-20)
+class UserManager {
+  constructor() {
+    this.users = [];
+  }
+
+  addUser(user) {
+    this.users.push(user);
+    console.log('User added:', user.name);
+  }
+
+  getUsers() {
+    return this.users;
+  }
+}
+
+==================================================
+File: "README.md" | 2 snippets
+==================================================
+< md_h1 Demo Project > md_h2 Usage > md_h3 JavaScript Functions > (L16-20)
+### JavaScript Functions
+
+- greetUser(name) - Greets a user by name
+- UserManager - Class for managing user data
+
+─────
+< md_h1 Demo Project > md_h2 Search Examples > (L27-38)
+## Search Examples
+
+Try searching for:
+- "greet user"
+- "process data"
+- "user management"
+- "batch processing"
+- "YOLO model"
+- "computer vision"
+- "object detection"
+- "model training"
+
+```
+A vector embedding-based code semantic search tool with MCP server and multi-model integration. Can be used as a pure CLI tool. Supports Ollama for fully local embedding and reranking, enabling complete offline operation and privacy protection for your code repository.
 
 ## 🚀 Features
 
-- **Semantic Code Search**: Vector-based code search using embeddings
-- **MCP Server Support**: HTTP-based MCP server for IDE integration
-- **Terminal UI**: Interactive CLI with rich terminal interface
-- **Tree-sitter Parsing**: Advanced code parsing and analysis
-- **Vector Storage**: Qdrant vector database integration
-- **Flexible Embedding**: Support for various embedding models via Ollama
+- **🔍 Semantic Code Search**: Vector-based search using advanced embedding models
+- **🌐 MCP Server**: HTTP-based MCP server with SSE and stdio adapters
+- **💻 Pure CLI Tool**: Standalone command-line interface without GUI dependencies
+- **⚙️ Layered Configuration**: CLI, project, and global config management
+- **🎯 Advanced Path Filtering**: Glob patterns with brace expansion and exclusions
+- **🌲 Tree-sitter Parsing**: Support for 40+ programming languages
+- **💾 Qdrant Integration**: High-performance vector database
+- **🔄 Multiple Providers**: OpenAI, Ollama, Jina, Gemini, Mistral, OpenRouter, Vercel
+- **📊 Real-time Watching**: Automatic index updates
+- **⚡ Batch Processing**: Efficient parallel processing
 
 ## 📦 Installation
 
-### 1. Install and Start Ollama
-
+### 1. Dependencies
 ```bash
-# Install Ollama (macOS)
-brew install ollama
-
-# Start Ollama service
+brew install ollama ripgrep
 ollama serve
-
-# In a new terminal, pull the embedding model
 ollama pull nomic-embed-text
 ```
 
-### 2. Install ripgrep for fast files search
-
+### 2. Qdrant
 ```bash
-# Install ripgrep (macOS)
-brew install ripgrep
-
-# Or on Ubuntu/Debian
-sudo apt-get install ripgrep
-
-# Or on Arch Linux
-sudo pacman -S ripgrep
+docker run -d -p 6333:6333 -p 6334:6334 --name qdrant qdrant/qdrant
 ```
 
-### 3. Install and Start Qdrant for Vector Storage
-
-Start Qdrant using Docker:
-
-```bash
-# Start Qdrant container
-docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
-```
-
-Or download and run Qdrant directly:
-
-```bash
-# Download and run Qdrant
-wget https://github.com/qdrant/qdrant/releases/latest/download/qdrant-x86_64-unknown-linux-gnu.tar.gz
-tar -xzf qdrant-x86_64-unknown-linux-gnu.tar.gz
-./qdrant
-```
-
-### 4. Verify Services Are Running
-
-```bash
-# Check Ollama
-curl http://localhost:11434/api/tags
-
-# Check Qdrant
-curl http://localhost:6333/collections
-```
-### 5. Install Autodev-codebase
-
+### 3. Install
 ```bash
 npm install -g @autodev/codebase
+codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
 ```
 
-Alternatively, you can install it locally:
-```
-git clone https://github.com/anrgct/autodev-codebase
-cd autodev-codebase
-npm install
-npm run build
-npm link
-```
-## 🛠️ Usage
+## 🛠️ Quick Start
 
-### Command Line Interface
-
-The CLI provides two main modes:
-
-#### 1. Interactive TUI Mode (Default)
 ```bash
-# Basic usage: index your current folder as the codebase.
-# Be cautious when running this command if you have a large number of files.
-codebase
+# Demo mode (recommended for first-time)
+# Creates a demo directory in current working directory for testing
 
+# Index & search
+codebase --demo --index
+codebase --demo --search="user greet"
 
-# With custom options
-codebase --demo # Create a local demo directory and test the indexing service, recommend for setup
-codebase --path=/my/project
-codebase --path=/my/project --log-level=info
+# MCP server
+codebase --demo --serve
 ```
 
-#### 2. MCP Server Mode (Recommended for IDE Integration)
+## 📋 Commands
+
+### Indexing & Search
 ```bash
-# Start long-running MCP server
-cd /my/project
-codebase mcp-server
+# Index the codebase
+codebase --index --path=/my/project --force
 
-# With custom configuration
-codebase mcp-server --port=3001 --host=localhost
-codebase mcp-server --path=/workspace --port=3001
+# Search with filters
+codebase --search="error handling" --path-filters="src/**/*.ts"
+
+# Search in JSON format
+codebase --search="authentication" --json
+
+# Clear index data
+codebase --clear --path=/my/project
 ```
 
+### MCP Server
+```bash
+# HTTP mode (recommended)
+codebase --serve --port=3001 --path=/my/project
+
+# Stdio adapter
+codebase --stdio-adapter --server-url=http://localhost:3001/mcp
+```
+
+### Configuration
+```bash
+# View config
+codebase --get-config
+codebase --get-config embedderProvider --json
+
+# Set config
+codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase --set-config --global qdrantUrl=http://localhost:6333
+```
+
+### Advanced Features
+
+#### 🔍 LLM-Powered Search Reranking
+Enable LLM reranking to dramatically improve search relevance:
+
+```bash
+# Enable reranking with Ollama (recommended)
+codebase --set-config rerankerEnabled=true,rerankerProvider=ollama,rerankerOllamaModelId=qwen3-vl:4b-instruct
+
+# Or use OpenAI-compatible providers
+codebase --set-config rerankerEnabled=true,rerankerProvider=openai-compatible,rerankerOpenAiCompatibleModelId=deepseek-chat
+
+# Search with automatic reranking
+codebase --search="user authentication"  # Results are automatically reranked by LLM
+```
+
+**Benefits:**
+- 🎯 **Higher precision**: LLM understands semantic relevance beyond vector similarity
+- 📊 **Smart scoring**: Results are reranked on a 0-10 scale based on query relevance  
+- ⚡ **Batch processing**: Efficiently handles large result sets with configurable batch sizes
+- 🎛️ **Threshold control**: Filter results with `rerankerMinScore` to keep only high-quality matches
+
+#### Path Filtering & Export
+```bash
+# Path filtering with brace expansion and exclusions
+codebase --search="API" --path-filters="src/**/*.ts,lib/**/*.js"
+codebase --search="utils" --path-filters="{src,test}/**/*.ts"
+
+# Export results in JSON format for scripts
+codebase --search="auth" --json
+```
 
 ## ⚙️ Configuration
 
-### Configuration Files & Priority
+### Config Layers (Priority Order)
+1. **CLI Arguments** - Runtime parameters (`--path`, `--config`, `--log-level`, `--force`, etc.)
+2. **Project Config** - `./autodev-config.json` (or custom path via `--config`)
+3. **Global Config** - `~/.autodev-cache/autodev-config.json`
+4. **Built-in Defaults** - Fallback values
 
-The library uses a layered configuration system, allowing you to customize settings at different levels. The priority order (highest to lowest) is:
+**Note:** CLI arguments provide runtime override for paths, logging, and operational behavior. For persistent configuration (embedderProvider, API keys, search parameters), use `--set-config` to save to config files.
 
-1. **CLI Parameters** (e.g., `--model`, `--ollama-url`, `--qdrant-url`, `--config`, etc.)
-2. **Project Config File** (`./autodev-config.json`)
-3. **Global Config File** (`~/.autodev-cache/autodev-config.json`)
-4. **Built-in Defaults**
+### Common Config Examples
 
-Settings specified at a higher level override those at lower levels. This lets you tailor the behavior for your environment or project as needed.
-
-**Config file locations:**
-- Global: `~/.autodev-cache/autodev-config.json`
-- Project: `./autodev-config.json`
-- CLI: Pass parameters directly when running commands
-
-
-#### Global Configuration
-
-Create a global configuration file at `~/.autodev-cache/autodev-config.json`:
-
+**Ollama:**
 ```json
 {
-  "isEnabled": true,
-  "embedder": {
-    "provider": "ollama",
-    "model": "nomic-embed-text",
-    "dimension": 768,
-    "baseUrl": "http://localhost:11434"
-  },
-  "qdrantUrl": "http://localhost:6333",
-  "qdrantApiKey": "your-api-key-if-needed",
-  "searchMinScore": 0.4
+  "embedderProvider": "ollama",
+  "embedderModelId": "nomic-embed-text",
+  "qdrantUrl": "http://localhost:6333"
 }
 ```
 
-#### Project Configuration
-
-Create a project-specific configuration file at `./autodev-config.json`:
-
+**OpenAI:**
 ```json
 {
-  "embedder": {
-    "provider": "openai-compatible",
-    "apiKey": "sk-xxxxx",
-    "baseUrl": "http://localhost:2302/v1",
-    "model": "openai/text-embedding-3-smallnpm",
-    "dimension": 1536,
-  },
-  "qdrantUrl": "http://localhost:6334"
+  "embedderProvider": "openai",
+  "embedderModelId": "text-embedding-3-small",
+  "embedderOpenAiApiKey": "sk-your-key",
+  "qdrantUrl": "http://localhost:6333"
 }
 ```
 
-#### Configuration Options
+**OpenAI-Compatible:**
+```json
+{
+  "embedderProvider": "openai-compatible",
+  "embedderModelId": "text-embedding-3-small",
+  "embedderOpenAiCompatibleApiKey": "sk-your-key",
+  "embedderOpenAiCompatibleBaseUrl": "https://api.openai.com/v1"
+}
+```
 
-| Option | Type | Description | Default |
-|--------|------|-------------|---------|
-| `isEnabled` | boolean | Enable/disable code indexing feature | `true` |
-| `embedder.provider` | string | Embedding provider (`ollama`, `openai`, `openai-compatible`) | `ollama` |
-| `embedder.model` | string | Embedding model name | `nomic-embed-text` |
-| `embedder.dimension` | number | Vector dimension size | `768` |
-| `embedder.baseUrl` | string | Provider API base URL | `http://localhost:11434` |
-| `embedder.apiKey` | string | API key (for OpenAI/compatible providers) | - |
-| `qdrantUrl` | string | Qdrant vector database URL | `http://localhost:6333` |
-| `qdrantApiKey` | string | Qdrant API key (if authentication enabled) | - |
-| `searchMinScore` | number | Minimum similarity score for search results | `0.4` |
+### Key Configuration Options
 
-**Note**: The `isConfigured` field is automatically calculated based on the completeness of your configuration and should not be set manually. The system will determine if the configuration is valid based on the required fields for your chosen provider.
+| Category | Options | Description |
+|----------|---------|-------------|
+| **Embedding** | `embedderProvider`, `embedderModelId`, `embedderModelDimension` | Provider and model settings |
+| **API Keys** | `embedderOpenAiApiKey`, `embedderOpenAiCompatibleApiKey` | Authentication |
+| **Vector Store** | `qdrantUrl`, `qdrantApiKey` | Qdrant connection |
+| **Search** | `vectorSearchMinScore`, `vectorSearchMaxResults` | Search behavior |
+| **Reranker** | `rerankerEnabled`, `rerankerProvider` | Result reranking |
 
-#### Configuration Priority Examples
+**Key CLI Arguments:**
+- `--serve` / `--index` / `--search` - Core operations
+- `--get-config` / `--set-config` - Configuration management  
+- `--path`, `--demo`, `--force` - Common options
+- `--help` - Show all available options
 
+For complete CLI reference, see [CONFIG.md](CONFIG.md).
+
+**Configuration Commands:**
 ```bash
-# Use global config defaults
-codebase
+# View config
+codebase --get-config
+codebase --get-config --json
+codebase --get-config --show-secrets
 
-# Override model via CLI (highest priority)
-codebase --model="custom-model"
+# Set config (saves to file)
+codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase --set-config --global embedderProvider=openai,embedderOpenAiApiKey=sk-xxx
 
-# Use project config with CLI overrides
-codebase --config=./my-config.json --qdrant-url=http://remote:6333
+# Use custom config file
+codebase --config=/path/to/config.json --get-config
+codebase --config=/path/to/config.json --set-config embedderProvider=ollama
+
+# Runtime override (paths, logging, etc.)
+codebase --index --path=/my/project --log-level=info --force
 ```
 
-## 🔧 CLI Options
+For complete configuration reference, see [CONFIG.md](CONFIG.md).
 
-### Global Options
-- `--path=<path>` - Workspace path (default: current directory)
-- `--demo` - Create demo files in workspace
-- `--force` - ignore cache force re-index
-- `--ollama-url=<url>` - Ollama API URL (default: http://localhost:11434)
-- `--qdrant-url=<url>` - Qdrant vector DB URL (default: http://localhost:6333)
-- `--model=<model>` - Embedding model (default: nomic-embed-text)
-- `--config=<path>` - Config file path
-- `--storage=<path>` - Storage directory path
-- `--cache=<path>` - Cache directory path
-- `--log-level=<level>` - Log level: error|warn|info|debug (default: error)
-- `--log-level=<level>` - Log level: error|warn|info|debug (default: error)
-- `--help, -h` - Show help
+## 🔌 MCP Integration
 
-### MCP Server Options
-- `--port=<port>` - HTTP server port (default: 3001)
-- `--host=<host>` - HTTP server host (default: localhost)
+### HTTP Streamable Mode (Recommended)
+```bash
+codebase --serve --port=3001
+```
 
-
-### IDE Integration (Cursor/Claude)
-
-Configure your IDE to connect to the MCP server:
-
+**IDE Config:**
 ```json
 {
   "mcpServers": {
@@ -239,100 +272,45 @@ Configure your IDE to connect to the MCP server:
 }
 ```
 
-For clients that do not support SSE MCP, you can use the following configuration:
+### Stdio Adapter
+```bash
+# First start the MCP server in one terminal
+codebase --serve --port=3001
 
+# Then connect via stdio adapter in another terminal (for IDEs that require stdio)
+codebase --stdio-adapter --server-url=http://localhost:3001/mcp
+```
+
+**IDE Config:**
 ```json
 {
   "mcpServers": {
     "codebase": {
       "command": "codebase",
-      "args": [
-        "stdio-adapter",
-        "--server-url=http://localhost:3001/mcp"
-      ]
+      "args": ["stdio-adapter", "--server-url=http://localhost:3001/mcp"]
     }
   }
 }
 ```
-## 🌐 MCP Server Features
 
-### Web Interface
-- **Home Page**: `http://localhost:3001` - Server status and configuration
-- **Health Check**: `http://localhost:3001/health` - JSON status endpoint
-- **MCP Endpoint**: `http://localhost:3001/mcp` - StreamableHTTP MCP protocol endpoint
+## 🤝 Contributing
 
-### Available MCP Tools
-- **`search_codebase`** - Semantic search through your codebase
-  - Parameters: `query` (string), `limit` (number), `filters` (object)
-  - Returns: Formatted search results with file paths, scores, and code blocks
+Contributions are welcome! Please feel free to submit a Pull Request or open an Issue on [GitHub](https://github.com/anrgct/autodev-codebase).
 
+## 📄 License
 
+This project is licensed under the [MIT License](https://opensource.org/licenses/MIT).
 
-### Scripts
-```bash
-# Development mode with demo files
-npm run dev
+## 🙏 Acknowledgments
 
-# Build for production
-npm run build
+This project is a fork and derivative work based on [Roo Code](https://github.com/RooCodeInc/Roo-Code). We've built upon their excellent foundation to create this specialized codebase analysis tool with enhanced features and MCP server capabilities.
 
-# Type checking
-npm run type-check
+---
 
-# Run TUI demo
-npm run demo-tui
+<div align="center">
 
-# Start MCP server demo
-npm run mcp-server
-```
+**🌟 If you find this tool helpful, please give us a [star on GitHub](https://github.com/anrgct/autodev-codebase)!**
 
-## Embedding Models PK
+Made with ❤️ for the developer community
 
-**Mainstream Embedding Models Performance**
-
-| Model                                            | Dimension | Avg Precision@3 | Avg Precision@5 | Good Queries (≥66.7%) | Failed Queries (0%) |
-| ------------------------------------------------ | --------- | --------------- | --------------- | --------------------- | ------------------- |
-| siliconflow/Qwen/Qwen3-Embedding-8B              | 4096      | **76.7%**       | 66.0%           | 5/10                  | 0/10                |
-| siliconflow/Qwen/Qwen3-Embedding-4B              | 2560      | **73.3%**       | 54.0%           | 5/10                  | 1/10                |
-| voyage/voyage-code-3                             | 1024      | **73.3%**       | 52.0%           | 6/10                  | 1/10                |
-| jina/jina-code-embeddings-1.5b                   | 1536      | **66.7%**       | 52.0%           | 4/10                  | 0/10                |
-| jina/jina-code-embeddings-0.5b                   | 896       | **63.3%**       | 50.0%           | 2/10                  | 0/10                |
-| siliconflow/Qwen/Qwen3-Embedding-0.6B            | 1024      | **63.3%**       | 42.0%           | 4/10                  | 1/10                |
-| morph-embedding-v2                               | 1536      | **56.7%**       | 44.0%           | 3/10                  | 1/10                |
-| openai/text-embedding-ada-002                    | 1536      | **53.3%**       | 38.0%           | 2/10                  | 1/10                |
-| voyage/voyage-3-large                            | 1024      | **53.3%**       | 42.0%           | 3/10                  | 2/10                |
-| openai/text-embedding-3-large                    | 3072      | **46.7%**       | 38.0%           | 1/10                  | 3/10                |
-| voyage/voyage-3.5                                | 1024      | **43.3%**       | 38.0%           | 1/10                  | 2/10                |
-| jina-embeddings-v4                               | 2048      | **36.7%**       | 36.0%           | 0/10                  | 4/10                |
-| voyage/voyage-3.5-lite                           | 1024      | **36.7%**       | 28.0%           | 1/10                  | 2/10                |
-| openai/text-embedding-3-small                    | 1536      | **33.3%**       | 28.0%           | 1/10                  | 4/10                |
-| siliconflow/BAAI/bge-large-en-v1.5               | 1024      | **30.0%**       | 28.0%           | 0/10                  | 3/10                |
-| siliconflow/Pro/BAAI/bge-m3                      | 1024      | **26.7%**       | 24.0%           | 0/10                  | 2/10                |
-| ollama/nomic-embed-text                          | 768       | **16.7%**       | 18.0%           | 0/10                  | 6/10                |
-| siliconflow/netease-youdao/bce-embedding-base_v1 | 1024      | **13.3%**       | 16.0%           | 0/10                  | 6/10                |
-
-------
-
-**Ollama-based Embedding Models Performance**
-
-| Model                                                    | Dimension | Precision@3 | Precision@5 | Good Queries (≥66.7%) | Failed Queries (0%) |
-| -------------------------------------------------------- | --------- | ----------- | ----------- | --------------------- | ------------------- |
-| ollama/dengcao/Qwen3-Embedding-4B:Q4_K_M                 | 2560      | 66.7%       | 48.0%       | 4/10                  | 1/10                |
-| ollama/dengcao/Qwen3-Embedding-0.6B:f16                  | 1024      | 63.3%       | 44.0%       | 3/10                  | 0/10                |
-| ollama/dengcao/Qwen3-Embedding-0.6B:Q8_0                 | 1024      | 63.3%       | 44.0%       | 3/10                  | 0/10                |
-| ollama/dengcao/Qwen3-Embedding-4B:Q8_0                   | 2560      | 60.0%       | 48.0%       | 3/10                  | 1/10                |
-| lmstudio/taylor-jones/bge-code-v1-Q8_0-GGUF              | 1536      | 60.0%       | 54.0%       | 4/10                  | 1/10                |
-| ollama/dengcao/Qwen3-Embedding-8B:Q4_K_M                 | 4096      | 56.7%       | 42.0%       | 2/10                  | 2/10                |
-| ollama/hf.co/nomic-ai/nomic-embed-code-GGUF:Q4_K_M       | 3584      | 53.3%       | 44.0%       | 2/10                  | 0/10                |
-| ollama/embeddinggemma:bf16                               | 768       | 26.7%       | 26.0%       | 0/10                  | 3/10                |
-| ollama/bge-m3:f16                                        | 1024      | 26.7%       | 24.0%       | 0/10                  | 2/10                |
-| ollama/hf.co/nomic-ai/nomic-embed-text-v2-moe-GGUF:f16   | 768       | 26.7%       | 20.0%       | 0/10                  | 2/10                |
-| ollama/granite-embedding:278m-fp16                       | 768       | 23.3%       | 18.0%       | 0/10                  | 4/10                |
-| ollama/unclemusclez/jina-embeddings-v2-base-code:f16     | 768       | 23.3%       | 16.0%       | 0/10                  | 5/10                |
-| lmstudio/awhiteside/CodeRankEmbed-Q8_0-GGUF              | 768       | 23.3%       | 16.0%       | 0/10                  | 5/10                |
-| lmstudio/wsxiaoys/jina-embeddings-v2-base-code-Q8_0-GGUF | 768       | 23.3%       | 16.0%       | 0/10                  | 5/10                |
-| ollama/dengcao/Dmeta-embedding-zh:F16                    | 768       | 20.0%       | 20.0%       | 0/10                  | 6/10                |
-| ollama/znbang/bge:small-en-v1.5-q8_0                     | 384       | 16.7%       | 16.0%       | 0/10                  | 6/10                |
-| lmstudio/nomic-ai/nomic-embed-text-v1.5-GGUF@Q4_K_M      | 768       | 16.7%       | 14.0%       | 0/10                  | 6/10                |
-| ollama/nomic-embed-text:f16                              | 768       | 16.7%       | 18.0%       | 0/10                  | 6/10                |
-| ollama/snowflake-arctic-embed2:568m:f16                  | 1024      | 16.7%       | 18.0%       | 0/10                  | 5/10                |
+</div>
