@@ -56,12 +56,23 @@ export class CodebaseHTTPMCPServer {
                 ]).optional()
                 .describe('Maximum number of results to return (default from config, max 50)'),
                 filters: z.object({
-                    pathFilters: z.array(z.string()).optional().describe("Filter by path patterns with limited glob support. " +
-                        "Top-level patterns (array elements) use OR logic. Within each pattern, all substrings must match (AND logic). " +
-                        "Supports: ** (recursive), * (single level), {a,b} (brace expansion), ! (exclusion). " +
-                        "Use ! prefix for exclusion. Compiled to Qdrant substring filters (case-insensitive, not strict glob matching). " +
-                        "Examples: ['src/**/*.ts', 'components/*.tsx', '!**/*.test.ts']. " +
-                        "Unsupported features ([]) are ignored, ? is treated as a regular character."),
+                    pathFilters: z.array(z.string()).optional().describe(
+                        "Filter paths using glob-like patterns.\n\n" +
+
+                        "**Logic:**\n" +
+                        "- Include patterns (no ! prefix): OR logic - matches ANY pattern\n" +
+                        "- Exclude patterns (! prefix): AND logic - applied globally to exclude ALL matches\n" +
+                        "- Within each pattern: case-insensitive substring matching, order-independent, all parts must exist\n\n" +
+
+                        "**Supported:**\n" +
+                        "- ** (recursive), * (single-level), {a,b} (braces), !prefix (exclude)\n\n" +
+
+                        "**Examples:**\n" +
+                        "- ['src/**/*.ts'] → src tree only\n" +
+                        "- ['src/**/*.ts', 'lib/**/*.ts'] → src OR lib\n" +
+                        "- ['**/*.ts', '!**/*.test.ts'] → all .ts excluding tests\n" +
+                        "- ['src/{components,utils}/*.ts'] → specific folders"
+                    ),
                     minScore: z.union([
                         z.coerce.number(),
                         z.string().transform(s => Number(s))

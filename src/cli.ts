@@ -337,21 +337,18 @@ Options:
   --cache <path>                Custom cache path
   --json                        Output results in JSON format
   --path-filters, -f <filters>   Filter search results by path patterns (comma-separated)
-                                Top-level comma-separated patterns use OR logic.
-                                Within each pattern, all substrings must match (AND logic).
-                                Supports limited glob syntax compiled to Qdrant filters:
-                                  -f "src/**/*.ts"                # All .ts files in src
-                                  -f "components/*.tsx"           # All .tsx in components
+                                Logic:
+                                - Include patterns (no ! prefix): OR logic - matches ANY pattern
+                                - Exclude patterns (! prefix): AND logic - applied globally to exclude ALL matches
+                                - Within each pattern: case-insensitive substring matching, order-independent
+                                Supported: ** (recursive), * (single-level), {a,b} (braces), !prefix (exclude)
+                                Examples:
+                                  -f "src/**/*.ts"                # src tree only
+                                  -f "components/*.tsx"           # all .tsx in components
                                   -f "{src,lib}/**/*.js"          # .js files in multiple dirs
-                                  -f "!.md,!.txt"                 # Exclude markdown/text files
-                                  -f "src/**/*.ts,lib/**/*.ts"    # OR logic: either src or lib .ts files
-                                Supported syntax:
-                                  **  Recursive directories (e.g., src/**/*)
-                                  *   Single level wildcard (e.g., src/*)
-                                  {a,b}  Brace expansion for OR (e.g., {src,lib})
-                                  !   Exclusion prefix (e.g., !*.test.ts)
-                                Note: Uses substring matching, case-insensitive.
-                                Unsupported features ([]) are ignored, ? is treated as a regular character.
+                                  -f "!.md,!.txt"                 # exclude markdown/text files
+                                  -f "src/**/*.ts,lib/**/*.ts"    # src OR lib .ts files
+                                  -f "**/*.ts,!**/*.test.ts"      # all .ts excluding tests
   --limit, -l <number>           Maximum number of search results (default: from config, max 50)
                                 Examples: --limit=30, -l 20
   --min-score, -s <number>       Minimum similarity score for search results (0-1, default: from config)
