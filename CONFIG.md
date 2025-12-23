@@ -40,6 +40,7 @@ codebase --get-config --show-secrets
 
 # Set project configuration
 codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
+# Note: also adds `autodev-config.json` to Git global ignore (core.excludesfile) for all repos
 
 # Set global configuration
 codebase --set-config --global qdrantUrl=http://localhost:6333
@@ -81,6 +82,8 @@ codebase --force --index
 - `--force` - Force reindex all files, ignoring cache
 - `--demo` - Create demo files in workspace for testing
 - `--path-filters, -f <filters>` - Filter search results by path patterns
+- `--limit, -l <number>` - Maximum number of search results (overrides config, max 50)
+- `--min-score, -s <number>` - Minimum similarity score for search results 0-1 (overrides config)
 - `--json` - Output search results in JSON format
 
 ### 2. Project Configuration
@@ -225,6 +228,25 @@ docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
   "vectorSearchMaxResults": 15
 }
 ```
+
+### CLI Runtime Override
+
+You can override search parameters at runtime using CLI arguments:
+
+```bash
+# Override max results (limited to maximum of 50)
+codebase --search="authentication" --limit=20
+codebase --search="API" -l 30
+
+# Override minimum score (0.0-1.0)
+codebase --search="user auth" --min-score=0.7
+codebase --search="database" -s 0.5
+
+# Combine both
+codebase --search="error handling" --limit=10 --min-score=0.8
+```
+
+**Note:** CLI arguments `--limit` and `--min-score` provide temporary override for individual searches. For persistent settings, use `vectorSearchMaxResults` and `vectorSearchMinScore` in configuration files.
 
 **Score Interpretation:**
 - `0.9-1.0`: Very similar (exact or near-exact match)
