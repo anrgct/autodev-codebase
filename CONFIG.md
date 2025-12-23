@@ -35,9 +35,6 @@ codebase --get-config embedderProvider qdrantUrl
 # JSON output for scripting
 codebase --get-config --json
 
-# Show sensitive values (API keys)
-codebase --get-config --show-secrets
-
 # Set project configuration
 codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
 # Note: also adds `autodev-config.json` to Git global ignore (core.excludesfile) for all repos

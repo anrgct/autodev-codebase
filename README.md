@@ -244,7 +244,6 @@ For complete CLI reference, see [CONFIG.md](CONFIG.md).
 # View config
 codebase --get-config
 codebase --get-config --json
-codebase --get-config --show-secrets
 
 # Set config (saves to file)
 codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text

@@ -294,7 +294,6 @@ const { values, positionals } = parseArgs({
     'get-config': { type: 'boolean' },
     'set-config': { type: 'string' },
     global: { type: 'boolean' },
-    'show-secrets': { type: 'boolean' },
   },
   allowPositionals: true
 });
@@ -389,10 +388,6 @@ Examples:
   # View in JSON format
   codebase --get-config --json
   codebase --get-config embedderProvider --json
-
-  # Show sensitive information (API keys, tokens)
-  codebase --get-config --show-secrets
-  codebase --get-config embedderOpenAiApiKey --show-secrets
 
   # Set project config
   codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
@@ -891,9 +886,8 @@ function isSensitiveConfigKey(key: string): boolean {
   return sensitiveKeys.some(sensitive => key.toLowerCase().includes(sensitive.toLowerCase()));
 }
 
-function formatConfigValueForDisplay(key: string, value: any, showSecrets: boolean): string {
-  if (showSecrets || !isSensitiveConfigKey(key)) return formatValue(value);
-  return formatValue(sanitizeConfig({ [key]: value })[key]);
+function formatConfigValueForDisplay(key: string, value: any): string {
+  return formatValue(value);
 }
 
 /**
@@ -905,42 +899,38 @@ function printAllConfigLayers(
   projectConfig: Record<string, any> | null,
   effectiveConfig: Record<string, any>,
   globalConfigPath: string,
-  projectConfigPath: string,
-  showSecrets: boolean = false
+  projectConfigPath: string
 ): void {
-  console.log('\n=== Configuration Layers ===\n');
+  console.log('\n=== Configuration Layers (Highest Priority First) ===\n');
 
-  // 1. Default values
-  console.log('【1. Default Values】');
-  console.log(JSON.stringify(defaultConfig, null, 2));
+  // 1. Effective configuration (highest priority)
+  console.log('【1. Effective Configuration】(Final values after merging all layers)');
+  console.log(JSON.stringify(effectiveConfig, null, 2));
   console.log();
 
-  // 2. Global configuration
-  console.log('【2. Global Configuration】');
-  if (globalConfig) {
-    console.log(`File path: ${globalConfigPath}`);
-    const displayConfig = showSecrets ? globalConfig : sanitizeConfig(globalConfig);
-    console.log(JSON.stringify(displayConfig, null, 2));
-  } else {
-    console.log('(Not configured)');
-  }
-  console.log();
-
-  // 3. Project configuration
-  console.log('【3. Project Configuration】');
+  // 2. Project configuration
+  console.log('【2. Project Configuration】(Overrides global and default values)');
   if (projectConfig) {
     console.log(`File path: ${projectConfigPath}`);
-    const displayConfig = showSecrets ? projectConfig : sanitizeConfig(projectConfig);
-    console.log(JSON.stringify(displayConfig, null, 2));
+    console.log(JSON.stringify(projectConfig, null, 2));
   } else {
     console.log('(Not configured)');
   }
   console.log();
 
-  // 4. Effective configuration
-  console.log('【4. Effective Configuration】');
-  const displayEffective = showSecrets ? effectiveConfig : sanitizeConfig(effectiveConfig);
-  console.log(JSON.stringify(displayEffective, null, 2));
+  // 3. Global configuration
+  console.log('【3. Global Configuration】(Overrides default values)');
+  if (globalConfig) {
+    console.log(`File path: ${globalConfigPath}`);
+    console.log(JSON.stringify(globalConfig, null, 2));
+  } else {
+    console.log('(Not configured)');
+  }
+  console.log();
+
+  // 4. Default values (lowest priority)
+  console.log('【4. Default Values】(Built-in fallback values)');
+  console.log(JSON.stringify(defaultConfig, null, 2));
 }
 
 /**
@@ -951,8 +941,7 @@ function printConfigItemLayers(
   defaultConfig: Record<string, any>,
   globalConfig: Record<string, any> | null,
   projectConfig: Record<string, any> | null,
-  effectiveConfig: Record<string, any>,
-  showSecrets: boolean = false
+  effectiveConfig: Record<string, any>
 ): void {
   for (const key of keys) {
     console.log(`\n=== ${key} ===`);
@@ -962,18 +951,17 @@ function printConfigItemLayers(
     const projectValue = projectConfig?.[key];
     const effectiveValue = effectiveConfig[key];
 
-    console.log(`Default: ${formatConfigValueForDisplay(key, defaultValue, showSecrets)}`);
-    console.log(`Global: ${globalValue !== undefined ? formatConfigValueForDisplay(key, globalValue, showSecrets) : '(Not set)'}`);
-    console.log(`Project: ${projectValue !== undefined ? formatConfigValueForDisplay(key, projectValue, showSecrets) : '(Not set)'}`);
-    console.log(`Effective: ${formatConfigValueForDisplay(key, effectiveValue, showSecrets)}`);
+    console.log(`Default: ${formatConfigValueForDisplay(key, defaultValue)}`);
+    console.log(`Global: ${globalValue !== undefined ? formatConfigValueForDisplay(key, globalValue) : '(Not set)'}`);
+    console.log(`Project: ${projectValue !== undefined ? formatConfigValueForDisplay(key, projectValue) : '(Not set)'}`);
+    console.log(`Effective: ${formatConfigValueForDisplay(key, effectiveValue)}`);
   }
 }
 
 /**
  * Handle --get-config command
  */
-async function getConfigHandler(positionals: string[], json?: boolean, showSecrets?: boolean): Promise<void> {
-  const shouldShowSecrets = Boolean(showSecrets);
+async function getConfigHandler(positionals: string[], json?: boolean): Promise<void> {
   // 1. Determine configuration paths (supports --path and --config)
   const options = resolveOptions();
   const projectConfigPath = options.config || path.join(options.path, 'autodev-config.json');
@@ -1019,10 +1007,6 @@ async function getConfigHandler(positionals: string[], json?: boolean, showSecre
   if (json) {
     // JSON format output
     if (positionals.length === 0) {
-      const displayGlobal = shouldShowSecrets ? globalConfig : sanitizeConfig(globalConfig || {});
-      const displayProject = shouldShowSecrets ? projectConfig : sanitizeConfig(projectConfig || {});
-      const displayEffective = shouldShowSecrets ? effectiveConfig : sanitizeConfig(effectiveConfig);
-
       console.log(JSON.stringify({
         paths: {
           default: '(Built-in)',
@@ -1030,9 +1014,9 @@ async function getConfigHandler(positionals: string[], json?: boolean, showSecre
           project: projectConfigPath
         },
         default: defaultConfig,
-        global: displayGlobal,
-        project: displayProject,
-        effective: displayEffective
+        global: globalConfig || {},
+        project: projectConfig || {},
+        effective: effectiveConfig
       }, null, 2));
     } else {
       // JSON output for specific configuration items
@@ -1042,22 +1026,11 @@ async function getConfigHandler(positionals: string[], json?: boolean, showSecre
         const projectValue = projectConfig?.[key as keyof CodeIndexConfig] ?? null;
         const effectiveValue = effectiveConfig[key as keyof CodeIndexConfig];
 
-        // Check if this is a sensitive key
-        const isSensitive = ['key', 'token', 'password', 'secret', 'apiKey'].some(sensitive =>
-          key.toLowerCase().includes(sensitive.toLowerCase())
-        );
-
         result[key] = {
           default: defaultConfig[key as keyof CodeIndexConfig],
-          global: isSensitive && !shouldShowSecrets ?
-            (globalValue ? sanitizeConfig({ [key]: globalValue })[key] : null) :
-            globalValue,
-          project: isSensitive && !shouldShowSecrets ?
-            (projectValue ? sanitizeConfig({ [key]: projectValue })[key] : null) :
-            projectValue,
-          effective: isSensitive && !shouldShowSecrets ?
-            sanitizeConfig({ [key]: effectiveValue })[key] :
-            effectiveValue
+          global: globalValue,
+          project: projectValue,
+          effective: effectiveValue
         };
       }
       console.log(JSON.stringify(result, null, 2));
@@ -1065,15 +1038,14 @@ async function getConfigHandler(positionals: string[], json?: boolean, showSecre
   } else {
     // Human-readable format
     if (positionals.length === 0) {
-      printAllConfigLayers(defaultConfig, globalConfig, projectConfig, effectiveConfig, globalConfigPath, projectConfigPath, shouldShowSecrets);
+      printAllConfigLayers(defaultConfig, globalConfig, projectConfig, effectiveConfig, globalConfigPath, projectConfigPath);
     } else {
       printConfigItemLayers(
         positionals,
         defaultConfig,
         globalConfig,
         projectConfig,
-        effectiveConfig,
-        shouldShowSecrets
+        effectiveConfig
       );
     }
   }
@@ -1295,7 +1267,7 @@ async function main(): Promise<void> {
     // Handle configuration management commands
     if (values['get-config']) {
       // --global parameter is ignored for --get-config
-      await getConfigHandler(positionals, values.json, values['show-secrets']);
+      await getConfigHandler(positionals, values.json);
       process.exit(0);
     }
     if (values['set-config']) {

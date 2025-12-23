@@ -251,7 +251,6 @@ codebase --stdio-adapter --server-url=http://localhost:3001/mcp
 # View configuration
 codebase --get-config
 codebase --get-config --json
-codebase --get-config --show-secrets
 
 # Set configuration
 codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
