@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as jsoncParser from 'jsonc-parser';
 import { saveJsoncPreservingComments } from './utils/jsonc-helpers';
+import { ensureGitGlobalIgnorePatterns } from './utils/git-global-ignore';
 import { createNodeDependencies } from './adapters/nodejs';
 import { CodeIndexManager } from './code-index/manager';
 import { CodebaseHTTPMCPServer } from './mcp/http-server.js';
@@ -189,7 +190,7 @@ function formatSearchResultsAsJson(results: SearchResult[], query: string): stri
 
       const other = results[j];
       const otherFilePath = other.payload?.filePath;
-      
+
       // 只有在同文件内才检查包含关系
       if (otherFilePath !== currentFilePath) continue;
 
@@ -312,13 +313,13 @@ Usage:
   codebase --search="query"      Search the index
   codebase --clear               Clear index data
   codebase --get-config [items...] View all config layers (default → global → project → effective)
-  codebase --set-config k=v,...  Set project configuration
+  codebase --set-config k=v,...  Set project configuration (also updates Git global ignore)
   codebase --help                Show this help
 
 Configuration Management:
   --get-config [items...]        View all config layers (default → global → project → effective)
   --get-config --json            Output in JSON format (script-friendly)
-  --set-config k=v,...           Set project configuration
+  --set-config k=v,...           Set project configuration (also updates Git global ignore)
   --set-config --global          Set global configuration
   --global                       Set global configuration (only used with --set-config)
 
@@ -711,18 +712,18 @@ function parsePathFilters(filtersString: string): string[] {
     filter.pathFilters = filters;
     getLogger().info(`Path filters: ${filters.join(', ')}`);
   }
-  
+
   // 只有用户显式传入才设置，否则让 service/config 决定
   if (options.limit !== undefined) {
     filter.limit = validateLimit(options.limit);
     getLogger().info(`Limit: ${filter.limit}`);
   }
-  
+
   if (options['min-score'] !== undefined) {
     filter.minScore = validateMinScore(options['min-score']);
     getLogger().info(`Min score: ${filter.minScore}`);
   }
-  
+
   // Debug: Log parsed options
   getLogger().info(`Debug: pathFilters value = "${options.pathFilters}"`);
   getLogger().info(`Debug: limit value = "${options.limit}"`);
@@ -1252,18 +1253,28 @@ async function setConfigHandler(configString: string, global?: boolean): Promise
   // 8. Save configuration (preserving JSONC comments)
   try {
     // Read original content to preserve formatting and comments
-    const originalContent = fs.existsSync(configPath) 
-      ? fs.readFileSync(configPath, 'utf-8') 
+    const originalContent = fs.existsSync(configPath)
+      ? fs.readFileSync(configPath, 'utf-8')
       : '';
-    
+
     // Use helper to save while preserving comments
     const content = saveJsoncPreservingComments(originalContent, mergedConfig);
-    
+
     fs.writeFileSync(configPath, content);
     console.log(`Configuration saved to: ${configPath}`);
     console.log('Updated configuration items:');
     for (const [key, value] of Object.entries(newConfig)) {
       console.log(`  ${key}: ${value}`);
+    }
+
+    // Best-effort: protect config files across all repos by adding to Git global excludes file.
+    try {
+      const ignoreResult = await ensureGitGlobalIgnorePatterns(['autodev-config.json']);
+      if (ignoreResult.didUpdate && ignoreResult.excludesFilePath) {
+        console.log(`Added 'autodev-config.json' to git global ignore: ${ignoreResult.excludesFilePath}`);
+      }
+    } catch {
+      // Intentionally best-effort; configuration write already succeeded.
     }
   } catch (error) {
     console.error(`Failed to save configuration: ${error}`);

@@ -72,7 +72,7 @@ export class NodeFileSystem implements IFileSystem {
     try {
       const stats = await fs.stat(uri)
       if (stats.isDirectory()) {
-        await fs.rmdir(uri, { recursive: true })
+        await fs.rm(uri, { recursive: true, force: true })
       } else {
         await fs.unlink(uri)
       }

@@ -33,7 +33,7 @@ describe('Node.js Adapters Integration', () => {
 
   afterAll(async () => {
     // Clean up temporary directory
-    await fs.rmdir(tempDir, { recursive: true })
+    await fs.rm(tempDir, { recursive: true, force: true })
   })
 
   describe('NodeFileSystem', () => {
