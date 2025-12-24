@@ -44,15 +44,12 @@ async function parseFile(filePath: string): Promise<void> {
 }
 
 /**
- * 调试捕获详情的函数
+ * 输出 JSON 格式的捕获详情
  */
-async function debugCaptures(filePath: string): Promise<void> {
-	console.log(`\n调试捕获信息: ${filePath}`)
-	
+async function outputCapturesAsJson(filePath: string): Promise<void> {
 	try {
-		// 模拟解析过程来获取捕获信息
-		const fileContentArray = await fs.readFile(filePath, 'utf-8')
-		const fileContent = fileContentArray
+		// 读取文件内容
+		const fileContent = await fs.readFile(filePath, 'utf-8')
 		const ext = path.extname(filePath).toLowerCase().slice(1)
 		
 		// 动态导入相关模块
@@ -61,7 +58,11 @@ async function debugCaptures(filePath: string): Promise<void> {
 		
 		const { parser, query } = languageParsers[ext] || {}
 		if (!parser || !query) {
-			console.log(`无法加载 ${ext} 解析器`)
+			console.log(JSON.stringify({
+				error: `无法加载 ${ext} 解析器`,
+				filePath,
+				extension: ext
+			}, null, 2))
 			return
 		}
 		
@@ -70,33 +71,53 @@ async function debugCaptures(filePath: string): Promise<void> {
 		const captures = query.captures(tree.rootNode)
 		const lines = fileContent.split('\n')
 		
-		console.log(`\n找到 ${captures.length} 个捕获:`)
-		console.log('-'.repeat(80))
-		
-		// 显示前20个捕获的详细信息
-		captures.slice(0, 20).forEach((capture, index) => {
+		// 构建捕获数据的 JSON 结构
+		const capturesData = captures.map((capture) => {
 			const { node, name } = capture
 			const startLine = node.startPosition.row
 			const endLine = node.endPosition.row
-			const lineCount = endLine - startLine + 1
 			
-			console.log(`${index + 1}. ${name}:`)
-			console.log(`   行范围: ${startLine + 1}-${endLine + 1} (${lineCount} 行)`)
-			console.log(`   内容: ${lines[startLine].trim().substring(0, 60)}...`)
-			console.log(`   节点类型: ${node.type}`)
-			if (node.parent) {
-				console.log(`   父节点类型: ${node.parent.type}`)
-				console.log(`   父节点范围: ${node.parent.startPosition.row + 1}-${node.parent.endPosition.row + 1}`)
+			return {
+				captureName: name,
+				nodeType: node.type,
+				startPosition: {
+					row: startLine,
+					column: node.startPosition.column
+				},
+				endPosition: {
+					row: endLine,
+					column: node.endPosition.column
+				},
+				text: node.text,
+				lineRange: `${startLine + 1}-${endLine + 1}`,
+				lineContent: lines[startLine]?.trim() || '',
+				parentNode: node.parent ? {
+					type: node.parent.type,
+					startPosition: {
+						row: node.parent.startPosition.row,
+						column: node.parent.startPosition.column
+					},
+					endPosition: {
+						row: node.parent.endPosition.row,
+						column: node.parent.endPosition.column
+					}
+				} : null
 			}
-			console.log('')
 		})
 		
-		if (captures.length > 20) {
-			console.log(`... 还有 ${captures.length - 20} 个捕获`)
-		}
+		// 输出完整的 JSON
+		console.log(JSON.stringify({
+			filePath,
+			extension: ext,
+			totalCaptures: captures.length,
+			captures: capturesData
+		}, null, 2))
 		
 	} catch (error) {
-		console.error(`调试时发生错误: ${error}`)
+		console.error(JSON.stringify({
+			error: `处理文件时发生错误: ${error}`,
+			filePath
+		}, null, 2))
 	}
 }
 
@@ -131,9 +152,14 @@ function showUsage(): void {
 	console.log('  或者')
 	console.log('  直接运行，使用默认文件: demo/model.py')
 	console.log('')
+	console.log('选项:')
+	console.log('  --json    输出原始 JSON 格式的捕获数据')
+	console.log('  --help, -h  显示此帮助信息')
+	console.log('')
 	console.log('示例:')
 	console.log('  npm run test-tree-sitter src/index.ts')
-	console.log('  TEST_FILE_PATH=src/utils.ts npm run test-tree-sitter')
+	console.log('  npm run test-tree-sitter src/index.ts --json')
+	console.log('  TEST_FILE_PATH=src/utils.ts npm run test-tree-sitter --json')
 }
 
 // 主函数
@@ -160,9 +186,10 @@ async function main(): Promise<void> {
 	
 	await parseFile(filePath)
 	
-	// 运行调试（可选）
-	if (process.argv.includes('--debug')) {
-		await debugCaptures(filePath)
+	// 运行 JSON 输出（可选）
+	if (process.argv.includes('--json')) {
+		console.log('\n')  // 添加空行分隔
+		await outputCapturesAsJson(filePath)
 	}
 }
 

@@ -10,3 +10,9 @@ npx tsx src/examples/run-demo.ts
 
 npx @modelcontextprotocol/inspector --cli npx tsx src/cli.ts --stdio-adapter --method tools/call --tool-name search_codebase --tool-arg query=greet
 npx @modelcontextprotocol/inspector --cli http://localhost:3001/mcp --method tools/call --tool-name search_codebase --tool-arg query=greet
+git push origin --tags
+git tag 0.0.6
+git tag -d 0.0.1
+npm pack
+npm adduser --registry https://registry.npmjs.org/
+npm publish --access public --registry https://registry.npmjs.org/

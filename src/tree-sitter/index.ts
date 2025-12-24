@@ -291,6 +291,9 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 	// Sort captures by their start position
 	captures.sort((a, b) => a.node.startPosition.row - b.node.startPosition.row)
 
+	// Calculate padding width based on file size (minimum 4 digits)
+	const width = Math.max(4, String(lines.length).length)
+
 	// Track already processed lines to avoid duplicates
 	const processedLines = new Set<string>()
 
@@ -374,12 +377,13 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 			// For docstrings, only show the docstring itself
 			const docstringEndLine = node.endPosition.row
 			const docstringLineCount = docstringEndLine - startLine + 1
-			
+
 			// Only include if the docstring spans at least the minimum lines
 			if (docstringLineCount >= getMinComponentLines()) {
 				const docstringKey = `${startLine}-${docstringEndLine}`
 				if (!processedLines.has(docstringKey)) {
-					formattedOutput += `${startLine + 1}--${docstringEndLine + 1} | ${lines[startLine]}\n`
+					const range = `${startLine + 1}--${docstringEndLine + 1}`.padStart(width * 2 + 2, " ")
+					formattedOutput += `${range} | ${lines[startLine]}\n`
 					processedLines.add(docstringKey)
 				}
 			}
@@ -387,7 +391,8 @@ function processCaptures(captures: any[], lines: string[], language: string): st
 		}
 
 		// For other component definitions (classes, functions, etc.)
-		formattedOutput += `${displayStartLine + 1}--${endLine + 1} | ${lines[displayStartLine]}\n`
+		const range = `${displayStartLine + 1}--${endLine + 1}`.padStart(width * 2 + 2, " ")
+		formattedOutput += `${range} | ${lines[displayStartLine]}\n`
 		processedLines.add(lineKey)
 	})
 
