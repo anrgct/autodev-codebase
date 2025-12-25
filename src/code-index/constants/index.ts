@@ -25,6 +25,9 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
 	summarizerProvider: 'ollama',
 	summarizerOllamaBaseUrl: 'http://localhost:11434',
 	summarizerOllamaModelId: 'qwen3-vl:4b-instruct',
+	summarizerOpenAiCompatibleBaseUrl: 'http://localhost:8080/v1',
+	summarizerOpenAiCompatibleModelId: 'gpt-4',
+	summarizerOpenAiCompatibleApiKey: '',
 	summarizerLanguage: 'English'
 }
 

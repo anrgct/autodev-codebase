@@ -8,6 +8,7 @@ import { OpenRouterEmbedder } from "./embedders/openrouter"
 import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { OllamaSummarizer } from "./summarizers/ollama"
+import { OpenAICompatibleSummarizer } from "./summarizers/openai-compatible"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
 import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
@@ -341,10 +342,14 @@ export class CodeIndexServiceFactory {
 			)
 		}
 
-		// Future: openai-compatible provider
-		// if (config.provider === 'openai-compatible') {
-		//   return new OpenAICompatibleSummarizer(...)
-		// }
+		if (config.provider === 'openai-compatible') {
+			return new OpenAICompatibleSummarizer(
+				config.openAiCompatibleBaseUrl || 'http://localhost:8080/v1',
+				config.openAiCompatibleModelId || 'gpt-4',
+				config.openAiCompatibleApiKey || '',
+				config.language || 'English'
+			)
+		}
 
 		// Fallback to ollama if provider unknown
 		return new OllamaSummarizer(

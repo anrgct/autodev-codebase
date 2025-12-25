@@ -49,6 +49,9 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
 	'summarizerProvider',                 // Summarizer provider
 	'summarizerOllamaBaseUrl',            // Summarizer Ollama URL
 	'summarizerOllamaModelId',            // Summarizer Ollama model
+	'summarizerOpenAiCompatibleBaseUrl',  // Summarizer OpenAI Compatible URL
+	'summarizerOpenAiCompatibleModelId',  // Summarizer OpenAI Compatible model
+	'summarizerOpenAiCompatibleApiKey',   // Summarizer OpenAI Compatible API key
 	'summarizerLanguage',                 // Summarizer language
 	'embedderOllamaBatchSize',            // Batch sizes can be hot-reloaded
 	'embedderOpenAiBatchSize',
@@ -214,6 +217,9 @@ export class CodeIndexConfigManager {
 			summarizerProvider: config.summarizerProvider,
 			summarizerOllamaBaseUrl: config.summarizerOllamaBaseUrl,
 			summarizerOllamaModelId: config.summarizerOllamaModelId,
+			summarizerOpenAiCompatibleBaseUrl: config.summarizerOpenAiCompatibleBaseUrl,
+			summarizerOpenAiCompatibleModelId: config.summarizerOpenAiCompatibleModelId,
+			summarizerOpenAiCompatibleApiKey: config.summarizerOpenAiCompatibleApiKey,
 			summarizerLanguage: config.summarizerLanguage,
 		}
 	}
@@ -476,6 +482,9 @@ export class CodeIndexConfigManager {
 			provider: provider,
 			ollamaBaseUrl: this.config?.summarizerOllamaBaseUrl || 'http://localhost:11434',
 			ollamaModelId: this.config?.summarizerOllamaModelId || 'qwen3-vl:4b-instruct',
+			openAiCompatibleBaseUrl: this.config?.summarizerOpenAiCompatibleBaseUrl || 'http://localhost:8080/v1',
+			openAiCompatibleModelId: this.config?.summarizerOpenAiCompatibleModelId || 'gpt-4',
+			openAiCompatibleApiKey: this.config?.summarizerOpenAiCompatibleApiKey || '',
 			language: this.config?.summarizerLanguage || 'English'
 		};
 	}

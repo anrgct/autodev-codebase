@@ -69,9 +69,9 @@ export interface SummarizerInfo {
  */
 export interface SummarizerConfig {
 	/**
-	 * Provider type (v1 only supports 'ollama')
+	 * Provider type ('ollama' or 'openai-compatible')
 	 */
-	provider: 'ollama'
+	provider: 'ollama' | 'openai-compatible'
 
 	/**
 	 * Ollama base URL (for ollama provider)
@@ -82,6 +82,21 @@ export interface SummarizerConfig {
 	 * Ollama model ID (for ollama provider)
 	 */
 	ollamaModelId?: string
+
+	/**
+	 * OpenAI-compatible base URL (for openai-compatible provider)
+	 */
+	openAiCompatibleBaseUrl?: string
+
+	/**
+	 * OpenAI-compatible model ID (for openai-compatible provider)
+	 */
+	openAiCompatibleModelId?: string
+
+	/**
+	 * OpenAI-compatible API key (for openai-compatible provider)
+	 */
+	openAiCompatibleApiKey?: string
 
 	/**
 	 * Language for summaries

@@ -258,11 +258,11 @@ export class ConfigValidator {
 		}
 
 		// Validate provider is supported
-		if (config.summarizerProvider !== 'ollama') {
+		if (config.summarizerProvider !== 'ollama' && config.summarizerProvider !== 'openai-compatible') {
 			issues.push({
 				path: 'summarizerProvider',
 				code: 'invalid_value',
-				message: `Unsupported summarizer provider: ${config.summarizerProvider}. Only 'ollama' is supported in v1.`
+				message: `Unsupported summarizer provider: ${config.summarizerProvider}. Supported: 'ollama', 'openai-compatible'.`
 			})
 			return
 		}
@@ -284,6 +284,27 @@ export class ConfigValidator {
 					message: 'Ollama model ID is required for summarizer when provider is ollama'
 				})
 			}
+		}
+
+		// For openai-compatible provider, validate required fields
+		if (config.summarizerProvider === 'openai-compatible') {
+			if (!config.summarizerOpenAiCompatibleBaseUrl) {
+				issues.push({
+					path: 'summarizerOpenAiCompatibleBaseUrl',
+					code: 'required',
+					message: 'OpenAI-compatible base URL is required for summarizer when provider is openai-compatible'
+				})
+			}
+
+			if (!config.summarizerOpenAiCompatibleModelId) {
+				issues.push({
+					path: 'summarizerOpenAiCompatibleModelId',
+					code: 'required',
+					message: 'OpenAI-compatible model ID is required for summarizer when provider is openai-compatible'
+				})
+			}
+
+			// Note: API key is optional for local servers (e.g., LM Studio)
 		}
 
 		// Validate language if specified
