@@ -117,7 +117,7 @@ codebase --search="error handling" --path-filters="src/**/*.ts"
 
 # Search with custom limit and minimum score
 codebase --search="authentication" --limit=20 --min-score=0.7
-codebase --search="API" -l 30 -s 0.5
+codebase --search="API" -l 30 -S 0.5
 
 # Search in JSON format
 codebase --search="authentication" --json
@@ -234,7 +234,7 @@ codebase --search="auth" --json
 - `--get-config` / `--set-config` - Configuration management  
 - `--path`, `--demo`, `--force` - Common options
 - `--limit` / `-l <number>` - Maximum number of search results (default: from config, max 50)
-- `--min-score` / `-s <number>` - Minimum similarity score for search results (0-1, default: from config)
+- `--min-score` / `-S <number>` - Minimum similarity score for search results (0-1, default: from config)
 - `--help` - Show all available options
 
 For complete CLI reference, see [CONFIG.md](CONFIG.md).

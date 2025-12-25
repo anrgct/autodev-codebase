@@ -254,6 +254,7 @@ interface SimpleCliOptions {
   pathFilters?: string;
   limit?: string;
   'min-score'?: string;
+  outline?: string;
 }
 
 // Parse command line arguments using Node.js native parseArgs
@@ -263,9 +264,10 @@ const { values, positionals } = parseArgs({
     serve: { type: 'boolean', short: 's' },
     'stdio-adapter': { type: 'boolean' },
     index: { type: 'boolean', short: 'i' },
-    search: { type: 'string' },
+    search: { type: 'string', short: 'q' },
     watch: { type: 'boolean', short: 'w' },
     clear: { type: 'boolean' },
+    outline: { type: 'string' },
     // Path and config options
     path: { type: 'string', short: 'p', default: '.' },
     config: { type: 'string', short: 'c' },
@@ -273,7 +275,7 @@ const { values, positionals } = parseArgs({
     'path-filters': { type: 'string', short: 'f' },
     // 添加limit和min-score参数
     limit: { type: 'string', short: 'l' },
-    'min-score': { type: 'string', short: 's' },
+    'min-score': { type: 'string', short: 'S' },
     // MCP server options
     port: { type: 'string', default: '3001' },
     host: { type: 'string', default: 'localhost' },
@@ -309,7 +311,8 @@ Usage:
   codebase --serve               Start MCP HTTP MCP server
   codebase --stdio-adapter       Start stdio adapter (bridge stdio <-> HTTP MCP server)
   codebase --index               Index the codebase
-  codebase --search="query"      Search the index
+  codebase --search="query"      Search the index (short: -q)
+  codebase --outline <file>      Extract code outline from a file
   codebase --clear               Clear index data
   codebase --get-config [items...] View all config layers (default → global → project → effective)
   codebase --set-config k=v,...  Set project configuration (also updates Git global ignore)
@@ -351,9 +354,13 @@ Options:
                                   -f "**/*.ts,!**/*.test.ts"      # all .ts excluding tests
   --limit, -l <number>           Maximum number of search results (default: from config, max 50)
                                 Examples: --limit=30, -l 20
-  --min-score, -s <number>       Minimum similarity score for search results (0-1, default: from config)
-                                Examples: --min-score=0.7, -s 0.5
+  --min-score, -S <number>       Minimum similarity score for search results (0-1, default: from config)
+                                Examples: --min-score=0.7, -S 0.5
                                 0 means accept all results, 1 means exact match only
+  --outline <file>              Extract code outline from a file using tree-sitter parsing
+                                Shows code structure with line ranges: L<start>--L<end>
+                                Add --json for detailed JSON output with metadata
+                                Examples: --outline src/index.ts, --outline lib/utils.py --json
 
 
 Examples:
@@ -371,6 +378,10 @@ Examples:
 
   # Search for code in JSON format
   codebase --search="user authentication" --json
+
+  # Extract code outline from a file
+  codebase --outline src/index.ts
+  codebase --outline lib/utils.py --json
 
   # Clear index
   codebase --clear --path=/my/project
@@ -434,6 +445,7 @@ function resolveOptions(): SimpleCliOptions {
     pathFilters: values['path-filters'],
     limit: values.limit,
     'min-score': values['min-score'],
+    outline: values.outline,
   };
 }
 
@@ -1252,6 +1264,39 @@ async function setConfigHandler(configString: string, global?: boolean): Promise
 }
 
 /**
+ * Handle --outline command
+ */
+async function handleOutlineCommand(filePath: string, options: SimpleCliOptions): Promise<void> {
+  // Create dependencies
+  const deps = createDependencies(options);
+
+  // Import extractOutline
+  const { extractOutline } = await import('./cli-tools/outline');
+
+  const workspacePath = options.path;
+
+  try {
+    const result = await extractOutline({
+      filePath,
+      workspacePath,
+      json: options.json,
+      fileSystem: deps.fileSystem,
+      workspace: deps.workspace,
+      pathUtils: deps.pathUtils,
+      logger: deps.logger
+    });
+
+    console.log(result);
+  } catch (error) {
+    if (error instanceof Error) {
+      deps.logger?.error(error.message);
+      process.exit(1);
+    }
+    throw error;
+  }
+}
+
+/**
  * Main entry point
  */
 async function main(): Promise<void> {
@@ -1277,6 +1322,21 @@ async function main(): Promise<void> {
     // Initialize global logger with the specified log level
     initGlobalLogger(options.logLevel);
 
+    // Mutual exclusion check: only one command can be used at a time
+    const commandFlags = [
+      values.serve,
+      values['stdio-adapter'],
+      values.index,
+      !!values.search,
+      !!values.outline,
+      values.clear,
+    ].filter(Boolean);
+
+    if (commandFlags.length > 1) {
+      console.error('Error: Only one command can be used at a time (serve|stdio-adapter|index|search|outline|clear).');
+      process.exit(1);
+    }
+
     if (values.serve) {
       await startMCPServer(options);
     } else if (values['stdio-adapter']) {
@@ -1285,6 +1345,8 @@ async function main(): Promise<void> {
       await indexCodebase(options);
     } else if (values.search) {
       await searchIndex(values.search, options);
+    } else if (values.outline) {
+      await handleOutlineCommand(values.outline, options);
     } else if (values.clear) {
       await clearIndex(options);
     } else {

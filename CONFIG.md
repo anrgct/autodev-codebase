@@ -80,7 +80,7 @@ codebase --force --index
 - `--demo` - Create demo files in workspace for testing
 - `--path-filters, -f <filters>` - Filter search results by path patterns
 - `--limit, -l <number>` - Maximum number of search results (overrides config, max 50)
-- `--min-score, -s <number>` - Minimum similarity score for search results 0-1 (overrides config)
+- `--min-score, -S <number>` - Minimum similarity score for search results 0-1 (overrides config)
 - `--json` - Output search results in JSON format
 
 ### 2. Project Configuration
@@ -237,7 +237,7 @@ codebase --search="API" -l 30
 
 # Override minimum score (0.0-1.0)
 codebase --search="user auth" --min-score=0.7
-codebase --search="database" -s 0.5
+codebase --search="database" -S 0.5
 
 # Combine both
 codebase --search="error handling" --limit=10 --min-score=0.8

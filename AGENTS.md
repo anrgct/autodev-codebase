@@ -223,7 +223,7 @@ codebase --index --path=/my/project --force
 # Search code
 codebase --search="user authentication"
 codebase --search="API" --limit=20 --min-score=0.7
-codebase -s "database" -l 30 -s 0.5  # Short form
+codebase -q "database" -l 30 -S 0.5  # Short form
 
 # Search with path filters
 codebase --search="utils" --path-filters="src/**/*.ts"
@@ -269,7 +269,7 @@ codebase --set-config --global qdrantUrl=http://localhost:6333
 | `--cache <path>` | Custom cache path |
 | `--log-level <level>` | Log level (debug\|info\|warn\|error) |
 | `--limit, -l <number>` | Max search results (max 50) |
-| `--min-score, -s <number>` | Minimum similarity score (0-1) |
+| `--min-score, -S <number>` | Minimum similarity score (0-1) |
 | `--path-filters, -f <patterns>` | Path filter patterns |
 | `--json` | JSON output format |
 | `--serve` | Start MCP HTTP server |
