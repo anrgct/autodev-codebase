@@ -1,6 +1,7 @@
 import { EmbedderProvider } from "./interfaces/manager"
 import { CodeIndexConfig, PreviousConfigSnapshot } from "./interfaces/config"
 import { RerankerConfig } from "./interfaces/reranker"
+import { SummarizerConfig } from "./interfaces/summarizer"
 import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "./constants"
 import { getDefaultModelId, getModelDimension, getModelScoreThreshold } from "../shared/embeddingModels"
 import { IConfigProvider } from "../abstractions/config"
@@ -45,6 +46,10 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
 	'rerankerOpenAiCompatibleApiKey',     // Reranker OpenAI Compatible API key
 	'rerankerMinScore',                   // Reranker threshold
 	'rerankerBatchSize',                  // Reranker batch size
+	'summarizerProvider',                 // Summarizer provider
+	'summarizerOllamaBaseUrl',            // Summarizer Ollama URL
+	'summarizerOllamaModelId',            // Summarizer Ollama model
+	'summarizerLanguage',                 // Summarizer language
 	'embedderOllamaBatchSize',            // Batch sizes can be hot-reloaded
 	'embedderOpenAiBatchSize',
 	'embedderOpenAiCompatibleBatchSize',
@@ -206,6 +211,10 @@ export class CodeIndexConfigManager {
 			rerankerOpenAiCompatibleApiKey: config.rerankerOpenAiCompatibleApiKey,
 			rerankerMinScore: config.rerankerMinScore,
 			rerankerBatchSize: config.rerankerBatchSize,
+			summarizerProvider: config.summarizerProvider,
+			summarizerOllamaBaseUrl: config.summarizerOllamaBaseUrl,
+			summarizerOllamaModelId: config.summarizerOllamaModelId,
+			summarizerLanguage: config.summarizerLanguage,
 		}
 	}
 
@@ -454,6 +463,22 @@ export class CodeIndexConfigManager {
 	      batchSize: this.config.rerankerBatchSize || 10
 	    }
 	  }
+
+	/**
+	 * Gets the summarizer configuration.
+	 * Always returns config (never undefined) since summarizer is only used when --summarize flag is present.
+	 * Missing values are filled with defaults.
+	 */
+	public get summarizerConfig(): SummarizerConfig {
+		const provider = this.config?.summarizerProvider || 'ollama';
+
+		return {
+			provider: provider,
+			ollamaBaseUrl: this.config?.summarizerOllamaBaseUrl || 'http://localhost:11434',
+			ollamaModelId: this.config?.summarizerOllamaModelId || 'qwen3-vl:4b-instruct',
+			language: this.config?.summarizerLanguage || 'English'
+		};
+	}
 
 	/**
 	 * Gets the current configuration status including validation issues

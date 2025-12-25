@@ -7,10 +7,11 @@ import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
 import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
+import { OllamaSummarizer } from "./summarizers/ollama"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
 import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
-import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker } from "./interfaces"
+import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker, ISummarizer } from "./interfaces"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CacheManager } from "./cache-manager"
 import { Ignore } from "ignore"
@@ -321,6 +322,50 @@ export class CodeIndexServiceFactory {
 			return {
 				valid: false,
 				error: error instanceof Error ? error.message : t("embeddings:serviceFactory.rerankerValidationError"),
+			}
+		}
+	}
+
+	/**
+	 * Creates a summarizer instance based on the current configuration.
+	 * @returns ISummarizer instance (always returns an instance, configuration is validated when used)
+	 */
+	public createSummarizer(): ISummarizer {
+		const config = this.configManager.summarizerConfig;
+
+		if (config.provider === 'ollama') {
+			return new OllamaSummarizer(
+				config.ollamaBaseUrl || 'http://localhost:11434',
+				config.ollamaModelId || 'qwen3-vl:4b-instruct',
+				config.language || 'English'
+			)
+		}
+
+		// Future: openai-compatible provider
+		// if (config.provider === 'openai-compatible') {
+		//   return new OpenAICompatibleSummarizer(...)
+		// }
+
+		// Fallback to ollama if provider unknown
+		return new OllamaSummarizer(
+			'http://localhost:11434',
+			'qwen3-vl:4b-instruct',
+			'English'
+		);
+	}
+
+	/**
+	 * Validates a summarizer instance
+	 * @param summarizer The summarizer instance to validate
+	 * @returns Promise resolving to validation result
+	 */
+	public async validateSummarizer(summarizer: ISummarizer): Promise<{ valid: boolean; error?: string }> {
+		try {
+			return await summarizer.validateConfiguration()
+		} catch (error) {
+			return {
+				valid: false,
+				error: error instanceof Error ? error.message : 'Summarizer validation failed'
 			}
 		}
 	}

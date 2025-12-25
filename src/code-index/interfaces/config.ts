@@ -160,6 +160,12 @@ export interface CodeIndexConfig {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
+
+	// Summarizer configuration
+	summarizerProvider?: 'ollama'
+	summarizerOllamaBaseUrl?: string
+	summarizerOllamaModelId?: string
+	summarizerLanguage?: 'English' | 'Chinese'
 }
 
 /**
@@ -197,6 +203,10 @@ export type PreviousConfigSnapshot = {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
+	summarizerProvider?: 'ollama'
+	summarizerOllamaBaseUrl?: string
+	summarizerOllamaModelId?: string
+	summarizerLanguage?: 'English' | 'Chinese'
 }
 
 /**
@@ -251,4 +261,8 @@ export interface ConfigSnapshot {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
+	summarizerProvider?: 'ollama'
+	summarizerOllamaBaseUrl?: string
+	summarizerOllamaModelId?: string
+	summarizerLanguage?: 'English' | 'Chinese'
 }

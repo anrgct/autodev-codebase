@@ -57,6 +57,9 @@ export class ConfigValidator {
 		// Validate reranker configuration
 		ConfigValidator.validateReranker(config, issues)
 
+		// Validate summarizer configuration (optional - only when --summarize flag is used)
+		ConfigValidator.validateSummarizer(config, issues)
+
 		// Validate basic configuration consistency
 		ConfigValidator.validateBasicConsistency(config, issues)
 
@@ -240,6 +243,58 @@ export class ConfigValidator {
 				code: 'invalid',
 				message: `Unknown reranker provider: ${config.rerankerProvider}`
 			})
+		}
+	}
+
+	/**
+	 * Validate summarizer configuration
+	 * Note: This validation is optional and only performed when --summarize flag is actually used.
+	 * It doesn't block other operations if summarizer config is incomplete.
+	 */
+	private static validateSummarizer(config: CodeIndexConfig, issues: ValidationIssue[]): void {
+		// Only validate if summarizer provider is specified
+		if (!config.summarizerProvider) {
+			return
+		}
+
+		// Validate provider is supported
+		if (config.summarizerProvider !== 'ollama') {
+			issues.push({
+				path: 'summarizerProvider',
+				code: 'invalid_value',
+				message: `Unsupported summarizer provider: ${config.summarizerProvider}. Only 'ollama' is supported in v1.`
+			})
+			return
+		}
+
+		// For ollama provider, validate required fields
+		if (config.summarizerProvider === 'ollama') {
+			if (!config.summarizerOllamaBaseUrl) {
+				issues.push({
+					path: 'summarizerOllamaBaseUrl',
+					code: 'required',
+					message: 'Ollama base URL is required for summarizer when provider is ollama'
+				})
+			}
+
+			if (!config.summarizerOllamaModelId) {
+				issues.push({
+					path: 'summarizerOllamaModelId',
+					code: 'required',
+					message: 'Ollama model ID is required for summarizer when provider is ollama'
+				})
+			}
+		}
+
+		// Validate language if specified
+		if (config.summarizerLanguage) {
+			if (config.summarizerLanguage !== 'English' && config.summarizerLanguage !== 'Chinese') {
+				issues.push({
+					path: 'summarizerLanguage',
+					code: 'invalid_value',
+					message: `Invalid language: ${config.summarizerLanguage}. Must be 'English' or 'Chinese'.`
+				})
+			}
 		}
 	}
 

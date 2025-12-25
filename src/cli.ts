@@ -255,6 +255,7 @@ interface SimpleCliOptions {
   limit?: string;
   'min-score'?: string;
   outline?: string;
+  summarize?: boolean;
 }
 
 // Parse command line arguments using Node.js native parseArgs
@@ -268,6 +269,7 @@ const { values, positionals } = parseArgs({
     watch: { type: 'boolean', short: 'w' },
     clear: { type: 'boolean' },
     outline: { type: 'string' },
+    summarize: { type: 'boolean' },
     // Path and config options
     path: { type: 'string', short: 'p', default: '.' },
     config: { type: 'string', short: 'c' },
@@ -358,9 +360,13 @@ Options:
                                 Examples: --min-score=0.7, -S 0.5
                                 0 means accept all results, 1 means exact match only
   --outline <file>              Extract code outline from a file using tree-sitter parsing
-                                Shows code structure with line ranges: L<start>--L<end>
+                                Shows code structure with line ranges (e.g., 15--26)
+                                Add --summarize to generate AI summaries for each code block
                                 Add --json for detailed JSON output with metadata
-                                Examples: --outline src/index.ts, --outline lib/utils.py --json
+                                Examples:
+                                  --outline src/index.ts
+                                  --outline lib/utils.py --summarize
+                                  --outline src/app.ts --summarize --json
 
 
 Examples:
@@ -382,6 +388,10 @@ Examples:
   # Extract code outline from a file
   codebase --outline src/index.ts
   codebase --outline lib/utils.py --json
+
+  # Extract code outline with AI summaries
+  codebase --outline src/index.ts --summarize
+  codebase --outline lib/utils.py --summarize --json
 
   # Clear index
   codebase --clear --path=/my/project
@@ -446,6 +456,7 @@ function resolveOptions(): SimpleCliOptions {
     limit: values.limit,
     'min-score': values['min-score'],
     outline: values.outline,
+    summarize: !!values.summarize,
   };
 }
 
@@ -1274,12 +1285,15 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
   const { extractOutline } = await import('./cli-tools/outline');
 
   const workspacePath = options.path;
+  const configPath = options.config || path.join(options.path, 'autodev-config.json');
 
   try {
     const result = await extractOutline({
       filePath,
       workspacePath,
       json: options.json,
+      summarize: options.summarize,
+      configPath,
       fileSystem: deps.fileSystem,
       workspace: deps.workspace,
       pathUtils: deps.pathUtils,

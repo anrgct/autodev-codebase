@@ -2,17 +2,26 @@
  * CLI Tool: Code Outline Extractor
  *
  * Extracts code structure outlines from source files using tree-sitter parsing.
- * Provides both text and JSON output formats.
+ * Provides both text and JSON output formats with optional AI summarization.
  *
  * Usage:
- *   codebase --outline <file>              # Text format
- *   codebase --outline <file> --json       # JSON format
+ *   codebase --outline <file>                # Text format
+ *   codebase --outline <file> --json         # JSON format
+ *   codebase --outline <file> --summarize    # With AI summaries
+ *   codebase --outline <file> --summarize --json  # JSON with summaries
  */
 
 import { IFileSystem, IPathUtils, IWorkspace } from '../abstractions';
 import { loadRequiredLanguageParsers } from '../tree-sitter/languageParser';
 import { parseMarkdown } from '../tree-sitter/markdownParser';
-import { getMinComponentLines, parseSourceCodeDefinitionsForFile } from '../tree-sitter';
+import { getMinComponentLines } from '../tree-sitter';
+import { createNodeDependencies } from '../adapters/nodejs';
+import { CodeIndexServiceFactory } from '../code-index/service-factory';
+import { CodeIndexConfigManager } from '../code-index/config-manager';
+import { CacheManager } from '../code-index/cache-manager';
+import { ISummarizer, SummarizerRequest } from '../code-index/interfaces';
+import type { SummarizerConfig } from '../code-index/interfaces';
+import * as path from 'path';
 
 /**
  * Options for outline extraction
@@ -24,6 +33,10 @@ export interface OutlineOptions {
 	workspacePath: string;
 	/** Whether to output JSON format */
 	json: boolean;
+	/** Whether to generate AI summaries */
+	summarize?: boolean;
+	/** Optional config path (respects `--config`) */
+	configPath?: string;
 	/** File system abstraction */
 	fileSystem: IFileSystem;
 	/** Workspace abstraction (optional, improves ignore/relative path handling) */
@@ -34,7 +47,32 @@ export interface OutlineOptions {
 	logger?: {
 		info: (message: string) => void;
 		error: (message: string) => void;
+		warn?: (message: string) => void;
 	};
+}
+
+/**
+ * Structured definition from tree-sitter captures
+ */
+interface OutlineDefinition {
+	name: string;
+	type: string;
+	startLine: number;
+	endLine: number;
+	fullText: string;
+	lineContent: string;
+	summary?: string;
+}
+
+/**
+ * Structured outline data
+ */
+interface OutlineData {
+	filePath: string;
+	language: string;
+	documentContent: string;  // Complete file content for summarization context
+	definitions: OutlineDefinition[];
+	fileSummary?: string;  // Summary for the entire file
 }
 
 /**
@@ -44,7 +82,7 @@ export interface OutlineOptions {
  * @returns Formatted outline (text or JSON)
  */
 export async function extractOutline(options: OutlineOptions): Promise<string> {
-	const { filePath, workspacePath, json, fileSystem, pathUtils, logger } = options;
+	const { filePath, workspacePath, json, summarize, configPath, fileSystem, pathUtils, logger } = options;
 
 	// Resolve target path (handle both absolute and relative paths)
 	let targetPath = filePath;
@@ -73,7 +111,7 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 
 	// Return output based on format
 	if (json) {
-		const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils);
+		const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, configPath, logger);
 		return output;
 	} else {
 		const output = await getOutlineAsText(
@@ -81,7 +119,10 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 			options.workspace ?? null,
 			workspacePath,
 			fileSystem,
-			pathUtils
+			pathUtils,
+			summarize,
+			configPath,
+			logger
 		);
 		return output;
 	}
@@ -107,6 +148,7 @@ function createFallbackWorkspace(workspaceRootPath: string, pathUtils: IPathUtil
  * @param workspacePath - Workspace root path
  * @param fileSystem - File system abstraction
  * @param pathUtils - Path utilities abstraction
+ * @param summarize - Whether to generate AI summaries
  * @returns Formatted text outline
  */
 async function getOutlineAsText(
@@ -114,19 +156,93 @@ async function getOutlineAsText(
 	workspace: IWorkspace | null,
 	workspacePath: string,
 	fileSystem: IFileSystem,
-	pathUtils: IPathUtils
+	pathUtils: IPathUtils,
+	summarize?: boolean,
+	configPath?: string,
+	logger?: {
+		info: (message: string) => void;
+		error: (message: string) => void;
+		warn?: (message: string) => void;
+	}
 ): Promise<string> {
-	const output = await parseSourceCodeDefinitionsForFile(filePath, {
+	// 1. Build structured definitions (NEW single source of truth)
+	const outlineData = await buildOutlineDefinitions(
+		filePath,
 		fileSystem,
-		workspace: workspace ?? createFallbackWorkspace(workspacePath, pathUtils),
-		pathUtils
-	});
+		pathUtils,
+		workspace ?? createFallbackWorkspace(workspacePath, pathUtils)
+	);
 
-	if (!output) {
+	if (!outlineData) {
 		return `# ${pathUtils.basename(filePath)}\nNo code definitions found for this file type.`;
 	}
 
-	return output;
+	// 2. If no summarization requested, render directly
+	if (!summarize) {
+		return renderDefinitionsAsText(outlineData);
+	}
+
+	// 3. Create summarizer
+	const summarizer = await createSummarizerForOutline(workspacePath, configPath);
+	if (!summarizer) {
+		if (logger?.warn) logger.warn('Warning: Summarizer not configured. Continuing without summaries.');
+		else logger?.info('Warning: Summarizer not configured. Continuing without summaries.');
+		return renderDefinitionsAsText(outlineData);
+	}
+
+	// 4. Generate summaries
+	const config = await loadSummarizerConfig(workspacePath, configPath);
+	const language = config?.language || 'English';
+
+	// 4.1 Generate file-level summary
+	try {
+		const fileSummaryResult = await summarizer.summarize({
+			content: outlineData.documentContent,
+			document: outlineData.documentContent,
+			language,
+			codeType: 'file',
+			codeName: pathUtils.basename(filePath),
+			filePath: outlineData.filePath
+		});
+		outlineData.fileSummary = fileSummaryResult.summary;
+	} catch (error) {
+		const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+		if (logger?.warn) logger.warn(`Warning: Failed to summarize file: ${errorMsg}`);
+		else logger?.error(`Warning: Failed to summarize file: ${errorMsg}`);
+		// File summary failure is not fatal, continue with definition summaries
+	}
+
+	// 4.2 Generate summaries for each definition
+	for (const def of outlineData.definitions) {
+		try {
+			// Skip very large blocks (>1000 lines) to avoid timeout
+			// Note: startLine/endLine are 1-based and inclusive, so actual line count = end - start + 1
+			const lineCount = def.endLine - def.startLine + 1;
+			if (lineCount > 1000) {
+				def.summary = `[Code too large to summarize (${lineCount} lines)]`;
+				continue;
+			}
+
+			const result = await summarizer.summarize({
+				content: def.fullText,
+				document: outlineData.documentContent,  // Pass full document context
+				language,
+				codeType: def.type,
+				codeName: def.name,
+				filePath: outlineData.filePath
+			});
+
+			def.summary = result.summary;
+		} catch (error) {
+			const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+			if (logger?.warn) logger.warn(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
+			else logger?.error(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
+			def.summary = `[Summary failed: ${errorMsg}]`;
+		}
+	}
+
+	// 5. Render with summaries
+	return renderDefinitionsAsText(outlineData);
 }
 
 /**
@@ -135,102 +251,170 @@ async function getOutlineAsText(
  * @param filePath - Absolute path to the file
  * @param fileSystem - File system abstraction
  * @param pathUtils - Path utilities abstraction
+ * @param workspacePath - Workspace root path
+ * @param summarize - Whether to generate AI summaries
  * @returns JSON string with outline data
  */
 async function getOutlineAsJson(
 	filePath: string,
 	fileSystem: IFileSystem,
-	pathUtils: IPathUtils
+	pathUtils: IPathUtils,
+	workspacePath: string,
+	summarize?: boolean,
+	configPath?: string,
+	logger?: {
+		info: (message: string) => void;
+		error: (message: string) => void;
+		warn?: (message: string) => void;
+	}
 ): Promise<string> {
-	// Read file content
-	const fileContentArray = await fileSystem.readFile(filePath);
-	const fileContent = new TextDecoder().decode(fileContentArray);
-	const ext = pathUtils.extname(filePath).toLowerCase().slice(1);
+	// 1. Build structured definitions (same as text path)
+	const workspace = createFallbackWorkspace(workspacePath, pathUtils);
+	const outlineData = await buildOutlineDefinitions(filePath, fileSystem, pathUtils, workspace);
 
-	const languageParsers = await loadRequiredLanguageParsers([filePath]);
-
-	const { parser, query } = languageParsers[ext] || {};
-
-	// Handle unsupported file types
-	if (!parser || !query) {
-		// For markdown files, use markdown parser
-		if (ext === 'md' || ext === 'markdown') {
-			const captures = parseMarkdown(fileContent);
-			const lines = fileContent.split(/\r?\n/);
-			const definitions = processCapturesToJson(captures, lines, 'markdown', filePath);
-			return JSON.stringify(definitions, null, 2);
-		}
-
+	if (!outlineData) {
 		return JSON.stringify({
-			error: `Unsupported file type`,
+			error: 'Unsupported file type',
 			filePath,
-			extension: ext
+			extension: pathUtils.extname(filePath)
 		}, null, 2);
 	}
 
-	// Parse the file
-	const tree = parser.parse(fileContent);
-	const captures = query.captures(tree.rootNode);
-	const lines = fileContent.split(/\r?\n/);
+	// 2. Generate summaries if requested
+	if (summarize) {
+		const summarizer = await createSummarizerForOutline(workspacePath, configPath);
+		if (summarizer) {
+			const config = await loadSummarizerConfig(workspacePath, configPath);
+			const language = config?.language || 'English';
 
-	// Process captures to JSON format
-	const definitions = processCapturesToJson(captures, lines, ext, filePath);
+			// 2.1 Generate file-level summary
+			try {
+				const fileSummaryResult = await summarizer.summarize({
+					content: outlineData.documentContent,
+					document: outlineData.documentContent,
+					language,
+					codeType: 'file',
+					codeName: pathUtils.basename(filePath),
+					filePath: outlineData.filePath
+				});
+				outlineData.fileSummary = fileSummaryResult.summary;
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+				if (logger?.warn) logger.warn(`Warning: Failed to summarize file: ${errorMsg}`);
+				else logger?.error(`Warning: Failed to summarize file: ${errorMsg}`);
+				// File summary failure is not fatal, continue with definition summaries
+			}
 
-	return JSON.stringify(definitions, null, 2);
+			// 2.2 Generate summaries for each definition
+			for (const def of outlineData.definitions) {
+				try {
+					// Note: startLine/endLine are 1-based and inclusive, so actual line count = end - start + 1
+					const lineCount = def.endLine - def.startLine + 1;
+					if (lineCount > 1000) {
+						def.summary = `[Code too large to summarize (${lineCount} lines)]`;
+						continue;
+					}
+
+					const result = await summarizer.summarize({
+						content: def.fullText,
+						document: outlineData.documentContent,  // Pass full document context
+						language,
+						codeType: def.type,
+						codeName: def.name,
+						filePath: outlineData.filePath
+					});
+
+					def.summary = result.summary;
+				} catch (error) {
+					const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+					if (logger?.warn) logger.warn(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
+					else logger?.error(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
+					def.summary = `[Summary failed: ${errorMsg}]`;
+				}
+			}
+		} else {
+			if (logger?.warn) logger.warn('Warning: Summarizer not configured. Continuing without summaries.');
+		}
+	}
+
+	// 3. Render to JSON
+	return renderDefinitionsAsJson(outlineData);
 }
 
 /**
- * Process captures into JSON format
- *
- * @param captures - Tree-sitter captures
- * @param lines - File content lines
- * @param language - Programming language
- * @param filePath - Full file path
- * @returns JSON object with definitions
+ * Builds structured outline definitions from tree-sitter captures.
+ * This is the SINGLE SOURCE OF TRUTH for both text and JSON output.
  */
-function processCapturesToJson(
+async function buildOutlineDefinitions(
+	filePath: string,
+	fileSystem: IFileSystem,
+	pathUtils: IPathUtils,
+	workspace: IWorkspace
+): Promise<OutlineData | null> {
+	// Read file content
+	const fileContentArray = await fileSystem.readFile(filePath);
+	const fileContent = new TextDecoder().decode(fileContentArray);
+	const lines = fileContent.split(/\r?\n/);
+	const ext = pathUtils.extname(filePath).toLowerCase().slice(1);
+
+	// Special handling for markdown files
+	if (ext === 'md' || ext === 'markdown') {
+		const captures = parseMarkdown(fileContent);
+		const definitions = extractDefinitionsFromCaptures(captures, lines, filePath);
+		return {
+			filePath,
+			language: ext,
+			documentContent: fileContent,  // Include complete document for context
+			definitions
+		};
+	}
+
+	// Load language parsers
+	const languageParsers = await loadRequiredLanguageParsers([filePath]);
+	const { parser, query } = languageParsers[ext] || {};
+
+	if (!parser || !query) {
+		return null;  // Unsupported file type
+	}
+
+	// Parse with tree-sitter
+	const tree = parser.parse(fileContent);
+	const captures = query.captures(tree.rootNode);
+
+	// Extract definitions
+	const definitions = extractDefinitionsFromCaptures(captures, lines, filePath);
+
+	return {
+		filePath,
+		language: ext,
+		documentContent: fileContent,  // Include complete document for context
+		definitions
+	};
+}
+
+/**
+ * Extracts structured definitions from tree-sitter captures.
+ */
+function extractDefinitionsFromCaptures(
 	captures: any[],
 	lines: string[],
-	language: string,
 	filePath: string
-): {
-	filePath: string;
-	language: string;
-	definitionCount: number;
-	definitions: Array<{
-		name: string;
-		type: string;
-		startLine: number;
-		endLine: number;
-		text: string;
-		wasTruncated: boolean;
-		textLength: number;
-		lineContent: string;
-	}>;
-} {
+): OutlineDefinition[] {
 	// Sort captures by start position
 	captures.sort((a, b) => a.node.startPosition.row - b.node.startPosition.row);
 
-	const getNodeText = (node: any): string => {
-		if (!node) return '';
-		if (typeof node.text === 'function') return String(node.text());
-		if (typeof node.text === 'string') return node.text;
-		return '';
-	};
+	const isDefinitionCaptureName = (name: string): boolean =>
+		// 过滤掉 docstring，只保留真正的定义
+		name.startsWith('definition.');
 
-	const isDefinitionCaptureName = (captureName: string): boolean =>
-		captureName.startsWith('definition.') || captureName === 'docstring' || captureName === 'doc';
+	const isNameCaptureName = (name: string): boolean =>
+		name === 'name' || name === 'property.name.definition' || name.startsWith('name.definition.');
 
-	const isNameCaptureName = (captureName: string): boolean =>
-		captureName === 'name' ||
-		captureName === 'property.name.definition' ||
-		captureName.startsWith('name.definition.');
-
-	const extractKindFromCaptureName = (captureName: string): string => {
-		if (captureName === 'docstring' || captureName === 'doc') return 'docstring';
-		if (captureName.startsWith('definition.')) return captureName.slice('definition.'.length);
-		if (captureName.startsWith('name.definition.')) return captureName.slice('name.definition.'.length);
-		return captureName;
+	const extractKindFromCaptureName = (name: string): string => {
+		// docstring 已被过滤，不需要特殊处理
+		if (name.startsWith('definition.')) return name.slice('definition.'.length);
+		if (name.startsWith('name.definition.')) return name.slice('name.definition.'.length);
+		return name;
 	};
 
 	const isNodeWithin = (outer: any, inner: any): boolean => {
@@ -241,24 +425,19 @@ function processCapturesToJson(
 		);
 	};
 
-	// Track processed lines to avoid duplicates
-	const processedLines = new Set<string>();
-	const definitions: Array<{
-		name: string;
-		type: string;
-		startLine: number;
-		endLine: number;
-		text: string;
-		wasTruncated: boolean;
-		textLength: number;
-		lineContent: string;
-	}> = [];
+	const getNodeText = (node: any): string => {
+		if (!node) return '';
+		if (typeof node.text === 'function') return String(node.text());
+		if (typeof node.text === 'string') return node.text;
+		return '';
+	};
 
+	// Filter definition captures
 	const definitionCaptures = captures.filter((c) => typeof c?.name === 'string' && isDefinitionCaptureName(c.name));
 	const definitionNodes = definitionCaptures.map((c) => c.node);
 	const nodeIdentifierMap = new Map<any, string>();
 
-	// Map identifier nodes to their closest containing definition nodes (smallest span).
+	// Map identifiers to definitions
 	for (const capture of captures) {
 		const captureName = capture?.name;
 		if (typeof captureName !== 'string' || !isNameCaptureName(captureName)) continue;
@@ -266,29 +445,28 @@ function processCapturesToJson(
 		const nameNode = capture?.node;
 		if (!nameNode) continue;
 
-		const candidateDefinitionNodes = definitionNodes.filter((defNode) => isNodeWithin(defNode, nameNode));
-		if (candidateDefinitionNodes.length === 0) continue;
+		const candidates = definitionNodes.filter((defNode) => isNodeWithin(defNode, nameNode));
+		if (candidates.length === 0) continue;
 
-		const bestDefinitionNode = candidateDefinitionNodes.reduce((best: any, current: any) => {
+		const best = candidates.reduce((best: any, current: any) => {
 			const bestSpan = (best.endPosition?.row ?? 0) - (best.startPosition?.row ?? 0);
 			const currentSpan = (current.endPosition?.row ?? 0) - (current.startPosition?.row ?? 0);
 			return currentSpan < bestSpan ? current : best;
 		});
 
 		let identifier = getNodeText(nameNode);
-		if (
-			captureName === 'property.name.definition' &&
-			identifier.startsWith('"') &&
-			identifier.endsWith('"')
-		) {
+		if (captureName === 'property.name.definition' && identifier.startsWith('"') && identifier.endsWith('"')) {
 			identifier = identifier.slice(1, -1);
 		}
 		if (identifier) {
-			nodeIdentifierMap.set(bestDefinitionNode, identifier);
+			nodeIdentifierMap.set(best, identifier);
 		}
 	}
 
-	// Only emit one record per definition capture.
+	// Build definitions
+	const definitions: OutlineDefinition[] = [];
+	const processedLines = new Set<string>();
+
 	for (const capture of definitionCaptures) {
 		const definitionNode = capture?.node;
 		if (!definitionNode) continue;
@@ -302,65 +480,189 @@ function processCapturesToJson(
 		while (displayStartLine <= endLine && (lines[displayStartLine] ?? '').trim() === '') {
 			displayStartLine++;
 		}
-		if (displayStartLine > endLine) {
-			continue;
-		}
+		if (displayStartLine > endLine) continue;
 
-		// Skip components that don't span enough lines
-		if (lineCount < getMinComponentLines()) {
-			continue;
-		}
+		// Skip small components
+		if (lineCount < getMinComponentLines()) continue;
 
 		const lineKey = `${displayStartLine}-${endLine}`;
-
-		// Skip already processed lines
-		if (processedLines.has(lineKey)) {
-			continue;
-		}
+		if (processedLines.has(lineKey)) continue;
 
 		const kind = extractKindFromCaptureName(String(capture.name));
-		const identifier =
-			nodeIdentifierMap.get(definitionNode) ||
+		const identifier = nodeIdentifierMap.get(definitionNode) ||
 			(typeof definitionNode.childForFieldName === 'function'
 				? definitionNode.childForFieldName('name')?.text
-				: null) ||
-			null;
+				: null) || '';
 
-		// Get text preview (following plan: truncate at 50 chars with "first 50...last 50")
-		const fullText = definitionNode.text;
-		let textPreview = fullText;
-		const maxLength = 50;
-		let wasTruncated = false;
+		// Skip definitions without a name (e.g., decorated_definition wrapper nodes)
+		if (!identifier) continue;
 
-		if (fullText.length > maxLength) {
-			wasTruncated = true;
-			// Use "first 50...last 50" pattern as per plan
-			const first = fullText.substring(0, 50);
-			const last = fullText.substring(fullText.length - 20);
-			textPreview = `${first} ... ${last}`;
-		}
-
-		// Get line content
+		// Extract FULL code content (not truncated)
+		const fullText = getNodeText(definitionNode);
 		const lineContent = lines[displayStartLine]?.trim() || '';
 
 		definitions.push({
-			name: identifier ? String(identifier) : '',
+			name: String(identifier),
 			type: kind || String(definitionNode.type ?? ''),
-			startLine: startLine + 1, // Convert to 1-indexed
-			endLine: endLine + 1,     // Convert to 1-indexed
-			text: textPreview,
-			wasTruncated,
-			textLength: fullText.length,
+			startLine: startLine + 1,   // Convert to 1-indexed
+			endLine: endLine + 1,         // Convert to 1-indexed
+			fullText,                    // Complete code
 			lineContent
 		});
 
 		processedLines.add(lineKey);
 	}
 
-	return {
-		filePath: filePath,
-		language,
-		definitionCount: definitions.length,
-		definitions
+	return definitions;
+}
+
+/**
+ * Renders structured definitions to text outline format.
+ */
+function renderDefinitionsAsText(
+	outlineData: OutlineData,
+	indent: string = '   '
+): string {
+	const lines: string[] = [];
+
+	// Calculate file line range
+	const fileLines = outlineData.documentContent.split(/\r?\n/);
+	const totalLines = fileLines.length;
+	const fileRange = `L1-${totalLines}`;
+
+	lines.push(`# ${fileRange} | ${outlineData.filePath}`);
+
+	// Display file summary if available
+	if (outlineData.fileSummary) {
+		lines.push(`└─ ${outlineData.fileSummary}`);
+	}
+
+	lines.push('');
+
+	let lastType = '';
+	for (const def of outlineData.definitions) {
+		// 在不同类型之间添加空行
+		if (lastType && lastType !== def.type) {
+			lines.push('');
+		}
+		lastType = def.type;
+
+		// Compact mode: 显示类型+名称
+		const displayContent = `${def.type} ${def.name}`;
+		lines.push(`${indent}${def.startLine}--${def.endLine} | ${displayContent}`);
+		if (def.summary) {
+			lines.push(`${indent}└─ ${def.summary}`);
+		}
+	}
+
+	return lines.join('\n');
+}
+
+/**
+ * Renders structured definitions to JSON format.
+ */
+function renderDefinitionsAsJson(outlineData: OutlineData): string {
+	const result = {
+		filePath: outlineData.filePath,
+		language: outlineData.language,
+		definitionCount: outlineData.definitions.length,
+		fileSummary: outlineData.fileSummary || null,
+		definitions: outlineData.definitions.map(def => ({
+			name: def.name,
+			type: def.type,
+			startLine: def.startLine,
+			endLine: def.endLine,
+			text: def.fullText.length > 50
+				? `${def.fullText.substring(0, 50)} ... ${def.fullText.slice(-20)}`
+				: def.fullText,
+			fullText: def.fullText,
+			wasTruncated: def.fullText.length > 50,
+			textLength: def.fullText.length,
+			lineContent: def.lineContent,
+			summary: def.summary
+		}))
 	};
+
+	return JSON.stringify(result, null, 2);
+}
+
+/**
+ * Creates a summarizer instance for the outline tool.
+ */
+async function createSummarizerForOutline(
+	workspacePath: string,
+	configPath?: string
+): Promise<ISummarizer | undefined> {
+	try {
+		const resolvedConfigPath = configPath || path.join(workspacePath, 'autodev-config.json');
+
+		// Create dependencies using existing factory
+		const deps = createNodeDependencies({
+			workspacePath,
+			storageOptions: {
+				globalStoragePath: workspacePath
+			},
+			loggerOptions: {
+				name: 'Outline',
+				level: 'error',
+				timestamps: false,
+				colors: false
+			},
+			configOptions: {
+				configPath: resolvedConfigPath
+			}
+		});
+
+		// Load configuration (4-layer priority handled by ConfigProvider)
+		await deps.configProvider.loadConfig();
+
+		// Create config manager
+		const configManager = new CodeIndexConfigManager(deps.configProvider);
+		await configManager.initialize();
+
+		// Create service factory
+		const factory = new CodeIndexServiceFactory(
+			configManager,
+			workspacePath,
+			new CacheManager(workspacePath)
+		);
+
+		// Create and return summarizer
+		return factory.createSummarizer();
+	} catch (error) {
+		// Silently fail - summarization is optional
+		return undefined;
+	}
+}
+
+/**
+ * Loads summarizer configuration for the outline tool.
+ */
+async function loadSummarizerConfig(
+	workspacePath: string,
+	configPath?: string
+): Promise<SummarizerConfig | undefined> {
+	try {
+		const resolvedConfigPath = configPath || path.join(workspacePath, 'autodev-config.json');
+
+		const deps = createNodeDependencies({
+			workspacePath,
+			storageOptions: { globalStoragePath: workspacePath },
+			loggerOptions: { name: 'Outline', level: 'error', timestamps: false, colors: false },
+			configOptions: {
+				configPath: resolvedConfigPath
+			}
+		});
+
+		await deps.configProvider.loadConfig();
+
+		// Create config manager to access summarizer config
+		const configManager = new CodeIndexConfigManager(deps.configProvider);
+		await configManager.initialize();
+
+		// Access summarizer config through configManager
+		return configManager.summarizerConfig;
+	} catch (error) {
+		return undefined;
+	}
 }

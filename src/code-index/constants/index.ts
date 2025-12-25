@@ -21,7 +21,11 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
 	qdrantUrl: "http://localhost:6333",
 	vectorSearchMinScore: 0.1,
 	vectorSearchMaxResults: 20,
-	rerankerEnabled: false
+	rerankerEnabled: false,
+	summarizerProvider: 'ollama',
+	summarizerOllamaBaseUrl: 'http://localhost:11434',
+	summarizerOllamaModelId: 'qwen3-vl:4b-instruct',
+	summarizerLanguage: 'English'
 }
 
 /**Parser */
