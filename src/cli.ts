@@ -359,14 +359,18 @@ Options:
   --min-score, -S <number>       Minimum similarity score for search results (0-1, default: from config)
                                 Examples: --min-score=0.7, -S 0.5
                                 0 means accept all results, 1 means exact match only
-  --outline <file>              Extract code outline from a file using tree-sitter parsing
+  --outline <pattern>            Extract code outline from file(s) using tree-sitter parsing
+                                Supports glob patterns for multiple files (e.g., **/*.ts, src/**/*.py)
                                 Shows code structure with line ranges (e.g., 15--26)
                                 Add --summarize to generate AI summaries for each code block
                                 Add --json for detailed JSON output with metadata
+                                Note: Glob patterns respect .gitignore/.rooignore/.codebaseignore,
+                                      but single-file paths skip ignore checks (process any file directly)
                                 Examples:
                                   --outline src/index.ts
-                                  --outline lib/utils.py --summarize
-                                  --outline src/app.ts --summarize --json
+                                  --outline "src/**/*.ts"
+                                  --outline "lib/**/*.py" --summarize
+                                  --outline "**/*.ts" --summarize --json
 
 
 Examples:
@@ -387,6 +391,10 @@ Examples:
 
   # Extract code outline from a file
   codebase --outline src/index.ts
+
+  # Extract code outline using glob patterns
+  codebase --outline "src/**/*.ts"
+  codebase --outline "**/*.py" --summarize
   codebase --outline lib/utils.py --json
 
   # Extract code outline with AI summaries
@@ -1275,32 +1283,97 @@ async function setConfigHandler(configString: string, global?: boolean): Promise
 }
 
 /**
- * Handle --outline command
+ * Check if a path string contains glob pattern characters
+ */
+function isGlobPattern(path: string): boolean {
+  return /[*?{}\[\]]/.test(path);
+}
+
+/**
+ * Handle --outline command with glob pattern support
  */
 async function handleOutlineCommand(filePath: string, options: SimpleCliOptions): Promise<void> {
   // Create dependencies
   const deps = createDependencies(options);
 
-  // Import extractOutline
+  // Import extractOutline and fast-glob
   const { extractOutline } = await import('./cli-tools/outline');
+  const fastGlob = (await import('fast-glob')).default;
 
   const workspacePath = options.path;
   const configPath = options.config || path.join(options.path, 'autodev-config.json');
+  const workspace = deps.workspace;
 
   try {
-    const result = await extractOutline({
-      filePath,
-      workspacePath,
-      json: options.json,
-      summarize: options.summarize,
-      configPath,
-      fileSystem: deps.fileSystem,
-      workspace: deps.workspace,
-      pathUtils: deps.pathUtils,
-      logger: deps.logger
-    });
+    // Check if input is a glob pattern
+    if (isGlobPattern(filePath)) {
+      // Get ignore patterns from workspace (reuses existing ignore logic)
+      const globIgnorePatterns = await workspace.getGlobIgnorePatterns()
 
-    console.log(result);
+      // Use fast-glob for pattern matching with dual-layer filtering
+      let files = await fastGlob(filePath, {
+        cwd: workspacePath,
+        absolute: true,
+        // Layer 1: High-performance filtering (prune during traversal)
+        ignore: globIgnorePatterns
+      });
+
+      // Layer 2: Flexible filtering (project-specific rules)
+      const filteredFiles = [];
+      for (const file of files) {
+        if (!(await workspace.shouldIgnore(file))) {
+          filteredFiles.push(file);
+        }
+      }
+
+      if (filteredFiles.length === 0) {
+        deps.logger?.warn(`No files found matching pattern: ${filePath}`);
+        return;
+      }
+
+      deps.logger?.info(`Found ${filteredFiles.length} file(s) matching pattern: ${filePath}`);
+
+      // Process each file
+      for (const file of filteredFiles) {
+        try {
+          const result = await extractOutline({
+            filePath: file,
+            workspacePath,
+            json: options.json,
+            summarize: options.summarize,
+            configPath,
+            fileSystem: deps.fileSystem,
+            workspace,
+            pathUtils: deps.pathUtils,
+            logger: deps.logger
+          });
+
+          console.log(result);
+          console.log('===\n');
+        } catch (error) {
+          // Skip failed files but continue processing others
+          if (error instanceof Error) {
+            deps.logger?.warn(`Failed to process ${file}: ${error.message}`);
+          }
+        }
+      }
+    } else {
+      // Single file processing (original logic) - skip ignore checks
+      const result = await extractOutline({
+        filePath,
+        workspacePath,
+        json: options.json,
+        summarize: options.summarize,
+        configPath,
+        fileSystem: deps.fileSystem,
+        workspace,
+        pathUtils: deps.pathUtils,
+        logger: deps.logger,
+        skipIgnoreCheck: true  // Skip ignore checks for single-file mode
+      });
+
+      console.log(result);
+    }
   } catch (error) {
     if (error instanceof Error) {
       deps.logger?.error(error.message);

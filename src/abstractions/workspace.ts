@@ -16,6 +16,12 @@ export interface IWorkspace {
    * Get ignore rules for the workspace (from .gitignore, .rooignore, etc.)
    */
   getIgnoreRules(): string[]
+
+  /**
+   * Get ignore patterns formatted for fast-glob
+   * Returns patterns with proper glob syntax (/** suffix for directories)
+   */
+  getGlobIgnorePatterns(): Promise<string[]>
   
   /**
    * Check if a path should be ignored

@@ -49,6 +49,8 @@ export interface OutlineOptions {
 		error: (message: string) => void;
 		warn?: (message: string) => void;
 	};
+	/** Skip workspace ignore checks (for single-file mode) */
+	skipIgnoreCheck?: boolean;
 }
 
 /**
@@ -69,6 +71,7 @@ interface OutlineDefinition {
  */
 interface OutlineData {
 	filePath: string;
+	relativePath: string;  // Relative path from workspace root
 	language: string;
 	documentContent: string;  // Complete file content for summarization context
 	definitions: OutlineDefinition[];
@@ -93,20 +96,12 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 	// Check if file exists
 	const exists = await fileSystem.exists(targetPath);
 	if (!exists) {
-		const error = `Error: File not found: ${targetPath}`;
-		if (logger) {
-			logger.error(error);
-		}
-		throw new Error(error);
+		throw new Error(`File not found: ${targetPath}`);
 	}
 
-	// Check if file should be ignored (if workspace is provided)
-	if (options.workspace && await options.workspace.shouldIgnore(targetPath)) {
-		const error = `Error: File is ignored by workspace rules: ${targetPath}`;
-		if (logger) {
-			logger.error(error);
-		}
-		throw new Error(error);
+	// Check if file should be ignored (if workspace is provided and skipIgnoreCheck is false)
+	if (!options.skipIgnoreCheck && options.workspace && await options.workspace.shouldIgnore(targetPath)) {
+		throw new Error(`File is ignored by workspace rules: ${targetPath}`);
 	}
 
 	// Return output based on format
@@ -133,6 +128,7 @@ function createFallbackWorkspace(workspaceRootPath: string, pathUtils: IPathUtil
 		getRootPath: () => workspaceRootPath,
 		getRelativePath: (fullPath: string) => pathUtils.relative(workspaceRootPath, fullPath),
 		getIgnoreRules: () => [],
+		getGlobIgnorePatterns: async () => [],
 		shouldIgnore: async () => false,
 		getName: () => 'outline-workspace',
 		getWorkspaceFolders: () => [],
@@ -351,6 +347,9 @@ async function buildOutlineDefinitions(
 	pathUtils: IPathUtils,
 	workspace: IWorkspace
 ): Promise<OutlineData | null> {
+	// Calculate relative path
+	const relativePath = workspace.getRelativePath(filePath);
+
 	// Read file content
 	const fileContentArray = await fileSystem.readFile(filePath);
 	const fileContent = new TextDecoder().decode(fileContentArray);
@@ -363,6 +362,7 @@ async function buildOutlineDefinitions(
 		const definitions = extractDefinitionsFromCaptures(captures, lines, filePath);
 		return {
 			filePath,
+			relativePath,
 			language: ext,
 			documentContent: fileContent,  // Include complete document for context
 			definitions
@@ -386,6 +386,7 @@ async function buildOutlineDefinitions(
 
 	return {
 		filePath,
+		relativePath,
 		language: ext,
 		documentContent: fileContent,  // Include complete document for context
 		definitions
@@ -525,12 +526,11 @@ function renderDefinitionsAsText(
 ): string {
 	const lines: string[] = [];
 
-	// Calculate file line range
+	// Calculate file line count
 	const fileLines = outlineData.documentContent.split(/\r?\n/);
 	const totalLines = fileLines.length;
-	const fileRange = `L1-${totalLines}`;
 
-	lines.push(`# ${fileRange} | ${outlineData.filePath}`);
+	lines.push(`# ${outlineData.relativePath} (${totalLines} lines)`);
 
 	// Display file summary if available
 	if (outlineData.fileSummary) {

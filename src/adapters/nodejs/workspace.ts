@@ -4,6 +4,7 @@
  */
 import * as path from 'path'
 import { promises as fs } from 'fs'
+import ignore from 'ignore'
 import { IWorkspace, WorkspaceFolder, IPathUtils } from '../../abstractions/workspace'
 import { IFileSystem } from '../../abstractions/core'
 
@@ -17,10 +18,28 @@ export class NodeWorkspace implements IWorkspace {
   private ignoreFiles: string[]
   private ignoreRules: string[] = []
   private ignoreRulesLoaded = false
+  private ignoreInstance: ReturnType<typeof ignore>
+
+  // Default ignore patterns (common across all projects)
+  private static readonly DEFAULT_IGNORES = [
+    'node_modules',
+    '.git',
+    '.svn',
+    '.hg',
+    'dist',
+    'build',
+    'coverage',
+    '*.log',
+    '.env',
+    '.env.local',
+    '.DS_Store',
+    'Thumbs.db'
+  ]
 
   constructor(private fileSystem: IFileSystem, options: NodeWorkspaceOptions) {
     this.rootPath = options.rootPath
     this.ignoreFiles = options.ignoreFiles || ['.gitignore', '.rooignore', '.codebaseignore']
+    this.ignoreInstance = ignore()
   }
 
   getRootPath(): string | undefined {
@@ -36,32 +55,42 @@ export class NodeWorkspace implements IWorkspace {
     return this.ignoreRules
   }
 
+  /**
+   * Get ignore patterns formatted for fast-glob
+   * Converts simple directory names to glob patterns with /** suffix
+   */
+  async getGlobIgnorePatterns(): Promise<string[]> {
+    await this.loadIgnoreRules()
+
+    const allIgnores = [...NodeWorkspace.DEFAULT_IGNORES, ...this.ignoreRules]
+
+    // Convert to fast-glob format
+    return allIgnores.map(pattern => {
+      // If pattern contains no path separator and no wildcard, treat as directory
+      if (!pattern.includes('/') && !pattern.includes('*')) {
+        return `${pattern}/**`
+      }
+      // If pattern ends with /, add **
+      if (pattern.endsWith('/')) {
+        return `${pattern}**`
+      }
+      // Otherwise return as-is (already a glob pattern)
+      return pattern
+    })
+  }
+
   async shouldIgnore(filePath: string): Promise<boolean> {
     await this.loadIgnoreRules()
-    
-    const relativePath = this.getRelativePath(filePath)
-    
-    // Basic ignore patterns
-    const defaultIgnores = [
-      'node_modules',
-      '.git',
-      '.svn',
-      '.hg',
-      'dist',
-      'build',
-      'coverage',
-      '*.log',
-      '.env',
-      '.env.local',
-      '.DS_Store',
-      'Thumbs.db'
-    ]
 
-    const allIgnores = [...defaultIgnores, ...this.ignoreRules]
-    
-    return allIgnores.some(pattern => {
-      return this.matchPattern(relativePath, pattern)
-    })
+    const relativePath = this.getRelativePath(filePath)
+
+    // Use ignore instance for proper gitignore semantics
+    this.ignoreInstance = ignore().add(NodeWorkspace.DEFAULT_IGNORES).add(this.ignoreRules)
+
+    // ignore expects paths to use forward slashes
+    const normalizedPath = relativePath.split(path.sep).join('/')
+
+    return this.ignoreInstance.ignores(normalizedPath)
   }
 
   getName(): string {
@@ -122,14 +151,16 @@ export class NodeWorkspace implements IWorkspace {
     this.ignoreRulesLoaded = true
   }
 
+  /**
+   * Simple glob pattern matching for findFiles method
+   * Note: This is NOT used for gitignore semantics (shouldIgnore uses ignore library)
+   */
   private matchPattern(filePath: string, pattern: string): boolean {
-    // Simple glob pattern matching
-    // Convert glob pattern to regex
     const regexPattern = pattern
       .replace(/\./g, '\\.')
       .replace(/\*/g, '.*')
       .replace(/\?/g, '.')
-    
+
     const regex = new RegExp(`^${regexPattern}$`)
     return regex.test(filePath) || regex.test(path.basename(filePath))
   }
