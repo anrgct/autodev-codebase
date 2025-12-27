@@ -53,6 +53,7 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
 	'summarizerOpenAiCompatibleModelId',  // Summarizer OpenAI Compatible model
 	'summarizerOpenAiCompatibleApiKey',   // Summarizer OpenAI Compatible API key
 	'summarizerLanguage',                 // Summarizer language
+	'summarizerTemperature',              // Summarizer temperature
 	'embedderOllamaBatchSize',            // Batch sizes can be hot-reloaded
 	'embedderOpenAiBatchSize',
 	'embedderOpenAiCompatibleBatchSize',
@@ -221,6 +222,7 @@ export class CodeIndexConfigManager {
 			summarizerOpenAiCompatibleModelId: config.summarizerOpenAiCompatibleModelId,
 			summarizerOpenAiCompatibleApiKey: config.summarizerOpenAiCompatibleApiKey,
 			summarizerLanguage: config.summarizerLanguage,
+			summarizerTemperature: config.summarizerTemperature,
 		}
 	}
 
@@ -485,7 +487,8 @@ export class CodeIndexConfigManager {
 			openAiCompatibleBaseUrl: this.config?.summarizerOpenAiCompatibleBaseUrl || 'http://localhost:8080/v1',
 			openAiCompatibleModelId: this.config?.summarizerOpenAiCompatibleModelId || 'gpt-4',
 			openAiCompatibleApiKey: this.config?.summarizerOpenAiCompatibleApiKey || '',
-			language: this.config?.summarizerLanguage || 'English'
+			language: this.config?.summarizerLanguage || 'English',
+			temperature: this.config?.summarizerTemperature
 		};
 	}
 

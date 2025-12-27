@@ -102,6 +102,12 @@ export interface SummarizerConfig {
 	 * Language for summaries
 	 */
 	language?: 'English' | 'Chinese'
+
+	/**
+	 * Temperature for LLM generation (affects output randomness)
+	 * Note: Only used by some providers
+	 */
+	temperature?: number
 }
 
 /**

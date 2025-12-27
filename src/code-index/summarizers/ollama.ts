@@ -12,17 +12,20 @@ export class OllamaSummarizer implements ISummarizer {
 	private readonly baseUrl: string
 	private readonly modelId: string
 	private readonly defaultLanguage: 'English' | 'Chinese'
+	private readonly temperature: number
 
 	constructor(
 		baseUrl: string = "http://localhost:11434",
 		modelId: string = "qwen3-vl:4b-instruct",
-		defaultLanguage: 'English' | 'Chinese' = 'English'
+		defaultLanguage: 'English' | 'Chinese' = 'English',
+		temperature: number = 0.3
 	) {
 		// Normalize the baseUrl by removing all trailing slashes
 		const normalizedBaseUrl = baseUrl.replace(/\/+$/, "")
 		this.baseUrl = normalizedBaseUrl
 		this.modelId = modelId
 		this.defaultLanguage = defaultLanguage
+		this.temperature = temperature
 	}
 
 	/**
@@ -64,7 +67,8 @@ export class OllamaSummarizer implements ISummarizer {
 					stream: false,
 					format: "json", // Request JSON output format
 					options: {
-						num_predict: 100
+						num_predict: 100,
+						temperature: this.temperature
 					}
 				}),
 				signal: controller.signal,

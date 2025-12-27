@@ -338,7 +338,8 @@ export class CodeIndexServiceFactory {
 			return new OllamaSummarizer(
 				config.ollamaBaseUrl || 'http://localhost:11434',
 				config.ollamaModelId || 'qwen3-vl:4b-instruct',
-				config.language || 'English'
+				config.language || 'English',
+				config.temperature ?? 0
 			)
 		}
 
@@ -347,7 +348,8 @@ export class CodeIndexServiceFactory {
 				config.openAiCompatibleBaseUrl || 'http://localhost:8080/v1',
 				config.openAiCompatibleModelId || 'gpt-4',
 				config.openAiCompatibleApiKey || '',
-				config.language || 'English'
+				config.language || 'English',
+				config.temperature ?? 0
 			)
 		}
 

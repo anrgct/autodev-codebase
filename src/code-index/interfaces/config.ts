@@ -169,6 +169,7 @@ export interface CodeIndexConfig {
 	summarizerOpenAiCompatibleModelId?: string
 	summarizerOpenAiCompatibleApiKey?: string
 	summarizerLanguage?: 'English' | 'Chinese'
+	summarizerTemperature?: number
 }
 
 /**
@@ -213,6 +214,7 @@ export type PreviousConfigSnapshot = {
 	summarizerOpenAiCompatibleModelId?: string
 	summarizerOpenAiCompatibleApiKey?: string
 	summarizerLanguage?: 'English' | 'Chinese'
+	summarizerTemperature?: number
 }
 
 /**
@@ -274,4 +276,5 @@ export interface ConfigSnapshot {
 	summarizerOpenAiCompatibleModelId?: string
 	summarizerOpenAiCompatibleApiKey?: string
 	summarizerLanguage?: 'English' | 'Chinese'
+	summarizerTemperature?: number
 }

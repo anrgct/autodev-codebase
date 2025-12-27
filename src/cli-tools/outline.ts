@@ -11,7 +11,7 @@
  *   codebase --outline <file> --summarize --json  # JSON with summaries
  */
 
-import { IFileSystem, IPathUtils, IWorkspace } from '../abstractions';
+import { IFileSystem, IPathUtils, IWorkspace, IStorage } from '../abstractions';
 import { loadRequiredLanguageParsers } from '../tree-sitter/languageParser';
 import { parseMarkdown } from '../tree-sitter/markdownParser';
 import { getMinComponentLines } from '../tree-sitter';
@@ -21,6 +21,7 @@ import { CodeIndexConfigManager } from '../code-index/config-manager';
 import { CacheManager } from '../code-index/cache-manager';
 import { ISummarizer, SummarizerRequest } from '../code-index/interfaces';
 import type { SummarizerConfig } from '../code-index/interfaces';
+import { SummaryCacheManager } from './summary-cache';
 import * as path from 'path';
 
 /**
@@ -186,56 +187,16 @@ async function getOutlineAsText(
 		return renderDefinitionsAsText(outlineData);
 	}
 
-	// 4. Generate summaries
-	const config = await loadSummarizerConfig(workspacePath, configPath);
-	const language = config?.language || 'English';
-
-	// 4.1 Generate file-level summary
-	try {
-		const fileSummaryResult = await summarizer.summarize({
-			content: outlineData.documentContent,
-			document: outlineData.documentContent,
-			language,
-			codeType: 'file',
-			codeName: pathUtils.basename(filePath),
-			filePath: outlineData.filePath
-		});
-		outlineData.fileSummary = fileSummaryResult.summary;
-	} catch (error) {
-		const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-		if (logger?.warn) logger.warn(`Warning: Failed to summarize file: ${errorMsg}`);
-		else logger?.error(`Warning: Failed to summarize file: ${errorMsg}`);
-		// File summary failure is not fatal, continue with definition summaries
-	}
-
-	// 4.2 Generate summaries for each definition
-	for (const def of outlineData.definitions) {
-		try {
-			// Skip very large blocks (>1000 lines) to avoid timeout
-			// Note: startLine/endLine are 1-based and inclusive, so actual line count = end - start + 1
-			const lineCount = def.endLine - def.startLine + 1;
-			if (lineCount > 1000) {
-				def.summary = `[Code too large to summarize (${lineCount} lines)]`;
-				continue;
-			}
-
-			const result = await summarizer.summarize({
-				content: def.fullText,
-				document: outlineData.documentContent,  // Pass full document context
-				language,
-				codeType: def.type,
-				codeName: def.name,
-				filePath: outlineData.filePath
-			});
-
-			def.summary = result.summary;
-		} catch (error) {
-			const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-			if (logger?.warn) logger.warn(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
-			else logger?.error(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
-			def.summary = `[Summary failed: ${errorMsg}]`;
-		}
-	}
+	// 4. Apply cache and generate summaries
+	await applySummaryCache(
+		outlineData,
+		filePath,
+		workspacePath,
+		summarizer,
+		fileSystem,
+		pathUtils,
+		logger
+	);
 
 	// 5. Render with summaries
 	return renderDefinitionsAsText(outlineData);
@@ -280,54 +241,16 @@ async function getOutlineAsJson(
 	if (summarize) {
 		const summarizer = await createSummarizerForOutline(workspacePath, configPath);
 		if (summarizer) {
-			const config = await loadSummarizerConfig(workspacePath, configPath);
-			const language = config?.language || 'English';
-
-			// 2.1 Generate file-level summary
-			try {
-				const fileSummaryResult = await summarizer.summarize({
-					content: outlineData.documentContent,
-					document: outlineData.documentContent,
-					language,
-					codeType: 'file',
-					codeName: pathUtils.basename(filePath),
-					filePath: outlineData.filePath
-				});
-				outlineData.fileSummary = fileSummaryResult.summary;
-			} catch (error) {
-				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-				if (logger?.warn) logger.warn(`Warning: Failed to summarize file: ${errorMsg}`);
-				else logger?.error(`Warning: Failed to summarize file: ${errorMsg}`);
-				// File summary failure is not fatal, continue with definition summaries
-			}
-
-			// 2.2 Generate summaries for each definition
-			for (const def of outlineData.definitions) {
-				try {
-					// Note: startLine/endLine are 1-based and inclusive, so actual line count = end - start + 1
-					const lineCount = def.endLine - def.startLine + 1;
-					if (lineCount > 1000) {
-						def.summary = `[Code too large to summarize (${lineCount} lines)]`;
-						continue;
-					}
-
-					const result = await summarizer.summarize({
-						content: def.fullText,
-						document: outlineData.documentContent,  // Pass full document context
-						language,
-						codeType: def.type,
-						codeName: def.name,
-						filePath: outlineData.filePath
-					});
-
-					def.summary = result.summary;
-				} catch (error) {
-					const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-					if (logger?.warn) logger.warn(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
-					else logger?.error(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
-					def.summary = `[Summary failed: ${errorMsg}]`;
-				}
-			}
+			// Apply cache and generate summaries
+			await applySummaryCache(
+				outlineData,
+				filePath,
+				workspacePath,
+				summarizer,
+				fileSystem,
+				pathUtils,
+				logger
+			);
 		} else {
 			if (logger?.warn) logger.warn('Warning: Summarizer not configured. Continuing without summaries.');
 		}
@@ -587,6 +510,31 @@ function renderDefinitionsAsJson(outlineData: OutlineData): string {
 }
 
 /**
+ * Creates a storage abstraction for the outline tool.
+ */
+async function createStorageForOutline(workspacePath: string): Promise<IStorage> {
+	const { createNodeDependencies } = await import('../adapters/nodejs');
+
+	const deps = createNodeDependencies({
+		workspacePath,
+		storageOptions: {
+			globalStoragePath: workspacePath
+		},
+		loggerOptions: {
+			name: 'Outline',
+			level: 'error',
+			timestamps: false,
+			colors: false
+		},
+		configOptions: {}
+	});
+
+	await deps.configProvider.loadConfig();
+
+	return deps.storage;
+}
+
+/**
  * Creates a summarizer instance for the outline tool.
  */
 async function createSummarizerForOutline(
@@ -665,4 +613,133 @@ async function loadSummarizerConfig(
 	} catch (error) {
 		return undefined;
 	}
+}
+
+/**
+ * Applies summary cache and generates new summaries if needed.
+ * This is a shared utility for both text and JSON outline generation.
+ */
+async function applySummaryCache(
+	outlineData: OutlineData,
+	filePath: string,
+	workspacePath: string,
+	summarizer: ISummarizer,
+	fileSystem: IFileSystem,
+	pathUtils: IPathUtils,
+	logger?: {
+		info: (message: string) => void;
+		error: (message: string) => void;
+		warn?: (message: string) => void;
+	}
+): Promise<void> {
+	// 1. Load cache configuration
+	const config = await loadSummarizerConfig(workspacePath);
+	if (!config) {
+		if (logger?.warn) {
+			logger.warn('Warning: Summarizer config not found. Skipping cache.');
+		}
+		return;
+	}
+
+	const cacheManager = new SummaryCacheManager(
+		workspacePath,
+		await createStorageForOutline(workspacePath),
+		fileSystem,
+		logger
+	);
+
+	// 2. Preserve lineContent mapping before cache update
+	const lineContentMap = new Map<string, string>();
+	for (const def of outlineData.definitions) {
+		lineContentMap.set(`${def.name}-${def.startLine}`, def.lineContent);
+	}
+
+	// 3. Filter blocks needing summarization
+	const cacheResult = await cacheManager.filterBlocksNeedingSummarization(
+		filePath,
+		outlineData.documentContent,
+		outlineData.definitions,
+		config
+	);
+
+	// 4. Update outline data with cached summaries (preserve lineContent)
+	outlineData.definitions = cacheResult.blocks.map(block => ({
+		...block,
+		lineContent: lineContentMap.get(`${block.name}-${block.startLine}`) || ''
+	}));
+	outlineData.fileSummary = cacheResult.fileSummary;
+
+	// 5. Log cache statistics
+	logger?.info(
+		`Cache stats: ${(cacheResult.stats.hitRate * 100).toFixed(1)}% hit rate ` +
+		`(${cacheResult.stats.cachedBlocks}/${cacheResult.stats.totalBlocks} blocks)` +
+		(cacheResult.stats.invalidReason ? ` [${cacheResult.stats.invalidReason}]` : '')
+	);
+
+	// 6. Generate new summaries only for blocks that need them
+	if (cacheResult.stats.hitRate < 1) {
+		const language = config?.language || 'English';
+
+		// 6.1 Generate file-level summary if needed
+		if (!cacheResult.fileSummary) {
+			try {
+				const fileSummaryResult = await summarizer.summarize({
+					content: outlineData.documentContent,
+					document: outlineData.documentContent,
+					language,
+					codeType: 'file',
+					codeName: pathUtils.basename(filePath),
+					filePath: outlineData.filePath
+				});
+				outlineData.fileSummary = fileSummaryResult.summary;
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+				if (logger?.warn) logger.warn(`Warning: Failed to summarize file: ${errorMsg}`);
+				else logger?.error(`Warning: Failed to summarize file: ${errorMsg}`);
+			}
+		}
+
+		// 6.2 Generate summaries for blocks that need it
+		for (const def of outlineData.definitions) {
+			// Skip if already has cached summary
+			if (def.summary) continue;
+
+			try {
+				// Skip very large blocks (>1000 lines) to avoid timeout
+				const lineCount = def.endLine - def.startLine + 1;
+				if (lineCount > 1000) {
+					def.summary = `[Code too large to summarize (${lineCount} lines)]`;
+					continue;
+				}
+
+				const result = await summarizer.summarize({
+					content: def.fullText,
+					document: outlineData.documentContent,
+					language,
+					codeType: def.type,
+					codeName: def.name,
+					filePath: outlineData.filePath
+				});
+
+				def.summary = result.summary;
+			} catch (error) {
+				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+				if (logger?.warn) logger.warn(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
+				else logger?.error(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
+				def.summary = `[Summary failed: ${errorMsg}]`;
+			}
+		}
+
+		// 7. Update cache with new summaries
+		await cacheManager.updateCache(
+			filePath,
+			outlineData.documentContent,
+			outlineData.definitions,
+			outlineData.fileSummary,
+			config
+		);
+	}
+
+	// 8. Clean up orphaned caches (run on every summarize call)
+	cacheManager.cleanOrphanedCaches().catch(() => {});
 }

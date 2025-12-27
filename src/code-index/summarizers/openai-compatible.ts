@@ -14,12 +14,14 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 	private readonly modelId: string
 	private readonly apiKey: string
 	private readonly defaultLanguage: 'English' | 'Chinese'
+	private readonly temperature: number
 
 	constructor(
 		baseUrl: string = "http://localhost:8080/v1",
 		modelId: string = "gpt-4",
 		apiKey: string = "",
-		defaultLanguage: 'English' | 'Chinese' = 'English'
+		defaultLanguage: 'English' | 'Chinese' = 'English',
+		temperature: number = 0.3
 	) {
 		// Normalize the baseUrl by removing all trailing slashes
 		const normalizedBaseUrl = baseUrl.replace(/\/+$/, "")
@@ -27,6 +29,7 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 		this.modelId = modelId
 		this.apiKey = apiKey
 		this.defaultLanguage = defaultLanguage
+		this.temperature = temperature
 	}
 
 	/**
@@ -78,7 +81,7 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 						}
 					],
 					stream: false,
-					temperature: 0,
+					temperature: this.temperature,
 					max_tokens: 150
 				}),
 				signal: controller.signal,
