@@ -60,6 +60,5 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    external: ['vscode', '@types/vscode']
   }
 })

@@ -97,7 +97,9 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 	// Check if file exists
 	const exists = await fileSystem.exists(targetPath);
 	if (!exists) {
-		throw new Error(`File not found: ${targetPath}`);
+		const errorMsg = `File not found: ${targetPath}`;
+		logger?.error(errorMsg);
+		throw new Error(errorMsg);
 	}
 
 	// Check if file should be ignored (if workspace is provided and skipIgnoreCheck is false)
