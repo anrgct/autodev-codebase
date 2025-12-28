@@ -558,14 +558,15 @@ export class SummaryCacheManager {
 				const entries = await this.fileSystem.readdir(dir);
 
 				for (const entry of entries) {
-					const fullPath = path.join(dir, entry);
+					// Note: Node.js readdir returns full paths, not just names
+					const fullPath = entry;
 
 					try {
 						const stat = await this.fileSystem.stat(fullPath);
 
 						if (stat.isDirectory) {
 							await scanDir(fullPath);
-						} else if (entry.endsWith('.summary.json')) {
+						} else if (fullPath.endsWith('.summary.json')) {
 							try {
 								const content = await this.fileSystem.readFile(fullPath);
 								const cache = JSON.parse(new TextDecoder().decode(content)) as SummaryCache;
@@ -597,5 +598,66 @@ export class SummaryCacheManager {
 		}
 
 		return removed;
+	}
+
+	/**
+	 * Clear all summary caches for the current project
+	 *
+	 * Deletes the entire project cache directory.
+	 * This is useful when you want to force regenerate all AI summaries.
+	 *
+	 * @returns Number of cache files deleted (or -1 if directory was removed)
+	 */
+	async clearAllCaches(): Promise<number> {
+		const projectHash = createHash('sha256')
+			.update(this.workspacePath)
+			.digest('hex')
+			.substring(0, 16);
+
+		const projectCacheDir = path.join(
+			this.storage.getCacheBasePath(),
+			'summary-cache',
+			projectHash
+		);
+
+		try {
+			const exists = await this.fileSystem.exists(projectCacheDir);
+			if (!exists) {
+				return 0;
+			}
+
+			// Count files before deletion
+			let fileCount = 0;
+			const countFiles = async (dir: string): Promise<void> => {
+				try {
+					const entries = await this.fileSystem.readdir(dir);
+					for (const entry of entries) {
+						const stat = await this.fileSystem.stat(entry);
+						if (stat.isDirectory) {
+							await countFiles(entry);
+						} else {
+							fileCount++;
+						}
+					}
+				} catch {
+					// Ignore errors during counting
+				}
+			};
+			await countFiles(projectCacheDir);
+
+			// Delete the entire project cache directory
+			const { promises: fs } = await import('fs');
+			await fs.rm(projectCacheDir, { recursive: true, force: true });
+
+			if (fileCount > 0) {
+				this.logger?.info?.(`Cleared ${fileCount} summary cache files`);
+			}
+
+			return fileCount;
+		} catch (error) {
+			const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+			this.logger?.error?.(`Failed to clear cache: ${errorMsg}`);
+			return 0;
+		}
 	}
 }

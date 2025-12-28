@@ -256,6 +256,7 @@ interface SimpleCliOptions {
   'min-score'?: string;
   outline?: string;
   summarize?: boolean;
+  clearSummarizeCache?: boolean;
   dryRun?: boolean;
 }
 
@@ -271,6 +272,7 @@ const { values, positionals } = parseArgs({
     clear: { type: 'boolean' },
     outline: { type: 'string' },
     summarize: { type: 'boolean' },
+    'clear-summarize-cache': { type: 'boolean' },
     // Path and config options
     path: { type: 'string', short: 'p', default: '.' },
     config: { type: 'string', short: 'c' },
@@ -319,6 +321,7 @@ Usage:
   codebase --search="query"      Search the index (short: -q)
   codebase --outline <file>      Extract code outline from a file
   codebase --clear               Clear index data
+  codebase --clear-summarize-cache Clear all summary caches for current project
   codebase --get-config [items...] View all config layers (default → global → project → effective)
   codebase --set-config k=v,...  Set project configuration (also updates Git global ignore)
   codebase --help                Show this help
@@ -369,6 +372,7 @@ Options:
                                 - Supports: ** (recursive), * (single-level), {a,b} (braces), !prefix (exclude)
                                 Shows code structure with line ranges (e.g., 15--26)
                                 Add --summarize to generate AI summaries for each code block
+                                Add --clear-summarize-cache to clear all caches before regenerating summaries
                                 Add --json for detailed JSON output with metadata
                                 Add --dry-run to preview matched files without extracting
                                 Note: Glob patterns respect .gitignore/.rooignore/.codebaseignore,
@@ -380,6 +384,7 @@ Options:
                                   --outline "src/**/*.ts,!**/*.test.ts"                    # include + exclude
                                   --outline "{src,test}/**/*.ts,!**/*.{test,spec}.ts"      # braces + exclusion
                                   --outline "src/**/*.ts" --dry-run                        # preview matched files
+                                  --outline src/index.ts --summarize --clear-summarize-cache # regenerate summaries
   --dry-run                      Preview files matched by the outline pattern without extracting
                                 Lists all files that would be processed, useful for verifying filters
                                 Must be used with --outline
@@ -415,6 +420,13 @@ Examples:
   # Extract code outline with AI summaries
   codebase --outline src/index.ts --summarize
   codebase --outline lib/utils.py --summarize --json
+
+  # Clear summary caches
+  codebase --clear-summarize-cache
+  codebase --clear-summarize-cache --path=/my/project
+
+  # Clear summary cache and regenerate
+  codebase --outline src/index.ts --summarize --clear-summarize-cache
 
   # Clear index
   codebase --clear --path=/my/project
@@ -480,6 +492,7 @@ function resolveOptions(): SimpleCliOptions {
     'min-score': values['min-score'],
     outline: values.outline,
     summarize: !!values.summarize,
+    clearSummarizeCache: !!values['clear-summarize-cache'],
     dryRun: !!values['dry-run'],
   };
 }
@@ -848,6 +861,38 @@ async function clearIndex(options: SimpleCliOptions): Promise<void> {
   getLogger().info('Clearing index data...');
   await manager.clearIndexData();
   getLogger().info('Index data cleared successfully');
+}
+
+/**
+ * Clear all summary caches for the current project
+ */
+async function clearSummarizeCache(options: SimpleCliOptions): Promise<void> {
+  getLogger().info('Clear summarize cache mode');
+  getLogger().info(`Workspace: ${options.path}`);
+
+  // Create dependencies
+  const dependencies = createDependencies(options);
+
+  // Import SummaryCacheManager
+  const { SummaryCacheManager } = await import('./cli-tools/summary-cache');
+
+  // Create cache manager
+  const cacheManager = new SummaryCacheManager(
+    options.path,
+    dependencies.storage,
+    dependencies.fileSystem,
+    {
+      info: (msg: string) => getLogger().info(msg),
+      error: (msg: string) => getLogger().error(msg),
+      warn: (msg: string) => getLogger().warn(msg)
+    }
+  );
+
+  const removed = await cacheManager.clearAllCaches();
+
+  if (removed === 0) {
+    getLogger().info('No summary caches found');
+  }
 }
 
 /**
@@ -1386,6 +1431,7 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
               workspacePath,
               json: options.json,
               summarize: options.summarize,
+              clearSummarizeCache: options.clearSummarizeCache,
               configPath,
               fileSystem: deps.fileSystem,
               workspace,
@@ -1451,6 +1497,7 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
               workspacePath,
               json: options.json,
               summarize: options.summarize,
+              clearSummarizeCache: options.clearSummarizeCache,
               configPath,
               fileSystem: deps.fileSystem,
               workspace,
@@ -1475,6 +1522,7 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
         workspacePath,
         json: options.json,
         summarize: options.summarize,
+        clearSummarizeCache: options.clearSummarizeCache,
         configPath,
         fileSystem: deps.fileSystem,
         workspace,
@@ -1547,6 +1595,8 @@ async function main(): Promise<void> {
       await handleOutlineCommand(values.outline, options);
     } else if (values.clear) {
       await clearIndex(options);
+    } else if (values['clear-summarize-cache']) {
+      await clearSummarizeCache(options);
     } else {
       printHelp();
       process.exit(0);

@@ -37,6 +37,8 @@ export interface OutlineOptions {
 	json: boolean;
 	/** Whether to generate AI summaries */
 	summarize?: boolean;
+	/** Whether to clear all summary caches before generating */
+	clearSummarizeCache?: boolean;
 	/** Optional config path (respects `--config`) */
 	configPath?: string;
 	/** File system abstraction */
@@ -87,7 +89,7 @@ interface OutlineData {
  * @returns Formatted outline (text or JSON)
  */
 export async function extractOutline(options: OutlineOptions): Promise<string> {
-	const { filePath, workspacePath, json, summarize, configPath, fileSystem, pathUtils, logger } = options;
+	const { filePath, workspacePath, json, summarize, clearSummarizeCache, configPath, fileSystem, pathUtils, logger } = options;
 
 	// Resolve target path (handle both absolute and relative paths)
 	let targetPath = filePath;
@@ -110,7 +112,7 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 
 	// Return output based on format
 	if (json) {
-		const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, configPath, logger);
+		const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, clearSummarizeCache, configPath, logger);
 		return output;
 	} else {
 		const output = await getOutlineAsText(
@@ -120,6 +122,7 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 			fileSystem,
 			pathUtils,
 			summarize,
+			clearSummarizeCache,
 			configPath,
 			logger
 		);
@@ -158,6 +161,7 @@ async function getOutlineAsText(
 	fileSystem: IFileSystem,
 	pathUtils: IPathUtils,
 	summarize?: boolean,
+	clearSummarizeCache?: boolean,
 	configPath?: string,
 	logger?: {
 		info: (message: string) => void;
@@ -198,6 +202,7 @@ async function getOutlineAsText(
 		summarizer,
 		fileSystem,
 		pathUtils,
+		clearSummarizeCache,
 		logger
 	);
 
@@ -221,6 +226,7 @@ async function getOutlineAsJson(
 	pathUtils: IPathUtils,
 	workspacePath: string,
 	summarize?: boolean,
+	clearSummarizeCache?: boolean,
 	configPath?: string,
 	logger?: {
 		info: (message: string) => void;
@@ -252,6 +258,7 @@ async function getOutlineAsJson(
 				summarizer,
 				fileSystem,
 				pathUtils,
+				clearSummarizeCache,
 				logger
 			);
 		} else {
@@ -789,6 +796,7 @@ async function applySummaryCache(
 	summarizer: ISummarizer,
 	fileSystem: IFileSystem,
 	pathUtils: IPathUtils,
+	clearSummarizeCache?: boolean,
 	logger?: {
 		info: (message: string) => void;
 		error: (message: string) => void;
@@ -811,13 +819,20 @@ async function applySummaryCache(
 		logger
 	);
 
-	// 2. Preserve lineContent mapping before cache update
+	// 2. Clear all caches if requested
+	if (clearSummarizeCache) {
+		logger?.info('Clearing all summary caches...');
+		const removed = await cacheManager.clearAllCaches();
+		logger?.info(`Cleared ${removed} cache file(s)`);
+	}
+
+	// 3. Preserve lineContent mapping before cache update
 	const lineContentMap = new Map<string, string>();
 	for (const def of outlineData.definitions) {
 		lineContentMap.set(`${def.name}-${def.startLine}`, def.lineContent);
 	}
 
-	// 3. Filter blocks needing summarization
+	// 4. Filter blocks needing summarization
 	const cacheResult = await cacheManager.filterBlocksNeedingSummarization(
 		filePath,
 		outlineData.documentContent,
