@@ -38,6 +38,7 @@ describe("RooIgnoreController", () => {
 			getIgnoreRules: vi.fn().mockReturnValue([]),
 			shouldIgnore: vi.fn().mockResolvedValue(false),
 			getName: vi.fn().mockReturnValue('test'),
+			getGlobIgnorePatterns: vi.fn().mockResolvedValue([]),
 		} as Mocked<IWorkspace>
 
 		// Setup mock path utils
