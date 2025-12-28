@@ -1440,7 +1440,7 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
             });
 
             console.log(result);
-            console.log('===\n');
+            console.log('\n---\n');
           } catch (error) {
             // Skip failed files but continue processing others
             if (error instanceof Error) {
@@ -1506,7 +1506,7 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
             });
 
             console.log(result);
-            console.log('===\n');
+            console.log('\n---\n');
           } catch (error) {
             // Skip failed files but continue processing others
             if (error instanceof Error) {

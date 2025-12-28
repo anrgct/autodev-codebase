@@ -71,3 +71,4 @@ dev-debug.log
 # tasks/
 
 command-history.sh
+.rooignore

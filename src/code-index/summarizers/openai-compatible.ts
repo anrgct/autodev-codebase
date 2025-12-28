@@ -146,10 +146,14 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 		}
 
 		prompt += `IMPORTANT: Respond with ONLY the JSON object, no extra text.\n\n`
-		
-		// Build return format with explicit desc1, desc2, ..., descN
-		const descs = Array.from({length: blocks.length}, (_, i) => `"desc${i + 1}"`).join(', ')
-		prompt += `Return format: {"summaries": [${descs}]} (${blocks.length} descriptions required, one-to-one mapping)`
+
+		// Different format for single vs multiple blocks
+		if (blocks.length === 1) {
+			prompt += `Return format: {"summaries": "description"} (single string)\n`
+		} else {
+			const descs = Array.from({length: blocks.length}, (_, i) => `"desc${i + 1}"`).join(', ')
+			prompt += `Return format: {"summaries": [${descs}]} (${blocks.length} descriptions)\n`
+		}
 
 		return prompt
 	}
@@ -267,20 +271,28 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 				}
 			}
 
-			if (!parsedResponse.summaries || !Array.isArray(parsedResponse.summaries)) {
-				throw new Error(`Invalid batch response format: missing 'summaries' array`)
+			// Validate response format - support both array and string (for single block with small models)
+			let summariesArray: string[] = []
+			
+			if (typeof parsedResponse.summaries === 'string') {
+				// Small model may return {"summaries": "desc"} instead of {"summaries": ["desc"]}
+				summariesArray = [parsedResponse.summaries]
+			} else if (Array.isArray(parsedResponse.summaries)) {
+				summariesArray = parsedResponse.summaries
+			} else {
+				throw new Error(`Invalid batch response format: 'summaries' must be array or string`)
 			}
 
 			// Validate response length matches request length
-			if (parsedResponse.summaries.length !== request.blocks.length) {
+			if (summariesArray.length !== request.blocks.length) {
 				throw new Error(
-					`Batch response length mismatch: expected ${request.blocks.length}, got ${parsedResponse.summaries.length}`
+					`Batch response length mismatch: expected ${request.blocks.length}, got ${summariesArray.length}`
 				)
 			}
 
 			// Transform response to SummarizerBatchResult format
-			const summaries = parsedResponse.summaries.map((item: any) => {
-				const text = typeof item === 'string' ? item : item.summary
+			const summaries = summariesArray.map((item: any) => {
+				const text = typeof item === 'string' ? item : (item.desc1 || item.summary || '')
 				return {
 					summary: text.trim(),
 					language: request.language

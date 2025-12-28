@@ -140,7 +140,8 @@ describe("FileWatcher", () => {
 			shouldIgnore: vi.fn().mockResolvedValue(false),
 			getName: vi.fn().mockReturnValue('test'),
 			findFiles: vi.fn().mockResolvedValue([]),
-		} as IWorkspace
+			getGlobIgnorePatterns: vi.fn().mockResolvedValue([]),
+		} as unknown as IWorkspace
 		mockPathUtils = {
 			join: vi.fn().mockImplementation((...paths) => paths.join("/")),
 			dirname: vi.fn().mockReturnValue("/mock/workspace"),
