@@ -19,10 +19,11 @@ import { createNodeDependencies } from '../adapters/nodejs';
 import { CodeIndexServiceFactory } from '../code-index/service-factory';
 import { CodeIndexConfigManager } from '../code-index/config-manager';
 import { CacheManager } from '../code-index/cache-manager';
-import { ISummarizer, SummarizerRequest } from '../code-index/interfaces';
+import { ISummarizer, SummarizerRequest, SummarizerBatchRequest, SummarizerBatchResult } from '../code-index/interfaces';
 import type { SummarizerConfig } from '../code-index/interfaces';
 import { SummaryCacheManager } from './summary-cache';
 import * as path from 'path';
+import { DEFAULT_CONFIG } from '../code-index/constants';
 
 /**
  * Options for outline extraction
@@ -621,6 +622,166 @@ async function loadSummarizerConfig(
  * Applies summary cache and generates new summaries if needed.
  * This is a shared utility for both text and JSON outline generation.
  */
+
+/**
+ * Batch summarization with concurrency control and retry logic
+ * Processes code blocks in batches with configurable concurrency and retry behavior
+ */
+async function generateSummariesWithRetry(
+	summarizer: ISummarizer,
+	blocksNeedingSummaries: Array<{
+		definition: OutlineDefinition;
+		request: SummarizerRequest;
+	}>,
+	config: SummarizerConfig,
+	logger?: {
+		info: (message: string) => void;
+		error: (message: string) => void;
+		warn?: (message: string) => void;
+	}
+): Promise<void> {
+	// Get batch processing configuration from config or use defaults
+	const batchSize = config.batchSize ?? DEFAULT_CONFIG.summarizerBatchSize;
+	const concurrency = config.concurrency ?? DEFAULT_CONFIG.summarizerConcurrency;
+	const maxRetries = config.maxRetries ?? DEFAULT_CONFIG.summarizerMaxRetries;
+	const retryDelayMs = config.retryDelayMs ?? DEFAULT_CONFIG.summarizerRetryDelayMs;
+
+	// Validate configuration values to prevent infinite loops and type errors
+	// Use Number.isFinite() to check for valid finite numbers (not NaN, Infinity, or non-numeric)
+	const validatedBatchSize = (Number.isFinite(batchSize) && (batchSize ?? 0) > 0 ? Math.floor(batchSize!) : DEFAULT_CONFIG.summarizerBatchSize) as number;
+	const validatedConcurrency = (Number.isFinite(concurrency) && (concurrency ?? 0) > 0 ? Math.floor(concurrency!) : DEFAULT_CONFIG.summarizerConcurrency) as number;
+	const validatedMaxRetries = (Number.isFinite(maxRetries) && (maxRetries ?? -1) >= 0 ? Math.floor(maxRetries!) : DEFAULT_CONFIG.summarizerMaxRetries) as number;
+	const validatedRetryDelayMs = (Number.isFinite(retryDelayMs) && (retryDelayMs ?? -1) >= 0 ? Math.floor(retryDelayMs!) : DEFAULT_CONFIG.summarizerRetryDelayMs) as number;
+
+	// Warn if configuration values were invalid and had to be corrected
+	if (validatedBatchSize !== batchSize || validatedConcurrency !== concurrency || 
+		validatedMaxRetries !== maxRetries || validatedRetryDelayMs !== retryDelayMs) {
+		if (logger?.warn) {
+			logger.warn(
+				`Invalid summarizer batch config detected. Using corrected values: ` +
+				`batchSize=${validatedBatchSize}, concurrency=${validatedConcurrency}, ` +
+				`maxRetries=${validatedMaxRetries}, retryDelayMs=${validatedRetryDelayMs}`
+			);
+		}
+	}
+
+	// Group blocks into batches
+	const batches: Array<typeof blocksNeedingSummaries> = [];
+	for (let i = 0; i < blocksNeedingSummaries.length; i += validatedBatchSize) {
+		batches.push(blocksNeedingSummaries.slice(i, i + validatedBatchSize));
+	}
+
+	logger?.info(
+		`Processing ${blocksNeedingSummaries.length} blocks in ${batches.length} batches ` +
+		`(batch size: ${validatedBatchSize}, concurrency: ${validatedConcurrency}, max retries: ${validatedMaxRetries})`
+	);
+
+	// Process batches with concurrency control
+	let completedBatches = 0;
+	const processBatch = async (batch: typeof blocksNeedingSummaries, batchIndex: number): Promise<void> => {
+		let attempt = 0;
+		let lastError: Error | null = null;
+
+		while (attempt < validatedMaxRetries) {
+			try {
+				// Try batch processing first
+				const batchRequest: SummarizerBatchRequest = {
+					document: batch[0].request.document, // Shared context
+					filePath: batch[0].request.filePath, // Shared context
+					blocks: batch.map(b => ({
+						content: b.request.content,
+						codeType: b.request.codeType,
+						codeName: b.request.codeName
+					})),
+					language: batch[0].request.language as 'English' | 'Chinese'
+				};
+
+				const result: SummarizerBatchResult = await summarizer.summarizeBatch(batchRequest);
+
+				// Update summaries
+				for (let i = 0; i < batch.length; i++) {
+					batch[i].definition.summary = result.summaries[i].summary;
+				}
+
+				completedBatches++;
+				if (completedBatches % 5 === 0 || completedBatches === batches.length) {
+					if (logger?.info) {
+						logger.info(`Progress: ${completedBatches}/${batches.length} batches completed`);
+					}
+				}
+				return; // Success, exit retry loop
+			} catch (error) {
+				lastError = error instanceof Error ? error : new Error(String(error));
+				attempt++;
+
+				if (attempt < validatedMaxRetries) {
+					// Exponential backoff
+					const delay = validatedRetryDelayMs * Math.pow(2, attempt - 1);
+					if (logger?.warn) {
+						logger.warn(
+							`Batch ${batchIndex + 1} failed (attempt ${attempt}/${validatedMaxRetries}): ` +
+							`${lastError.message}. Retrying in ${delay}ms...`
+						);
+					}
+					await new Promise(resolve => setTimeout(resolve, delay));
+				} else {
+					// Max retries reached, fall back to individual processing
+					if (logger?.warn) {
+						logger.warn(
+							`Batch ${batchIndex + 1} failed after ${validatedMaxRetries} attempts. ` +
+							`Falling back to individual processing...`
+						);
+					}
+
+					for (const item of batch) {
+						let individualAttempt = 0;
+						while (individualAttempt < validatedMaxRetries) {
+							try {
+								const result = await summarizer.summarize(item.request);
+								item.definition.summary = result.summary;
+								break;
+							} catch (individualError) {
+								individualAttempt++;
+								if (individualAttempt < validatedMaxRetries) {
+									const delay = validatedRetryDelayMs * Math.pow(2, individualAttempt - 1);
+									await new Promise(resolve => setTimeout(resolve, delay));
+								} else {
+									const errorMsg = individualError instanceof Error
+										? individualError.message
+										: 'Unknown error';
+									item.definition.summary = `[Summary failed: ${errorMsg}]`;
+									if (logger?.warn) {
+										logger.warn(
+											`Failed to summarize ${item.request.codeType} ${item.request.codeName || ''}: ${errorMsg}`
+										);
+									}
+								}
+							}
+						}
+					}
+
+					completedBatches++;
+					if (completedBatches % 5 === 0 || completedBatches === batches.length) {
+						if (logger?.info) {
+							logger.info(`Progress: ${completedBatches}/${batches.length} batches completed`);
+						}
+					}
+				}
+			}
+		}
+	};
+
+	// Process batches with concurrency control
+	const processBatchesWithConcurrency = async () => {
+		for (let i = 0; i < batches.length; i += validatedConcurrency) {
+			const batchGroup = batches.slice(i, i + validatedConcurrency);
+			await Promise.all(batchGroup.map((batch, idx) => processBatch(batch, i + idx)));
+		}
+	};
+
+	await processBatchesWithConcurrency();
+}
+
 async function applySummaryCache(
 	outlineData: OutlineData,
 	filePath: string,
@@ -701,35 +862,39 @@ async function applySummaryCache(
 			}
 		}
 
-		// 6.2 Generate summaries for blocks that need it
+		// 6.2 Collect blocks needing summaries (excluding very large blocks)
+		const blocksNeedingSummaries: Array<{
+			definition: OutlineDefinition;
+			request: SummarizerRequest;
+		}> = [];
+
 		for (const def of outlineData.definitions) {
 			// Skip if already has cached summary
 			if (def.summary) continue;
 
-			try {
-				// Skip very large blocks (>1000 lines) to avoid timeout
-				const lineCount = def.endLine - def.startLine + 1;
-				if (lineCount > 1000) {
-					def.summary = `[Code too large to summarize (${lineCount} lines)]`;
-					continue;
-				}
+			// Skip very large blocks (>1000 lines) to avoid timeout
+			const lineCount = def.endLine - def.startLine + 1;
+			if (lineCount > 1000) {
+				def.summary = `[Code too large to summarize (${lineCount} lines)]`;
+				continue;
+			}
 
-				const result = await summarizer.summarize({
+			blocksNeedingSummaries.push({
+				definition: def,
+				request: {
 					content: def.fullText,
 					document: outlineData.documentContent,
 					language,
 					codeType: def.type,
 					codeName: def.name,
 					filePath: outlineData.filePath
-				});
+				}
+			});
+		}
 
-				def.summary = result.summary;
-			} catch (error) {
-				const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-				if (logger?.warn) logger.warn(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
-				else logger?.error(`Warning: Failed to summarize ${def.type} ${def.name}: ${errorMsg}`);
-				def.summary = `[Summary failed: ${errorMsg}]`;
-			}
+		// 6.3 Generate summaries in batches with concurrency control
+		if (blocksNeedingSummaries.length > 0) {
+			await generateSummariesWithRetry(summarizer, blocksNeedingSummaries, config, logger);
 		}
 
 		// 7. Update cache with new summaries

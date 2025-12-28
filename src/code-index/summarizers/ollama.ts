@@ -1,4 +1,4 @@
-import { ISummarizer, SummarizerRequest, SummarizerResult, SummarizerInfo } from "../interfaces"
+import { ISummarizer, SummarizerRequest, SummarizerResult, SummarizerInfo, SummarizerBatchRequest, SummarizerBatchResult } from "../interfaces"
 import { fetch, ProxyAgent } from "undici"
 
 // Timeout constants for Ollama API requests
@@ -30,8 +30,133 @@ export class OllamaSummarizer implements ISummarizer {
 
 	/**
 	 * Generate a summary for the given code content
+	 * Internally delegates to summarizeBatch() for unified processing
 	 */
 	async summarize(request: SummarizerRequest): Promise<SummarizerResult> {
+		// Wrap single request as a batch of one
+		const batchRequest: SummarizerBatchRequest = {
+			document: request.document,
+			filePath: request.filePath,
+			blocks: [{
+				content: request.content,
+				codeType: request.codeType,
+				codeName: request.codeName
+			}],
+			language: request.language
+		}
+
+		const result = await this.summarizeBatch(batchRequest)
+		return result.summaries[0]
+	}
+
+	/**
+	 * Builds a unified batch prompt for summarizing code blocks
+	 * Works for both single and batch requests
+	 */
+	private buildPrompt(request: SummarizerBatchRequest): string {
+		const { blocks, language, document, filePath } = request
+
+		// Unified English prompt template
+		let prompt = `Generate semantic descriptions for the following code snippets:\n\n`
+
+		// Add shared context once at the beginning
+		if (filePath) {
+			prompt += `[File]: ${filePath}\n\n`
+		}
+		if (document) {
+			prompt += `[Shared Context]:\n\`\`\`\n${document}\n\`\`\`\n\n`
+		}
+
+		blocks.forEach((block, index) => {
+			prompt += `### Snippet ${index + 1}\n\n`
+			prompt += `[Type]: ${block.codeType}${block.codeName ? ` "${block.codeName}"` : ''}\n\n`
+			prompt += `[Target Code]:\n`
+			
+			if (block.content === document) {
+				prompt += `(See Shared Context)\n\n---\n\n`
+			} else {
+				prompt += `\`\`\`\n${block.content}\n\`\`\`\n\n---\n\n`
+			}
+		})
+
+		prompt += `Requirements:\n`
+		prompt += `- Generate semantic description for each snippet\n`
+		prompt += `- Focus on logic, implementation details, business role\n`
+		prompt += `- **Start directly with verbs**, NO prefixes like "Function X" or "Class Y"\n`
+		prompt += `- For core implementations, include keywords like "implements", "logic"\n\n`
+
+		// Language-specific output instructions
+		if (language === 'Chinese') {
+			prompt += `IMPORTANT: Respond in **Chinese (中文)**. Each description must be 30-80 Chinese characters.\n\n`
+		}
+
+		prompt += `IMPORTANT: Respond with ONLY the JSON object, no extra text.\n\n`
+		
+		// Build return format with explicit desc1, desc2, ..., descN
+		const descs = Array.from({length: blocks.length}, (_, i) => `"desc${i + 1}"`).join(', ')
+		prompt += `Return format: {"summaries": [${descs}]} (${blocks.length} descriptions required, one-to-one mapping)`
+
+		return prompt
+	}
+
+
+
+	/**
+	 * Extracts a complete JSON object from text using bracket matching
+	 * This handles nested JSON objects correctly, unlike regex greedy matching
+	 * @returns The extracted JSON string or null if not found
+	 */
+	private extractCompleteJsonObject(text: string): string | null {
+		// Find the first opening brace
+		const startIndex = text.indexOf('{')
+		if (startIndex === -1) {
+			return null
+		}
+
+		// Use stack to find matching closing brace
+		let depth = 0
+		let inString = false
+		let escapeNext = false
+
+		for (let i = startIndex; i < text.length; i++) {
+			const char = text[i]
+
+			if (escapeNext) {
+				escapeNext = false
+				continue
+			}
+
+			if (char === '\\') {
+				escapeNext = true
+				continue
+			}
+
+			if (char === '"') {
+				inString = !inString
+				continue
+			}
+
+			if (!inString) {
+				if (char === '{') {
+					depth++
+				} else if (char === '}') {
+					depth--
+					if (depth === 0) {
+						// Found matching closing brace
+						return text.substring(startIndex, i + 1)
+					}
+				}
+			}
+		}
+
+		return null
+	}
+
+	/**
+	 * Generate summaries for multiple code blocks in a single batch request
+	 * This is more efficient than calling summarize() multiple times
+	 */
+	async summarizeBatch(request: SummarizerBatchRequest): Promise<SummarizerBatchResult> {
 		const prompt = this.buildPrompt(request)
 		const url = `${this.baseUrl}/api/generate`
 
@@ -65,9 +190,9 @@ export class OllamaSummarizer implements ISummarizer {
 					model: this.modelId,
 					prompt: prompt,
 					stream: false,
-					format: "json", // Request JSON output format
+					format: "json",
 					options: {
-						num_predict: 100,
+						num_predict: 500, // Increased for batch responses
 						temperature: this.temperature
 					}
 				}),
@@ -92,118 +217,64 @@ export class OllamaSummarizer implements ISummarizer {
 
 			const data = await response.json() as any
 
-			// Parse JSON response: data.response is a JSON string
+			// Parse response: data.response is a JSON string
 			const responseText = data.response.trim()
+
+			// Try to extract JSON from the response with multiple fallback strategies
 			let parsedResponse: any
-
 			try {
+				// Strategy 1: Try direct parse
 				parsedResponse = JSON.parse(responseText)
-			} catch (e) {
-				throw new Error(`Failed to parse Ollama response: ${responseText}`)
+			} catch {
+				// Strategy 2: Extract JSON from markdown code blocks
+				let jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/) ||
+								  responseText.match(/```\s*([\s\S]*?)\s*```/)
+				if (jsonMatch) {
+					try {
+						parsedResponse = JSON.parse(jsonMatch[1].trim())
+					} catch {
+						// Strategy 3: Use bracket matching to find complete JSON object
+						const extracted = this.extractCompleteJsonObject(responseText)
+						if (extracted) {
+							parsedResponse = JSON.parse(extracted)
+						} else {
+							throw new Error(`Failed to parse batch response JSON after multiple attempts`)
+						}
+					}
+				} else {
+					// Strategy 4: Use bracket matching to find complete JSON object
+					const extracted = this.extractCompleteJsonObject(responseText)
+					if (extracted) {
+						parsedResponse = JSON.parse(extracted)
+					} else {
+						throw new Error(`Could not extract JSON from batch response`)
+					}
+				}
 			}
 
-			if (!parsedResponse.summary || typeof parsedResponse.summary !== 'string') {
-				throw new Error(`Invalid response format: missing 'summary' field`)
+			if (!parsedResponse.summaries || !Array.isArray(parsedResponse.summaries)) {
+				throw new Error(`Invalid batch response format: missing 'summaries' array`)
 			}
 
-			return {
-				summary: parsedResponse.summary.trim(),
-				language: request.language
+			// Validate response length matches request length
+			if (parsedResponse.summaries.length !== request.blocks.length) {
+				throw new Error(
+					`Batch response length mismatch: expected ${request.blocks.length}, got ${parsedResponse.summaries.length}`
+				)
 			}
+
+			// Transform response to SummarizerBatchResult format
+			const summaries = parsedResponse.summaries.map((item: any) => {
+				const text = typeof item === 'string' ? item : item.summary
+				return {
+					summary: text.trim(),
+					language: request.language
+				}
+			})
+
+			return { summaries }
 		} finally {
 			clearTimeout(timeoutId)
-		}
-	}
-
-	/**
-	 * Builds the prompt for the LLM based on language and code type.
-	 */
-	private buildPrompt(request: SummarizerRequest): string {
-		const { content, language, codeType, codeName, document } = request
-
-		if (language === 'Chinese') {
-			if (document && document !== content) {
-				// With document context
-				return `为以下代码片段生成功能语义描述，用于代码检索。
-
-【上下文】：
-\`\`\`
-${document}
-\`\`\`
-
-【目标代码】：
-\`\`\`
-${content}
-\`\`\`
-
-要求：
-- 描述具体执行逻辑和实现细节，核心实现需包含"实现"、"核心逻辑"等关键词
-- 识别代码性质（定义/声明/实现）和业务角色
-- 包含同义词和关联词（如：代码里是save，描述包含persist/store）
-- 30-80个中文字，**严禁**以"函数XXX"、"XXX类"开头，直接以动词开头描述动作
-- 这是${codeType}${codeName ? ` "${codeName}"` : ''}
-
-示例：
-✅ "处理数据清洗和过滤，检查空值并去除空格..."
-✅ "实现数据批处理，遍历批次应用标准化转换..."
-❌ "函数process_data用于处理数据..."
-
-返回JSON：{"summary": "描述"}`
-			} else {
-				// Without document context
-				return `为以下${codeType}${codeName ? ` "${codeName}"` : ''}生成功能语义描述：
-\`\`\`
-${content}
-\`\`\`
-
-要求：30-80个中文字，描述具体逻辑、实现细节、业务角色，**严禁**以"函数XXX"、"XXX类"开头，直接以动词开头描述动作。
-
-✅ "处理数据清洗和过滤，检查空值..."
-❌ "函数process_data用于处理数据..."
-
-返回JSON：{"summary": "描述"}`
-			}
-		}
-
-		// English (default)
-		if (document && document !== content) {
-			// With document context
-			return `Generate semantic description for code retrieval:
-
-[Context]:
-\`\`\`
-${document}
-\`\`\`
-
-[Target]:
-\`\`\`
-${content}
-\`\`\`
-
-Focus on: logic, implementation details, business role, synonyms.
-For core implementations, include keywords like "implements", "logic".
-Max 20 words, **start directly with verbs**, NO prefixes like "Function X" or "Class Y".
-This is a ${codeType}${codeName ? ` "${codeName}"` : ''}.
-
-Examples:
-✅ "Processes data cleaning and filtering, checks for nulls..."
-✅ "Implements batch processing, applies normalization..."
-❌ "Function process_data processes data..."
-
-Return JSON: {"summary": "description"}`
-		} else {
-			// Without document context
-			return `Describe this ${codeType}${codeName ? ` "${codeName}"` : ''}:
-\`\`\`
-${content}
-\`\`\`
-
-Max 20 words. Focus on logic and implementation. **Start with verb**, NO prefixes like "Function X".
-
-✅ "Processes data cleaning and filtering..."
-❌ "Function process_data processes data..."
-
-Return JSON: {"summary": "description"}`
 		}
 	}
 

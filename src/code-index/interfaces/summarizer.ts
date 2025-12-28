@@ -108,6 +108,92 @@ export interface SummarizerConfig {
 	 * Note: Only used by some providers
 	 */
 	temperature?: number
+
+	/**
+	 * Batch size for processing multiple code blocks in a single request
+	 * Default: 2
+	 */
+	batchSize?: number
+
+	/**
+	 * Maximum number of concurrent batch requests
+	 * Default: 2
+	 */
+	concurrency?: number
+
+	/**
+	 * Maximum number of retry attempts for failed batches
+	 * Default: 3
+	 */
+	maxRetries?: number
+
+	/**
+	 * Initial delay in milliseconds before retrying (exponential backoff)
+	 * Default: 1000
+	 */
+	retryDelayMs?: number
+}
+
+/**
+ * Batch summarizer request interface
+ */
+export interface SummarizerBatchRequest {
+	/**
+	 * Shared document context for all code blocks (optional)
+	 * When provided, gives the model full file context to generate better summaries
+	 * This is more efficient than including document in each block
+	 */
+	document?: string
+
+	/**
+	 * Shared file path for context (optional)
+	 */
+	filePath?: string
+
+	/**
+	 * Array of code blocks to summarize in a single batch
+	 */
+	blocks: Array<{
+		/**
+		 * Complete code content to summarize (NOT truncated)
+		 */
+		content: string
+
+		/**
+		 * Type of code (e.g., 'class', 'function', 'method')
+		 */
+		codeType: string
+
+		/**
+		 * Optional name of the code element (e.g., 'Model', '__init__')
+		 */
+		codeName?: string
+	}>
+
+	/**
+	 * Output language for all summaries
+	 */
+	language: 'English' | 'Chinese'
+}
+
+/**
+ * Batch summarizer result interface
+ */
+export interface SummarizerBatchResult {
+	/**
+	 * Array of generated summaries in the same order as the input blocks
+	 */
+	summaries: Array<{
+		/**
+		 * Generated summary text
+		 */
+		summary: string
+
+		/**
+		 * Actual language used for the summary
+		 */
+		language: string
+	}>
 }
 
 /**
@@ -120,6 +206,18 @@ export interface ISummarizer {
 	 * @throws Error if summarization fails (caller should handle gracefully)
 	 */
 	summarize(request: SummarizerRequest): Promise<SummarizerResult>
+
+	/**
+	 * Generate summaries for multiple code blocks in a single batch request
+	 * This is more efficient than calling summarize() multiple times
+	 *
+	 * @throws Error if batch summarization fails (caller should handle gracefully)
+	 *
+	 * Implementation notes:
+	 * - For OpenAI-compatible APIs: Use single prompt with multiple blocks
+	 * - For other APIs: Fall back to parallel summarize() calls with concurrency control
+	 */
+	summarizeBatch(request: SummarizerBatchRequest): Promise<SummarizerBatchResult>
 
 	/**
 	 * Validate the summarizer configuration

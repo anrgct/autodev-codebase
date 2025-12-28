@@ -28,7 +28,11 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
 	summarizerOpenAiCompatibleBaseUrl: 'http://localhost:8080/v1',
 	summarizerOpenAiCompatibleModelId: 'gpt-4',
 	summarizerOpenAiCompatibleApiKey: '',
-	summarizerLanguage: 'English'
+	summarizerLanguage: 'English',
+	summarizerBatchSize: 2,
+	summarizerConcurrency: 2,
+	summarizerMaxRetries: 3,
+	summarizerRetryDelayMs: 1000
 }
 
 /**Parser */
@@ -79,7 +83,7 @@ export function getBatchSizeForEmbedder(embedder: any): number {
     if (embedder && typeof embedder.optimalBatchSize === 'number') {
         return embedder.optimalBatchSize
     }
-    
+
     // Check if embedder has an embedderInfo property with name
     const embedderType = embedder?.embedderInfo?.name || embedder
     return EMBEDDER_BATCH_SIZES[embedderType] || BATCH_SEGMENT_THRESHOLD

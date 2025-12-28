@@ -170,6 +170,10 @@ export interface CodeIndexConfig {
 	summarizerOpenAiCompatibleApiKey?: string
 	summarizerLanguage?: 'English' | 'Chinese'
 	summarizerTemperature?: number
+	summarizerBatchSize?: number
+	summarizerConcurrency?: number
+	summarizerMaxRetries?: number
+	summarizerRetryDelayMs?: number
 }
 
 /**
@@ -215,6 +219,10 @@ export type PreviousConfigSnapshot = {
 	summarizerOpenAiCompatibleApiKey?: string
 	summarizerLanguage?: 'English' | 'Chinese'
 	summarizerTemperature?: number
+	summarizerBatchSize?: number
+	summarizerConcurrency?: number
+	summarizerMaxRetries?: number
+	summarizerRetryDelayMs?: number
 }
 
 /**
@@ -277,4 +285,8 @@ export interface ConfigSnapshot {
 	summarizerOpenAiCompatibleApiKey?: string
 	summarizerLanguage?: 'English' | 'Chinese'
 	summarizerTemperature?: number
+	summarizerBatchSize?: number
+	summarizerConcurrency?: number
+	summarizerMaxRetries?: number
+	summarizerRetryDelayMs?: number
 }

@@ -2,7 +2,7 @@ import { EmbedderProvider } from "./interfaces/manager"
 import { CodeIndexConfig, PreviousConfigSnapshot } from "./interfaces/config"
 import { RerankerConfig } from "./interfaces/reranker"
 import { SummarizerConfig } from "./interfaces/summarizer"
-import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS } from "./constants"
+import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_CONFIG } from "./constants"
 import { getDefaultModelId, getModelDimension, getModelScoreThreshold } from "../shared/embeddingModels"
 import { IConfigProvider } from "../abstractions/config"
 import { ConfigValidator } from "./config-validator"
@@ -488,7 +488,11 @@ export class CodeIndexConfigManager {
 			openAiCompatibleModelId: this.config?.summarizerOpenAiCompatibleModelId || 'gpt-4',
 			openAiCompatibleApiKey: this.config?.summarizerOpenAiCompatibleApiKey || '',
 			language: this.config?.summarizerLanguage || 'English',
-			temperature: this.config?.summarizerTemperature
+			temperature: this.config?.summarizerTemperature,
+			batchSize: this.config?.summarizerBatchSize ?? DEFAULT_CONFIG.summarizerBatchSize,
+			concurrency: this.config?.summarizerConcurrency ?? DEFAULT_CONFIG.summarizerConcurrency,
+			maxRetries: this.config?.summarizerMaxRetries ?? DEFAULT_CONFIG.summarizerMaxRetries,
+			retryDelayMs: this.config?.summarizerRetryDelayMs ?? DEFAULT_CONFIG.summarizerRetryDelayMs
 		};
 	}
 
