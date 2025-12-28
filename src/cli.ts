@@ -256,6 +256,7 @@ interface SimpleCliOptions {
   'min-score'?: string;
   outline?: string;
   summarize?: boolean;
+  dryRun?: boolean;
 }
 
 // Parse command line arguments using Node.js native parseArgs
@@ -294,6 +295,8 @@ const { values, positionals } = parseArgs({
     cache: { type: 'string' },
     // JSON output
     json: { type: 'boolean' },
+    // Dry run option
+    'dry-run': { type: 'boolean' },
     // Configuration management
     'get-config': { type: 'boolean' },
     'set-config': { type: 'string' },
@@ -360,17 +363,29 @@ Options:
                                 Examples: --min-score=0.7, -S 0.5
                                 0 means accept all results, 1 means exact match only
   --outline <pattern>            Extract code outline from file(s) using tree-sitter parsing
-                                Supports glob patterns for multiple files (e.g., **/*.ts, src/**/*.py)
+                                Supports comma-separated patterns and exclusions (consistent with --path-filters):
+                                - Include patterns (no ! prefix): OR logic - matches ANY pattern
+                                - Exclude patterns (! prefix): AND logic - applied globally to exclude ALL matches
+                                - Supports: ** (recursive), * (single-level), {a,b} (braces), !prefix (exclude)
                                 Shows code structure with line ranges (e.g., 15--26)
                                 Add --summarize to generate AI summaries for each code block
                                 Add --json for detailed JSON output with metadata
+                                Add --dry-run to preview matched files without extracting
                                 Note: Glob patterns respect .gitignore/.rooignore/.codebaseignore,
                                       but single-file paths skip ignore checks (process any file directly)
                                 Examples:
-                                  --outline src/index.ts
-                                  --outline "src/**/*.ts"
-                                  --outline "lib/**/*.py" --summarize
-                                  --outline "**/*.ts" --summarize --json
+                                  --outline src/index.ts                                   # single file
+                                  --outline "src/**/*.ts"                                  # single pattern
+                                  --outline "src/**/*.ts,lib/**/*.ts"                      # multiple patterns (OR)
+                                  --outline "src/**/*.ts,!**/*.test.ts"                    # include + exclude
+                                  --outline "{src,test}/**/*.ts,!**/*.{test,spec}.ts"      # braces + exclusion
+                                  --outline "src/**/*.ts" --dry-run                        # preview matched files
+  --dry-run                      Preview files matched by the outline pattern without extracting
+                                Lists all files that would be processed, useful for verifying filters
+                                Must be used with --outline
+                                Examples:
+                                  --outline "src/**/*.ts" --dry-run                       # preview matched files
+                                  --outline "src/**/*.ts,!test*.ts" --dry-run              # verify exclusions
 
 
 Examples:
@@ -465,6 +480,7 @@ function resolveOptions(): SimpleCliOptions {
     'min-score': values['min-score'],
     outline: values.outline,
     summarize: !!values.summarize,
+    dryRun: !!values['dry-run'],
   };
 }
 
@@ -1307,53 +1323,148 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
   try {
     // Check if input is a glob pattern
     if (isGlobPattern(filePath)) {
-      // Get ignore patterns from workspace (reuses existing ignore logic)
-      const globIgnorePatterns = await workspace.getGlobIgnorePatterns()
+      // Check if the pattern contains comma-separated multiple patterns
+      if (filePath.includes(',')) {
+        // Multi-pattern support with include/exclude logic
+        const patterns = parsePathFilters(filePath);
 
-      // Use fast-glob for pattern matching with dual-layer filtering
-      let files = await fastGlob(filePath, {
-        cwd: workspacePath,
-        absolute: true,
-        // Layer 1: High-performance filtering (prune during traversal)
-        ignore: globIgnorePatterns
-      });
+        // Separate include and exclude patterns
+        const includePatterns = patterns.filter(p => !p.startsWith('!'));
+        const excludePatterns = patterns
+          .filter(p => p.startsWith('!'))
+          .map(p => p.slice(1)); // Remove ! prefix
 
-      // Layer 2: Flexible filtering (project-specific rules)
-      const filteredFiles = [];
-      for (const file of files) {
-        if (!(await workspace.shouldIgnore(file))) {
-          filteredFiles.push(file);
+        deps.logger?.debug(`Include patterns: ${includePatterns.join(', ')}`);
+        deps.logger?.debug(`Exclude patterns: ${excludePatterns.join(', ')}`);
+
+        // Get ignore patterns from workspace
+        const globIgnorePatterns = await workspace.getGlobIgnorePatterns();
+
+        // Merge workspace ignore patterns with user-specified exclude patterns
+        const allIgnorePatterns = [...globIgnorePatterns, ...excludePatterns];
+
+        // Use fast-glob with multiple include patterns and combined ignore patterns
+        let files = await fastGlob(includePatterns, {
+          cwd: workspacePath,
+          absolute: true,
+          ignore: allIgnorePatterns
+        });
+
+        // Layer 2: Flexible filtering (project-specific rules)
+        const filteredFiles = [];
+        for (const file of files) {
+          if (!(await workspace.shouldIgnore(file))) {
+            filteredFiles.push(file);
+          }
         }
-      }
 
-      if (filteredFiles.length === 0) {
-        deps.logger?.warn(`No files found matching pattern: ${filePath}`);
-        return;
-      }
+        if (filteredFiles.length === 0) {
+          deps.logger?.warn(`No files found matching pattern: ${filePath}`);
+          return;
+        }
 
-      deps.logger?.info(`Found ${filteredFiles.length} file(s) matching pattern: ${filePath}`);
+        // Handle --dry-run mode
+        if (options.dryRun) {
+          console.log(`Dry-run mode: Files matched by pattern "${filePath}"\n`);
+          console.log(`Total: ${filteredFiles.length} file(s)\n`);
 
-      // Process each file
-      for (const file of filteredFiles) {
-        try {
-          const result = await extractOutline({
-            filePath: file,
-            workspacePath,
-            json: options.json,
-            summarize: options.summarize,
-            configPath,
-            fileSystem: deps.fileSystem,
-            workspace,
-            pathUtils: deps.pathUtils,
-            logger: deps.logger
+          filteredFiles.forEach((file, index) => {
+            const relativePath = workspace.getRelativePath(file);
+            console.log(`${index + 1}. ${relativePath}`);
           });
 
-          console.log(result);
-          console.log('===\n');
-        } catch (error) {
-          // Skip failed files but continue processing others
-          if (error instanceof Error) {
-            deps.logger?.warn(`Failed to process ${file}: ${error.message}`);
+          return; // Don't execute actual outline extraction
+        }
+
+        deps.logger?.info(`Found ${filteredFiles.length} file(s) matching pattern: ${filePath}`);
+
+        // Process each file
+        for (const file of filteredFiles) {
+          try {
+            const result = await extractOutline({
+              filePath: file,
+              workspacePath,
+              json: options.json,
+              summarize: options.summarize,
+              configPath,
+              fileSystem: deps.fileSystem,
+              workspace,
+              pathUtils: deps.pathUtils,
+              logger: deps.logger
+            });
+
+            console.log(result);
+            console.log('===\n');
+          } catch (error) {
+            // Skip failed files but continue processing others
+            if (error instanceof Error) {
+              deps.logger?.warn(`Failed to process ${file}: ${error.message}`);
+            }
+          }
+        }
+      } else {
+        // Single pattern (original logic)
+        // Get ignore patterns from workspace (reuses existing ignore logic)
+        const globIgnorePatterns = await workspace.getGlobIgnorePatterns()
+
+        // Use fast-glob for pattern matching with dual-layer filtering
+        let files = await fastGlob(filePath, {
+          cwd: workspacePath,
+          absolute: true,
+          // Layer 1: High-performance filtering (prune during traversal)
+          ignore: globIgnorePatterns
+        });
+
+        // Layer 2: Flexible filtering (project-specific rules)
+        const filteredFiles = [];
+        for (const file of files) {
+          if (!(await workspace.shouldIgnore(file))) {
+            filteredFiles.push(file);
+          }
+        }
+
+        if (filteredFiles.length === 0) {
+          deps.logger?.warn(`No files found matching pattern: ${filePath}`);
+          return;
+        }
+
+        // Handle --dry-run mode
+        if (options.dryRun) {
+          console.log(`Dry-run mode: Files matched by pattern "${filePath}"\n`);
+          console.log(`Total: ${filteredFiles.length} file(s)\n`);
+
+          filteredFiles.forEach((file, index) => {
+            const relativePath = workspace.getRelativePath(file);
+            console.log(`${index + 1}. ${relativePath}`);
+          });
+
+          return; // Don't execute actual outline extraction
+        }
+
+        deps.logger?.info(`Found ${filteredFiles.length} file(s) matching pattern: ${filePath}`);
+
+        // Process each file
+        for (const file of filteredFiles) {
+          try {
+            const result = await extractOutline({
+              filePath: file,
+              workspacePath,
+              json: options.json,
+              summarize: options.summarize,
+              configPath,
+              fileSystem: deps.fileSystem,
+              workspace,
+              pathUtils: deps.pathUtils,
+              logger: deps.logger
+            });
+
+            console.log(result);
+            console.log('===\n');
+          } catch (error) {
+            // Skip failed files but continue processing others
+            if (error instanceof Error) {
+              deps.logger?.warn(`Failed to process ${file}: ${error.message}`);
+            }
           }
         }
       }
