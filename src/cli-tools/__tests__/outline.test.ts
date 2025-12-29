@@ -895,4 +895,262 @@ describe('extractOutline', () => {
 			});
 		});
 	});
+
+	describe('--title option', () => {
+		it('should show only file summary in text mode when title=true', async () => {
+			const { extractOutline } = await import('../outline');
+			const filePath = '/workspace/src/test.ts';
+			const workspacePath = '/workspace';
+
+			mockFileSystem.exists.mockResolvedValue(true);
+			mockFileSystem.readFile.mockResolvedValue(
+				new TextEncoder().encode(sampleTypeScriptCode)
+			);
+			mockWorkspace.shouldIgnore.mockResolvedValue(false);
+
+			const options: OutlineOptions = {
+				filePath,
+				workspacePath,
+				json: false,
+				title: true,
+				fileSystem: mockFileSystem as any,
+				pathUtils: mockPathUtils as any,
+				logger: mockLogger as any
+			};
+
+			const ts = {
+				parser: {
+					parse: vi.fn().mockReturnValue({ rootNode: {} })
+				},
+				query: {
+					captures: vi.fn().mockReturnValue([
+						{
+							name: 'definition.function',
+							node: {
+								startPosition: { row: 9, column: 2 },
+								endPosition: { row: 12, column: 3 },
+								type: 'function_declaration',
+								text: sampleTypeScriptCode.split('\n').slice(9, 13).join('\n')
+							}
+						},
+						{
+							name: 'name.definition.function',
+							node: {
+								startPosition: { row: 9, column: 11 },
+								endPosition: { row: 9, column: 23 },
+								text: 'getUserById'
+							}
+						}
+					])
+				}
+			};
+
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({ ts: ts as any });
+
+			const result = await extractOutline(options);
+
+			// Should only show file path, line count, and file summary
+			expect(result).toContain('test.ts');
+			expect(result).toContain('lines)');
+			// Should NOT show function details when title=true
+			expect(result.split('\n').length).toBeLessThan(5); // Only file header line
+		});
+
+		it('should return empty definitions array in JSON mode when title=true', async () => {
+			const { extractOutline } = await import('../outline');
+			const filePath = '/workspace/src/test.ts';
+			const workspacePath = '/workspace';
+
+			mockFileSystem.exists.mockResolvedValue(true);
+			mockFileSystem.readFile.mockResolvedValue(
+				new TextEncoder().encode(sampleTypeScriptCode)
+			);
+			mockWorkspace.shouldIgnore.mockResolvedValue(false);
+
+			const options: OutlineOptions = {
+				filePath,
+				workspacePath,
+				json: true,
+				title: true,
+				fileSystem: mockFileSystem as any,
+				pathUtils: mockPathUtils as any,
+				logger: mockLogger as any
+			};
+
+			const ts = {
+				parser: {
+					parse: vi.fn().mockReturnValue({ rootNode: {} })
+				},
+				query: {
+					captures: vi.fn().mockReturnValue([
+						{
+							name: 'definition.function',
+							node: {
+								startPosition: { row: 9, column: 2 },
+								endPosition: { row: 12, column: 3 },
+								type: 'function_declaration',
+								text: sampleTypeScriptCode.split('\n').slice(9, 13).join('\n')
+							}
+						},
+						{
+							name: 'name.definition.function',
+							node: {
+								startPosition: { row: 9, column: 11 },
+								endPosition: { row: 9, column: 23 },
+								text: 'getUserById'
+							}
+						}
+					])
+				}
+			};
+
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({ ts: ts as any });
+
+			const result = await extractOutline(options);
+			const parsed = JSON.parse(result);
+
+			// Should have empty definitions array
+			expect(parsed.definitions).toEqual([]);
+			// Should still report actual count
+			expect(parsed.definitionCount).toBeGreaterThan(0);
+			expect(parsed.language).toBe('ts');
+		});
+
+		it('should skip function-level summarization when title=true with summarize', async () => {
+			const { extractOutline } = await import('../outline');
+			const filePath = '/workspace/src/test.ts';
+			const workspacePath = '/workspace';
+
+			mockFileSystem.exists.mockResolvedValue(true);
+			mockFileSystem.readFile.mockResolvedValue(
+				new TextEncoder().encode(sampleTypeScriptCode)
+			);
+			mockFileSystem.stat.mockResolvedValue({ isFile: () => true } as any);
+			mockFileSystem.readdir.mockResolvedValue([]);
+			mockWorkspace.shouldIgnore.mockResolvedValue(false);
+
+			const mockConfig = {
+				provider: 'test',
+				modelId: 'test-model',
+				maxBatchSize: 10,
+				concurrency: 2
+			};
+			mockFileSystem.readFile.mockResolvedValueOnce(
+				new TextEncoder().encode(JSON.stringify(mockConfig))
+			);
+
+			const options: OutlineOptions = {
+				filePath,
+				workspacePath,
+				json: false,
+				summarize: true,
+				title: true,
+				configPath: '/workspace/.autodev-cache/summarizer.json',
+				fileSystem: mockFileSystem as any,
+				pathUtils: mockPathUtils as any,
+				logger: mockLogger as any
+			};
+
+			const ts = {
+				parser: {
+					parse: vi.fn().mockReturnValue({ rootNode: {} })
+				},
+				query: {
+					captures: vi.fn().mockReturnValue([
+						{
+							name: 'definition.function',
+							node: {
+								startPosition: { row: 9, column: 2 },
+								endPosition: { row: 12, column: 3 },
+								type: 'function_declaration',
+								text: sampleTypeScriptCode.split('\n').slice(9, 13).join('\n')
+							}
+						}
+					])
+				}
+			};
+
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({ ts: ts as any });
+
+			const result = await extractOutline(options);
+
+			// Should log debug message about skipping function-level summaries
+			expect(mockLogger.debug).toHaveBeenCalledWith(
+				expect.stringContaining('Title mode: skipping function-level summaries')
+			);
+
+			// Should still show file header
+			expect(result).toContain('test.ts');
+		});
+
+		it('should work with title=true and json=true combination', async () => {
+			const { extractOutline } = await import('../outline');
+			const filePath = '/workspace/src/test.ts';
+			const workspacePath = '/workspace';
+
+			mockFileSystem.exists.mockResolvedValue(true);
+			mockFileSystem.readFile.mockResolvedValue(
+				new TextEncoder().encode(sampleTypeScriptCode)
+			);
+			mockWorkspace.shouldIgnore.mockResolvedValue(false);
+
+			const options: OutlineOptions = {
+				filePath,
+				workspacePath,
+				json: true,
+				title: true,
+				summarize: false,
+				fileSystem: mockFileSystem as any,
+				pathUtils: mockPathUtils as any,
+				logger: mockLogger as any
+			};
+
+			const ts = {
+				parser: {
+					parse: vi.fn().mockReturnValue({ rootNode: {} })
+				},
+				query: {
+					captures: vi.fn().mockReturnValue([
+						{
+							name: 'definition.function',
+							node: {
+								startPosition: { row: 9, column: 2 },
+								endPosition: { row: 12, column: 3 },
+								type: 'function_declaration',
+								text: sampleTypeScriptCode.split('\n').slice(9, 13).join('\n')
+							}
+						},
+						{
+							name: 'name.definition.function',
+							node: {
+								startPosition: { row: 9, column: 11 },
+								endPosition: { row: 9, column: 23 },
+								text: 'getUserById'
+							}
+						}
+					])
+				}
+			};
+
+			vi.mocked(loadRequiredLanguageParsers).mockResolvedValue({ ts: ts as any });
+
+			const result = await extractOutline(options);
+			const parsed = JSON.parse(result);
+
+			// Verify JSON structure
+			expect(parsed).toHaveProperty('filePath');
+			expect(parsed).toHaveProperty('language');
+			expect(parsed).toHaveProperty('definitionCount');
+			expect(parsed).toHaveProperty('definitions');
+			expect(parsed).toHaveProperty('fileSummary');
+
+			// Verify definitions is empty array
+			expect(Array.isArray(parsed.definitions)).toBe(true);
+			expect(parsed.definitions.length).toBe(0);
+
+			// Verify other fields are populated
+			expect(parsed.definitionCount).toBeGreaterThan(0);
+			expect(parsed.language).toBe('ts');
+		});
+	});
 });

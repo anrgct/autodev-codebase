@@ -256,6 +256,7 @@ interface SimpleCliOptions {
   'min-score'?: string;
   outline?: string;
   summarize?: boolean;
+  title?: boolean;
   clearSummarizeCache?: boolean;
   dryRun?: boolean;
 }
@@ -272,6 +273,7 @@ const { values, positionals } = parseArgs({
     clear: { type: 'boolean' },
     outline: { type: 'string' },
     summarize: { type: 'boolean' },
+    title: { type: 'boolean' },
     'clear-summarize-cache': { type: 'boolean' },
     // Path and config options
     path: { type: 'string', short: 'p', default: '.' },
@@ -372,6 +374,7 @@ Options:
                                 - Supports: ** (recursive), * (single-level), {a,b} (braces), !prefix (exclude)
                                 Shows code structure with line ranges (e.g., 15--26)
                                 Add --summarize to generate AI summaries for each code block
+                                Add --title to show only file-level summary (no function details)
                                 Add --clear-summarize-cache to clear all caches before regenerating summaries
                                 Add --json for detailed JSON output with metadata
                                 Add --dry-run to preview matched files without extracting
@@ -417,9 +420,10 @@ Examples:
   codebase --outline "**/*.py" --summarize
   codebase --outline lib/utils.py --json
 
-  # Extract code outline with AI summaries
-  codebase --outline src/index.ts --summarize
-  codebase --outline lib/utils.py --summarize --json
+	  # Extract code outline with AI summaries
+	  codebase --outline src/index.ts --summarize
+	  codebase --outline lib/utils.py --summarize --json
+	  codebase --outline "src/**/*.ts" --summarize --title  # Only file summaries
 
   # Clear summary caches
   codebase --clear-summarize-cache
@@ -492,6 +496,7 @@ function resolveOptions(): SimpleCliOptions {
     'min-score': values['min-score'],
     outline: values.outline,
     summarize: !!values.summarize,
+    title: !!values.title,
     clearSummarizeCache: !!values['clear-summarize-cache'],
     dryRun: !!values['dry-run'],
   };
@@ -1427,17 +1432,18 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
         for (const file of filteredFiles) {
           try {
             const result = await extractOutline({
-              filePath: file,
-              workspacePath,
-              json: options.json,
-              summarize: options.summarize,
-              clearSummarizeCache: options.clearSummarizeCache,
-              configPath,
-              fileSystem: deps.fileSystem,
-              workspace,
-              pathUtils: deps.pathUtils,
-              logger: deps.logger
-            });
+                filePath: file,
+                workspacePath,
+                json: options.json,
+                summarize: options.summarize,
+                title: options.title,
+                clearSummarizeCache: options.clearSummarizeCache,
+                configPath,
+                fileSystem: deps.fileSystem,
+                workspace,
+                pathUtils: deps.pathUtils,
+                logger: deps.logger
+              });
 
             console.log(result);
             console.log('\n---\n');
@@ -1493,17 +1499,18 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
         for (const file of filteredFiles) {
           try {
             const result = await extractOutline({
-              filePath: file,
-              workspacePath,
-              json: options.json,
-              summarize: options.summarize,
-              clearSummarizeCache: options.clearSummarizeCache,
-              configPath,
-              fileSystem: deps.fileSystem,
-              workspace,
-              pathUtils: deps.pathUtils,
-              logger: deps.logger
-            });
+                filePath: file,
+                workspacePath,
+                json: options.json,
+                summarize: options.summarize,
+                title: options.title,
+                clearSummarizeCache: options.clearSummarizeCache,
+                configPath,
+                fileSystem: deps.fileSystem,
+                workspace,
+                pathUtils: deps.pathUtils,
+                logger: deps.logger
+              });
 
             console.log(result);
             console.log('\n---\n');
@@ -1518,18 +1525,19 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
     } else {
       // Single file processing (original logic) - skip ignore checks
       const result = await extractOutline({
-        filePath,
-        workspacePath,
-        json: options.json,
-        summarize: options.summarize,
-        clearSummarizeCache: options.clearSummarizeCache,
-        configPath,
-        fileSystem: deps.fileSystem,
-        workspace,
-        pathUtils: deps.pathUtils,
-        logger: deps.logger,
-        skipIgnoreCheck: true  // Skip ignore checks for single-file mode
-      });
+              filePath,
+              workspacePath,
+              json: options.json,
+              summarize: options.summarize,
+              title: options.title,
+              clearSummarizeCache: options.clearSummarizeCache,
+              configPath,
+              fileSystem: deps.fileSystem,
+              workspace,
+              pathUtils: deps.pathUtils,
+              logger: deps.logger,
+              skipIgnoreCheck: true  // Skip ignore checks for single-file mode
+            });
 
       console.log(result);
     }

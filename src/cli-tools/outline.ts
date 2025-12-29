@@ -37,6 +37,8 @@ export interface OutlineOptions {
 	json: boolean;
 	/** Whether to generate AI summaries */
 	summarize?: boolean;
+	/** Whether to show only file-level summary (no function details) */
+	title?: boolean;
 	/** Whether to clear all summary caches before generating */
 	clearSummarizeCache?: boolean;
 	/** Optional config path (respects `--config`) */
@@ -49,6 +51,7 @@ export interface OutlineOptions {
 	pathUtils: IPathUtils;
 	/** Logger (optional) */
 	logger?: {
+		debug: (message: string) => void;
 		info: (message: string) => void;
 		error: (message: string) => void;
 		warn?: (message: string) => void;
@@ -89,7 +92,7 @@ interface OutlineData {
  * @returns Formatted outline (text or JSON)
  */
 export async function extractOutline(options: OutlineOptions): Promise<string> {
-	const { filePath, workspacePath, json, summarize, clearSummarizeCache, configPath, fileSystem, pathUtils, logger } = options;
+	const { filePath, workspacePath, json, summarize, title, clearSummarizeCache, configPath, fileSystem, pathUtils, logger } = options;
 
 	// Resolve target path (handle both absolute and relative paths)
 	let targetPath = filePath;
@@ -112,7 +115,7 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 
 	// Return output based on format
 	if (json) {
-		const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, clearSummarizeCache, configPath, logger);
+		const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, title, clearSummarizeCache, configPath, logger);
 		return output;
 	} else {
 		const output = await getOutlineAsText(
@@ -122,6 +125,7 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 			fileSystem,
 			pathUtils,
 			summarize,
+			title,
 			clearSummarizeCache,
 			configPath,
 			logger
@@ -161,9 +165,11 @@ async function getOutlineAsText(
 	fileSystem: IFileSystem,
 	pathUtils: IPathUtils,
 	summarize?: boolean,
+	title?: boolean,
 	clearSummarizeCache?: boolean,
 	configPath?: string,
 	logger?: {
+		debug: (message: string) => void;
 		info: (message: string) => void;
 		error: (message: string) => void;
 		warn?: (message: string) => void;
@@ -183,7 +189,7 @@ async function getOutlineAsText(
 
 	// 2. If no summarization requested, render directly
 	if (!summarize) {
-		return renderDefinitionsAsText(outlineData);
+		return renderDefinitionsAsText(outlineData, title);
 	}
 
 	// 3. Create summarizer
@@ -191,7 +197,7 @@ async function getOutlineAsText(
 	if (!summarizer) {
 		if (logger?.warn) logger.warn('Warning: Summarizer not configured. Continuing without summaries.');
 		else logger?.info('Warning: Summarizer not configured. Continuing without summaries.');
-		return renderDefinitionsAsText(outlineData);
+		return renderDefinitionsAsText(outlineData, title);
 	}
 
 	// 4. Apply cache and generate summaries
@@ -203,11 +209,12 @@ async function getOutlineAsText(
 		fileSystem,
 		pathUtils,
 		clearSummarizeCache,
-		logger
+		logger,
+		title
 	);
-
+	
 	// 5. Render with summaries
-	return renderDefinitionsAsText(outlineData);
+	return renderDefinitionsAsText(outlineData, title);
 }
 
 /**
@@ -226,9 +233,11 @@ async function getOutlineAsJson(
 	pathUtils: IPathUtils,
 	workspacePath: string,
 	summarize?: boolean,
+	title?: boolean,
 	clearSummarizeCache?: boolean,
 	configPath?: string,
 	logger?: {
+		debug: (message: string) => void;
 		info: (message: string) => void;
 		error: (message: string) => void;
 		warn?: (message: string) => void;
@@ -259,7 +268,8 @@ async function getOutlineAsJson(
 				fileSystem,
 				pathUtils,
 				clearSummarizeCache,
-				logger
+				logger,
+				title
 			);
 		} else {
 			if (logger?.warn) logger.warn('Warning: Summarizer not configured. Continuing without summaries.');
@@ -267,7 +277,7 @@ async function getOutlineAsJson(
 	}
 
 	// 3. Render to JSON
-	return renderDefinitionsAsJson(outlineData);
+	return renderDefinitionsAsJson(outlineData, title);
 }
 
 /**
@@ -455,6 +465,7 @@ function extractDefinitionsFromCaptures(
  */
 function renderDefinitionsAsText(
 	outlineData: OutlineData,
+	title?: boolean,
 	indent: string = '   '
 ): string {
 	const lines: string[] = [];
@@ -468,6 +479,11 @@ function renderDefinitionsAsText(
 	// Display file summary if available
 	if (outlineData.fileSummary) {
 		lines.push(`└─ ${outlineData.fileSummary}`);
+	}
+	
+	// If title mode, only show file summary (no function details)
+	if (title) {
+		return lines.join('\n');
 	}
 
 	lines.push('');
@@ -494,13 +510,13 @@ function renderDefinitionsAsText(
 /**
  * Renders structured definitions to JSON format.
  */
-function renderDefinitionsAsJson(outlineData: OutlineData): string {
+function renderDefinitionsAsJson(outlineData: OutlineData, title?: boolean): string {
 	const result = {
 		filePath: outlineData.filePath,
 		language: outlineData.language,
 		definitionCount: outlineData.definitions.length,
 		fileSummary: outlineData.fileSummary || null,
-		definitions: outlineData.definitions.map(def => ({
+		definitions: title ? [] : outlineData.definitions.map(def => ({
 			name: def.name,
 			type: def.type,
 			startLine: def.startLine,
@@ -798,10 +814,12 @@ async function applySummaryCache(
 	pathUtils: IPathUtils,
 	clearSummarizeCache?: boolean,
 	logger?: {
+		debug: (message: string) => void;
 		info: (message: string) => void;
 		error: (message: string) => void;
 		warn?: (message: string) => void;
-	}
+	},
+	title?: boolean
 ): Promise<void> {
 	// 1. Load cache configuration
 	const config = await loadSummarizerConfig(workspacePath);
@@ -877,39 +895,44 @@ async function applySummaryCache(
 			}
 		}
 
-		// 6.2 Collect blocks needing summaries (excluding very large blocks)
-		const blocksNeedingSummaries: Array<{
-			definition: OutlineDefinition;
-			request: SummarizerRequest;
-		}> = [];
+		// 6.2 If title mode, skip function-level summaries
+		if (title) {
+			logger?.debug('Title mode: skipping function-level summaries');
+		} else {
+			// Collect blocks needing summaries (excluding very large blocks)
+			const blocksNeedingSummaries: Array<{
+				definition: OutlineDefinition;
+				request: SummarizerRequest;
+			}> = [];
 
-		for (const def of outlineData.definitions) {
-			// Skip if already has cached summary
-			if (def.summary) continue;
+			for (const def of outlineData.definitions) {
+				// Skip if already has cached summary
+				if (def.summary) continue;
 
-			// Skip very large blocks (>1000 lines) to avoid timeout
-			const lineCount = def.endLine - def.startLine + 1;
-			if (lineCount > 1000) {
-				def.summary = `[Code too large to summarize (${lineCount} lines)]`;
-				continue;
+				// Skip very large blocks (>1000 lines) to avoid timeout
+				const lineCount = def.endLine - def.startLine + 1;
+				if (lineCount > 1000) {
+					def.summary = `[Code too large to summarize (${lineCount} lines)]`;
+					continue;
+				}
+
+				blocksNeedingSummaries.push({
+					definition: def,
+					request: {
+						content: def.fullText,
+						document: outlineData.documentContent,
+						language,
+						codeType: def.type,
+						codeName: def.name,
+						filePath: outlineData.filePath
+					}
+				});
 			}
 
-			blocksNeedingSummaries.push({
-				definition: def,
-				request: {
-					content: def.fullText,
-					document: outlineData.documentContent,
-					language,
-					codeType: def.type,
-					codeName: def.name,
-					filePath: outlineData.filePath
-				}
-			});
-		}
-
-		// 6.3 Generate summaries in batches with concurrency control
-		if (blocksNeedingSummaries.length > 0) {
-			await generateSummariesWithRetry(summarizer, blocksNeedingSummaries, config, logger);
+			// 6.3 Generate summaries in batches with concurrency control
+			if (blocksNeedingSummaries.length > 0) {
+				await generateSummariesWithRetry(summarizer, blocksNeedingSummaries, config, logger);
+			}
 		}
 
 		// 7. Update cache with new summaries
