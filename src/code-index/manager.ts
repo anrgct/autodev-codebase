@@ -302,6 +302,36 @@ export class CodeIndexManager implements ICodeIndexManager {
 		}
 	}
 
+	/**
+	 * Get components needed for dry-run mode
+	 * Provides controlled access to internal components for preview operations
+	 * @returns Object containing all necessary components for dry-run
+	 */
+	public getDryRunComponents(): {
+		scanner: any
+		cacheManager: any
+		vectorStore: any
+		workspace: IWorkspace
+		fileSystem: IFileSystem
+		pathUtils: IPathUtils
+	} {
+		if (!this._orchestrator || !this._cacheManager) {
+			throw new Error('Manager not initialized. Call initialize() first.')
+		}
+
+		// Get vector store from orchestrator
+		const vectorStore = this._orchestrator.getVectorStore()
+
+		return {
+			scanner: (this._orchestrator as any).scanner,
+			cacheManager: this._cacheManager,
+			vectorStore: vectorStore,
+			workspace: this.dependencies.workspace,
+			fileSystem: this.dependencies.fileSystem,
+			pathUtils: this.dependencies.pathUtils
+		}
+	}
+
 	private async reconcileIndex(vectorStore: IVectorStore, scanner: IDirectoryScanner) {
 		const logger = this.dependencies.logger
 		logger?.info("Reconciling index with filesystem...")

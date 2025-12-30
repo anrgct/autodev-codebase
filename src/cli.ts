@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
+import * as crypto from 'crypto';
 import * as jsoncParser from 'jsonc-parser';
 import { saveJsoncPreservingComments } from './utils/jsonc-helpers';
 import { ensureGitGlobalIgnorePatterns } from './utils/git-global-ignore';
@@ -18,6 +19,7 @@ import { getGlobalLogger, setGlobalLogger, Logger, LogLevel } from './utils/logg
 import { VectorStoreSearchResult, SearchFilter } from './code-index/interfaces';
 import { DEFAULT_CONFIG } from './code-index/constants';
 import { CodeIndexConfig } from './code-index/interfaces/config';
+import { scannerExtensions } from './code-index/shared/supported-extensions';
 import { ConfigValidator } from './code-index/config-validator';
 import { validateLimit, validateMinScore } from './code-index/validate-search-params';
 
@@ -320,6 +322,7 @@ Usage:
   codebase --serve               Start MCP HTTP MCP server
   codebase --stdio-adapter       Start stdio adapter (bridge stdio <-> HTTP MCP server)
   codebase --index               Index the codebase
+  codebase --index --dry-run     Preview what would be indexed without actually indexing
   codebase --search="query"      Search the index (short: -q)
   codebase --outline <file>      Extract code outline from a file
   codebase --clear               Clear index data
@@ -388,11 +391,13 @@ Options:
                                   --outline "{src,test}/**/*.ts,!**/*.{test,spec}.ts"      # braces + exclusion
                                   --outline "src/**/*.ts" --dry-run                        # preview matched files
                                   --outline src/index.ts --summarize --clear-summarize-cache # regenerate summaries
-  --dry-run                      Preview files matched by the outline pattern without extracting
-                                Lists all files that would be processed, useful for verifying filters
-                                Must be used with --outline
+  --dry-run                      Preview files without performing the actual operation
+                                With --index: Shows what files would be indexed (new/changed/deleted)
+                                With --outline: Shows what files would be processed
+                                Useful for verifying filters and understanding impact before execution
                                 Examples:
-                                  --outline "src/**/*.ts" --dry-run                       # preview matched files
+                                  --index --dry-run                                      # preview indexing operation
+                                  --outline "src/**/*.ts" --dry-run                       # preview outline extraction
                                   --outline "src/**/*.ts,!test*.ts" --dry-run              # verify exclusions
 
 
@@ -405,6 +410,10 @@ Examples:
 
   # Index codebase
   codebase --index --path=/my/project
+
+  # Preview what would be indexed (dry-run)
+  codebase --index --dry-run
+  codebase --index --path=/my/project --dry-run
 
   # Search for code
   codebase --search="user authentication"
@@ -679,12 +688,281 @@ async function waitForIndexingCompletion(manager: CodeIndexManager): Promise<voi
 }
 
 /**
+ * Initialize CodeIndexManager for dry-run mode (without triggering indexing)
+ */
+async function initializeManagerForDryRun(
+  options: SimpleCliOptions
+): Promise<CodeIndexManager | undefined> {
+  const deps = createDependencies(options);
+
+  // Load configuration without validation (to avoid errors if Ollama/etc not configured)
+  getLogger().info('Loading configuration...');
+  await deps.configProvider.loadConfig();
+
+  // Create CodeIndexManager
+  getLogger().info('Creating CodeIndexManager...');
+  const manager = CodeIndexManager.getInstance(deps);
+
+  if (!manager) {
+    getLogger().error('Failed to create CodeIndexManager - workspace root path may be invalid');
+    return undefined;
+  }
+
+  // Initialize with searchOnly mode to avoid triggering indexing
+  // This sets up the manager but doesn't start background indexing
+  getLogger().info('Initializing CodeIndexManager for dry-run...');
+  await manager.initialize({ searchOnly: true });
+  getLogger().info('CodeIndexManager initialization success');
+
+  return manager;
+}
+
+/**
+ * Perform dry-run analysis to preview what would be indexed
+ */
+async function performIndexDryRun(manager: CodeIndexManager, options: SimpleCliOptions): Promise<void> {
+  getLogger().info('Starting dry-run mode');
+  getLogger().info(`Workspace: ${options.path}`);
+
+  try {
+    // Get components needed for dry-run
+    const { scanner, cacheManager, vectorStore, workspace, fileSystem, pathUtils } = manager.getDryRunComponents();
+
+    // 1. Get all supported files from filesystem
+    getLogger().info('Scanning workspace for supported files...');
+    const allFilePaths = await scanner.getAllFilePaths(options.path);
+    
+    // 2. Check vector store availability
+    let vectorStoreAvailable = false;
+    let indexedRelativePaths: string[] = [];
+    try {
+      await vectorStore.initialize();
+      indexedRelativePaths = await vectorStore.getAllFilePaths();
+      vectorStoreAvailable = true;
+      getLogger().info(`Vector store connected: ${indexedRelativePaths.length} files indexed`);
+    } catch (error) {
+      getLogger().warn('Vector store not available or empty - will only show file scan results');
+    }
+
+    // 3. Analyze each file
+    const analysisResults = {
+      totalFiles: 0,
+      newFiles: 0,
+      changedFiles: 0,
+      unchangedFiles: 0,
+      deletedFiles: 0,
+      unsupportedFiles: 0,
+      files: [] as Array<{
+        path: string;
+        status: 'new' | 'changed' | 'unchanged' | 'deleted' | 'unsupported';
+        reason?: string;
+      }>
+    };
+
+    // Get cached hashes for comparison
+    const cachedHashes = cacheManager.getAllHashes();
+
+    // Build a set of current files (absolute paths)
+    const currentFileSet = new Set(allFilePaths);
+
+    // Check for deleted files (in cache but not in current filesystem)
+    for (const cachedPath of Object.keys(cachedHashes)) {
+      if (!currentFileSet.has(cachedPath)) {
+        analysisResults.deletedFiles++;
+        analysisResults.files.push({
+          path: workspace.getRelativePath(cachedPath),
+          status: 'deleted'
+        });
+      }
+    }
+
+    // Analyze current files
+    for (const filePath of allFilePaths) {
+      analysisResults.totalFiles++;
+
+      try {
+        // Check if file is supported
+        const ext = pathUtils.extname(filePath).toLowerCase();
+        if (!scannerExtensions.includes(ext)) {
+          analysisResults.unsupportedFiles++;
+          analysisResults.files.push({
+            path: workspace.getRelativePath(filePath),
+            status: 'unsupported',
+            reason: `Unsupported extension: ${ext}`
+          });
+          continue;
+        }
+
+        const relativePath = workspace.getRelativePath(filePath);
+        const cachedHash = cachedHashes[filePath];
+
+        // Handle --force mode: all files marked for reindexing
+        if (options.force) {
+          if (!cachedHash) {
+            // New file (not in cache)
+            analysisResults.newFiles++;
+            analysisResults.files.push({
+              path: relativePath,
+              status: 'new'
+            });
+          } else {
+            // Existing file (force reindex)
+            analysisResults.changedFiles++;
+            analysisResults.files.push({
+              path: relativePath,
+              status: 'changed'
+            });
+          }
+          continue;
+        }
+
+        // Normal mode: check hash to determine actual changes
+        // Read file and calculate hash
+        const buffer = await fileSystem.readFile(filePath);
+        const content = new TextDecoder().decode(buffer);
+        const currentHash = crypto.createHash('sha256').update(content).digest('hex');
+
+        // Check against cache
+        if (!cachedHash) {
+          // New file
+          analysisResults.newFiles++;
+          analysisResults.files.push({
+            path: relativePath,
+            status: 'new'
+          });
+        } else if (cachedHash !== currentHash) {
+          // Changed file
+          analysisResults.changedFiles++;
+          analysisResults.files.push({
+            path: relativePath,
+            status: 'changed'
+          });
+        } else {
+          // Unchanged file
+          analysisResults.unchangedFiles++;
+          analysisResults.files.push({
+            path: relativePath,
+            status: 'unchanged'
+          });
+        }
+      } catch (error) {
+        getLogger().warn(`Failed to analyze ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    // 4. Output results
+    console.log('\n=== Dry-Run Analysis Report ===\n');
+    console.log(`Workspace: ${options.path}`);
+    
+    // Detailed statistics section
+    console.log('\n--- Statistics ---');
+    console.log(`\nCache Manager Stats:`);
+    console.log(`  Files in cache: ${Object.keys(cachedHashes).length}`);
+    
+    console.log(`\nVector Store Stats:`);
+    if (vectorStoreAvailable) {
+      console.log(`  Status: Available`);
+      console.log(`  Files in vector store: ${indexedRelativePaths.length}`);
+    } else {
+      console.log(`  Status: Not Available or Empty`);
+    }
+    
+    console.log(`\nScanner Stats:`);
+    console.log(`  Total files found: ${allFilePaths.length}`);
+    console.log(`  Supported files: ${analysisResults.totalFiles}`);
+    
+    // Note: Some files may be in cache but not in vector store due to filtering
+    // (e.g., files too small, parsing errors, etc.) This is normal behavior.
+    
+    console.log(`\n--- Analysis Results ---`);
+
+    console.log('\nSummary:');
+    console.log(`  Total files found: ${analysisResults.totalFiles}`);
+    console.log(`  New files: ${analysisResults.newFiles}`);
+    console.log(`  Changed files: ${analysisResults.changedFiles}`);
+    console.log(`  Unchanged files: ${analysisResults.unchangedFiles}`);
+    console.log(`  Deleted files: ${analysisResults.deletedFiles}`);
+    console.log(`  Unsupported files: ${analysisResults.unsupportedFiles}`);
+    console.log(`  Files to be indexed: ${analysisResults.newFiles + analysisResults.changedFiles}`);
+    if (options.force) {
+      console.log(`  ⚠️  Force mode: All files will be reindexed`);
+    }
+    console.log('');
+
+    // Group files by status
+    const grouped = {
+      new: analysisResults.files.filter(f => f.status === 'new'),
+      changed: analysisResults.files.filter(f => f.status === 'changed'),
+      unchanged: analysisResults.files.filter(f => f.status === 'unchanged'),
+      deleted: analysisResults.files.filter(f => f.status === 'deleted'),
+      unsupported: analysisResults.files.filter(f => f.status === 'unsupported')
+    };
+
+    // Print detailed file list (if not too many)
+    const totalToProcess = grouped.new.length + grouped.changed.length + grouped.deleted.length;
+    if (totalToProcess > 0) {
+      console.log('Files that will be processed:');
+      
+      if (grouped.new.length > 0) {
+        console.log(`\n  New files (${grouped.new.length}):`);
+        grouped.new.forEach(f => console.log(`    + ${f.path}`));
+      }
+      
+      if (grouped.changed.length > 0) {
+        console.log(`\n  Changed files (${grouped.changed.length}):`);
+        grouped.changed.forEach(f => console.log(`    ~ ${f.path}`));
+      }
+      
+      if (grouped.deleted.length > 0) {
+        console.log(`\n  Deleted files (${grouped.deleted.length}):`);
+        grouped.deleted.forEach(f => console.log(`    - ${f.path}`));
+      }
+
+      if (grouped.unsupported.length > 0) {
+        console.log(`\n  Unsupported files (${grouped.unsupported.length}):`);
+        grouped.unsupported.forEach(f => console.log(`    ! ${f.path} (${f.reason})`));
+      }
+    } else {
+      console.log('No files need processing - all files are unchanged.');
+    }
+
+    console.log('\n=== End of Dry-Run Report ===\n');
+
+  } catch (error) {
+    getLogger().error(`Dry-run failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
+  }
+}
+
+/**
  * Index the codebase
  */
 async function indexCodebase(options: SimpleCliOptions): Promise<void> {
   getLogger().info('Starting indexing mode');
   getLogger().info(`Workspace: ${options.path}`);
 
+  // Handle dry-run mode with special initialization
+  if (options.dryRun) {
+    const manager = await initializeManagerForDryRun(options);
+    if (!manager) {
+      process.exit(1);
+    }
+
+    if (!manager.isFeatureEnabled) {
+      getLogger().error('Code indexing feature is not enabled');
+      process.exit(1);
+    }
+
+    try {
+      await performIndexDryRun(manager, options);
+    } finally {
+      manager.dispose();
+      getLogger().info('Dry-run mode completed.');
+    }
+    return;
+  }
+
+  // Normal indexing mode
   const manager = await initializeManager(options);
   if (!manager) {
     process.exit(1);
