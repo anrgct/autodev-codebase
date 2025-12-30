@@ -52,6 +52,13 @@ export class NodeWorkspace implements IWorkspace {
   }
 
   getIgnoreRules(): string[] {
+    // Ensure rules are loaded before returning
+    if (!this.ignoreRulesLoaded) {
+      // Note: This is a sync method, but loadIgnoreRules is async
+      // In practice, rules should be loaded by shouldIgnore() before this is called
+      // We'll return the current rules (may be empty if not loaded yet)
+      console.warn('getIgnoreRules() called before loadIgnoreRules() - rules may be empty')
+    }
     return this.ignoreRules
   }
 
@@ -83,6 +90,11 @@ export class NodeWorkspace implements IWorkspace {
     await this.loadIgnoreRules()
 
     const relativePath = this.getRelativePath(filePath)
+
+    // Handle empty relative path (when filePath equals rootPath)
+    if (relativePath === '') {
+      return false // Root directory itself is not ignored
+    }
 
     // Use ignore instance for proper gitignore semantics
     this.ignoreInstance = ignore().add(NodeWorkspace.DEFAULT_IGNORES).add(this.ignoreRules)

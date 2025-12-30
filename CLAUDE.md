@@ -498,5 +498,3 @@ MIT License - See LICENSE file for details.
 ## Acknowledgments
 
 Derived from [Roo Code](https://github.com/RooCodeInc/Roo-Code). Built upon their excellent foundation to create a specialized codebase analysis tool with enhanced MCP server capabilities and multi-provider support.
-
-snippet1_score, snippet2_score, snippet3_score, snippet4_score,snippet5_score,snippet6_score,snippet7_score,snippet8_score,snippet9_score,snippet10_score

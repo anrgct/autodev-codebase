@@ -406,6 +406,10 @@ export class CodeIndexManager implements ICodeIndexManager {
 		}
 
 		// Create .gitignore instance
+		// First ensure ignore rules are loaded by calling shouldIgnore on a dummy path
+		// Use a dummy file path to trigger loading without causing empty path errors
+		const dummyPath = path.join(workspacePath, "dummy.txt")
+		await this.dependencies.workspace.shouldIgnore(dummyPath)
 		const ignoreRules = this.dependencies.workspace.getIgnoreRules()
 		ignoreInstance.add(ignoreRules)
 
