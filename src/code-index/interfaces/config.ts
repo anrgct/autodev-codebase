@@ -160,6 +160,9 @@ export interface CodeIndexConfig {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
+	rerankerConcurrency?: number
+	rerankerMaxRetries?: number
+	rerankerRetryDelayMs?: number
 
 	// Summarizer configuration
 	summarizerProvider?: 'ollama' | 'openai-compatible'
@@ -211,6 +214,9 @@ export type PreviousConfigSnapshot = {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
+	rerankerConcurrency?: number
+	rerankerMaxRetries?: number
+	rerankerRetryDelayMs?: number
 	summarizerProvider?: 'ollama' | 'openai-compatible'
 	summarizerOllamaBaseUrl?: string
 	summarizerOllamaModelId?: string
@@ -277,6 +283,9 @@ export interface ConfigSnapshot {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
+	rerankerConcurrency?: number
+	rerankerMaxRetries?: number
+	rerankerRetryDelayMs?: number
 	summarizerProvider?: 'ollama' | 'openai-compatible'
 	summarizerOllamaBaseUrl?: string
 	summarizerOllamaModelId?: string

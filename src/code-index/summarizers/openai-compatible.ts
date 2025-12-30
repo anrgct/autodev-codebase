@@ -126,7 +126,7 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 			prompt += `### Snippet ${index + 1}\n\n`
 			prompt += `[Type]: ${block.codeType}${block.codeName ? ` "${block.codeName}"` : ''}\n\n`
 			prompt += `[Target Code]:\n`
-			
+
 			if (block.content === document) {
 				prompt += `(See Shared Context)\n\n---\n\n`
 			} else {
@@ -151,7 +151,7 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 		if (blocks.length === 1) {
 			prompt += `Return format: {"summaries": "description"} (single string)\n`
 		} else {
-			const descs = Array.from({length: blocks.length}, (_, i) => `"desc${i + 1}"`).join(', ')
+			const descs = Array.from({length: blocks.length}, (_, i) => `"snippet${i + 1}_desc"`).join(', ')
 			prompt += `Return format: {"summaries": [${descs}]} (${blocks.length} descriptions)\n`
 		}
 
@@ -273,7 +273,7 @@ export class OpenAICompatibleSummarizer implements ISummarizer {
 
 			// Validate response format - support both array and string (for single block with small models)
 			let summariesArray: string[] = []
-			
+
 			if (typeof parsedResponse.summaries === 'string') {
 				// Small model may return {"summaries": "desc"} instead of {"summaries": ["desc"]}
 				summariesArray = [parsedResponse.summaries]

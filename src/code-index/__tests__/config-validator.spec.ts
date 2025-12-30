@@ -424,6 +424,68 @@ describe('ConfigValidator', () => {
 			} as ValidationIssue)
 		})
 
+		it('should validate reranker concurrency range', () => {
+			const config: CodeIndexConfig = {
+				...createValidConfig(),
+				rerankerConcurrency: 0
+			}
+			const result = ConfigValidator.validate(config)
+
+			expect(result.valid).toBe(false)
+			expect(result.issues).toContainEqual({
+				path: 'rerankerConcurrency',
+				code: 'invalid_range',
+				message: 'Reranker concurrency must be positive'
+			} as ValidationIssue)
+		})
+
+		it('should validate reranker max retries range', () => {
+			const config: CodeIndexConfig = {
+				...createValidConfig(),
+				rerankerMaxRetries: -1
+			}
+			const result = ConfigValidator.validate(config)
+
+			expect(result.valid).toBe(false)
+			expect(result.issues).toContainEqual({
+				path: 'rerankerMaxRetries',
+				code: 'invalid_range',
+				message: 'Reranker max retries must be non-negative'
+			} as ValidationIssue)
+		})
+
+		it('should validate reranker retry delay range', () => {
+			const config: CodeIndexConfig = {
+				...createValidConfig(),
+				rerankerRetryDelayMs: -100
+			}
+			const result = ConfigValidator.validate(config)
+
+			expect(result.valid).toBe(false)
+			expect(result.issues).toContainEqual({
+				path: 'rerankerRetryDelayMs',
+				code: 'invalid_range',
+				message: 'Reranker retry delay must be non-negative'
+			} as ValidationIssue)
+		})
+
+		it('should pass with valid reranker config', () => {
+			const config: CodeIndexConfig = {
+				...createValidConfig(),
+				rerankerEnabled: true,
+				rerankerProvider: 'ollama',
+				rerankerOllamaBaseUrl: 'http://localhost:11434',
+				rerankerOllamaModelId: 'llama3.1',
+				rerankerConcurrency: 3,
+				rerankerMaxRetries: 3,
+				rerankerRetryDelayMs: 1000
+			}
+			const result = ConfigValidator.validate(config)
+
+			expect(result.valid).toBe(true)
+			expect(result.issues).toHaveLength(0)
+		})
+
 		it('should validate search max results', () => {
 			const config: CodeIndexConfig = {
 				...createValidConfig(),

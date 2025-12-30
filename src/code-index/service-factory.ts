@@ -293,7 +293,10 @@ export class CodeIndexServiceFactory {
 			return new OllamaLLMReranker(
 				config.ollamaBaseUrl || 'http://localhost:11434',
 				config.ollamaModelId || 'qwen3-vl:4b-instruct',
-				config.batchSize || 10
+				config.batchSize || 10,
+				config.concurrency || 3,
+				config.maxRetries || 3,
+				config.retryDelayMs || 1000
 			)
 		}
 
@@ -302,7 +305,10 @@ export class CodeIndexServiceFactory {
 				config.openAiCompatibleBaseUrl || 'http://localhost:8080/v1',
 				config.openAiCompatibleModelId || 'gpt-4',
 				config.openAiCompatibleApiKey || '',
-				config.batchSize || 10
+				config.batchSize || 10,
+				config.concurrency || 3,
+				config.maxRetries || 3,
+				config.retryDelayMs || 1000
 			)
 		}
 

@@ -14,18 +14,34 @@ export class OpenAICompatibleReranker implements IReranker {
     private readonly modelId: string
     private readonly apiKey: string
     private readonly batchSize: number
+    private readonly concurrency: number
+    private readonly maxRetries: number
+    private readonly retryDelayMs: number
 
-    constructor(baseUrl: string = "http://localhost:8080/v1", modelId: string = "gpt-4", apiKey: string = "", batchSize: number = 10) {
+    constructor(
+        baseUrl: string = "http://localhost:8080/v1",
+        modelId: string = "gpt-4",
+        apiKey: string = "",
+        batchSize: number = 10,
+        concurrency: number = 3,
+        maxRetries: number = 3,
+        retryDelayMs: number = 1000
+    ) {
         // Normalize the baseUrl by removing all trailing slashes
         const normalizedBaseUrl = baseUrl.replace(/\/+$/, "")
         this.baseUrl = normalizedBaseUrl
         this.modelId = modelId
         this.apiKey = apiKey
         this.batchSize = batchSize
+        this.concurrency = concurrency
+        this.maxRetries = maxRetries
+        this.retryDelayMs = retryDelayMs
     }
 
     /**
-     * Reranks candidates using LLM-based scoring.
+     * Reranks candidates using LLM-based scoring with batch-grouped concurrency.
+     * Reference: src/cli-tools/outline.ts generateSummariesWithRetry function
+     *
      * @param query The search query
      * @param candidates Array of candidates to rerank
      * @returns Promise resolving to reranked results with LLM scores
@@ -35,33 +51,87 @@ export class OpenAICompatibleReranker implements IReranker {
             return []
         }
 
-        // If candidates count <= batchSize, process directly (original logic)
+        // If candidates count <= batchSize, process directly
         if (candidates.length <= this.batchSize) {
             return this.rerankSingleBatch(query, candidates)
         }
 
-        // Process in batches
-        const allResults: RerankerResult[] = []
-        let processedCount = 0
-
+        // Group candidates into batches
+        const batches: RerankerCandidate[][] = []
         for (let i = 0; i < candidates.length; i += this.batchSize) {
-            const batch = candidates.slice(i, i + this.batchSize)
-            try {
-                const batchResults = await this.rerankSingleBatch(query, batch)
-                allResults.push(...batchResults)
-            } catch (error) {
-                console.error(`Batch ${Math.floor(i / this.batchSize) + 1} failed:`, error)
-                // Fallback for failed batch
-                const fallbackResults = batch.map((candidate, idx) => ({
-                    id: candidate.id,
-                    score: 10 - (processedCount + idx) * 0.1,
-                    originalScore: candidate.score,
-                    payload: candidate.payload
-                }))
-                allResults.push(...fallbackResults)
-            }
-            processedCount += batch.length
+            batches.push(candidates.slice(i, i + this.batchSize))
         }
+
+        // Process batches with concurrency control and retry logic
+        let completedBatches = 0
+        const allResults: RerankerResult[] = []
+
+        const processBatchWithRetry = async (batch: RerankerCandidate[], batchIndex: number): Promise<RerankerResult[]> => {
+            let attempt = 0
+            let lastError: Error | null = null
+
+            console.log(`[OpenAICompatibleReranker] Starting batch ${batchIndex + 1}/${batches.length} with ${batch.length} candidates`)
+
+            while (attempt < this.maxRetries) {
+                try {
+                    const results = await this.rerankSingleBatch(query, batch)
+
+                    completedBatches++
+                    if (completedBatches % 5 === 0 || completedBatches === batches.length) {
+                        console.log(`[OpenAICompatibleReranker] Progress: ${completedBatches}/${batches.length} batches completed`)
+                    }
+
+                    return results
+                } catch (error) {
+                    lastError = error instanceof Error ? error : new Error(String(error))
+                    attempt++
+
+                    if (attempt < this.maxRetries) {
+                        // Exponential backoff
+                        const delay = this.retryDelayMs * Math.pow(2, attempt - 1)
+                        console.warn(
+                            `[OpenAICompatibleReranker] Batch ${batchIndex + 1} - Attempt ${attempt}/${this.maxRetries} FAILED: ` +
+                            `${lastError.message}. Retrying in ${delay}ms...`
+                        )
+                        await new Promise(resolve => setTimeout(resolve, delay))
+                    } else {
+                        // Max retries reached, use fallback scores
+                        console.warn(
+                            `[OpenAICompatibleReranker] Batch ${batchIndex + 1} - All ${this.maxRetries} attempts FAILED. ` +
+                            `Using fallback scores. Last error: ${lastError.message}`
+                        )
+                        const baseScore = 10 - batchIndex * 0.1
+                        return batch.map((candidate, idx) => ({
+                            id: candidate.id,
+                            score: baseScore - idx * 0.01,
+                            originalScore: candidate.score,
+                            payload: candidate.payload
+                        }))
+                    }
+                }
+            }
+
+            // Should never reach here, but TypeScript needs a return
+            return batch.map((candidate, idx) => ({
+                id: candidate.id,
+                score: 0,
+                originalScore: candidate.score,
+                payload: candidate.payload
+            }))
+        }
+
+        // Process batches with concurrency control (group-based pattern)
+        const processBatchesWithConcurrency = async () => {
+            for (let i = 0; i < batches.length; i += this.concurrency) {
+                const batchGroup = batches.slice(i, i + this.concurrency)
+                const groupResults = await Promise.all(
+                    batchGroup.map((batch, idx) => processBatchWithRetry(batch, i + idx))
+                )
+                allResults.push(...groupResults.flat())
+            }
+        }
+
+        await processBatchesWithConcurrency()
 
         // Merge and re-sort all results
         allResults.sort((a, b) => b.score - a.score)
@@ -75,36 +145,25 @@ export class OpenAICompatibleReranker implements IReranker {
      * @returns Promise resolving to reranked results with LLM scores
      */
     private async rerankSingleBatch(query: string, candidates: RerankerCandidate[]): Promise<RerankerResult[]> {
-        try {
-            // Build the scoring prompt with all candidates
-            const prompt = this.buildScoringPrompt(query, candidates)
+        // Build the scoring prompt with all candidates
+        const prompt = this.buildScoringPrompt(query, candidates)
 
-            // Call OpenAI-compatible /chat/completions endpoint
-            const scores = await this.generateScores(prompt)
+        // Call OpenAI-compatible /chat/completions endpoint
+        // This will throw an error if generation fails, allowing the retry logic to kick in
+        const scores = await this.generateScores(prompt)
 
-            // Combine original candidates with LLM scores
-            const results: RerankerResult[] = candidates.map((candidate, index) => ({
-                id: candidate.id,
-                score: scores[index] || 0, // Default to 0 if no score
-                originalScore: candidate.score,
-                payload: candidate.payload
-            }))
+        // Combine original candidates with LLM scores
+        const results: RerankerResult[] = candidates.map((candidate, index) => ({
+            id: candidate.id,
+            score: scores[index] || 0, // Default to 0 if no score
+            originalScore: candidate.score,
+            payload: candidate.payload
+        }))
 
-            // Sort by LLM score (descending) - this maintains order within the batch
-            results.sort((a, b) => b.score - a.score)
+        // Sort by LLM score (descending) - this maintains order within the batch
+        results.sort((a, b) => b.score - a.score)
 
-            return results
-        } catch (error: any) {
-            console.error("OpenAI-compatible LLM batch reranking failed, returning original order:", error)
-
-            // Fallback to original order with default scores
-            return candidates.map((candidate, index) => ({
-                id: candidate.id,
-                score: 10 - index * 0.1, // Slight decreasing scores to maintain order
-                originalScore: candidate.score,
-                payload: candidate.payload
-            }))
-        }
+        return results
     }
 
     /**
@@ -135,7 +194,7 @@ Snippets:
 `
         })
 
-        prompt += `Respond with ONLY a JSON object with a relevant "scores" array: {"scores": [${Array.from({length: candidates.length}, (_, i) => `score${i + 1}`).join(', ')}]}`
+        prompt += `Respond with ONLY a JSON object with a relevant "scores" array: {"scores": [${Array.from({length: candidates.length}, (_, i) => `snippet${i + 1}_score`).join(', ')}]}`
 
 
         return prompt
@@ -252,6 +311,7 @@ Snippets:
         }
 
         let responseText = data.choices[0].message.content.trim()
+
         let parsedResponse: any
 
         // Strip markdown code blocks if present

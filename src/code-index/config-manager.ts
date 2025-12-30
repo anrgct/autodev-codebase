@@ -215,6 +215,9 @@ export class CodeIndexConfigManager {
 			rerankerOpenAiCompatibleApiKey: config.rerankerOpenAiCompatibleApiKey,
 			rerankerMinScore: config.rerankerMinScore,
 			rerankerBatchSize: config.rerankerBatchSize,
+			rerankerConcurrency: config.rerankerConcurrency,
+			rerankerMaxRetries: config.rerankerMaxRetries,
+			rerankerRetryDelayMs: config.rerankerRetryDelayMs,
 			summarizerProvider: config.summarizerProvider,
 			summarizerOllamaBaseUrl: config.summarizerOllamaBaseUrl,
 			summarizerOllamaModelId: config.summarizerOllamaModelId,
@@ -468,7 +471,10 @@ export class CodeIndexConfigManager {
 	      openAiCompatibleModelId: this.config.rerankerOpenAiCompatibleModelId,
 	      openAiCompatibleApiKey: this.config.rerankerOpenAiCompatibleApiKey,
 	      minScore: this.config.rerankerMinScore,
-	      batchSize: this.config.rerankerBatchSize || 10
+	      batchSize: this.config.rerankerBatchSize || 10,
+	      concurrency: this.config.rerankerConcurrency ?? DEFAULT_CONFIG.rerankerConcurrency,
+	      maxRetries: this.config.rerankerMaxRetries ?? DEFAULT_CONFIG.rerankerMaxRetries,
+	      retryDelayMs: this.config.rerankerRetryDelayMs ?? DEFAULT_CONFIG.rerankerRetryDelayMs
 	    }
 	  }
 

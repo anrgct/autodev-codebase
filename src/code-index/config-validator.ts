@@ -349,6 +349,30 @@ export class ConfigValidator {
 			})
 		}
 
+		if (config.rerankerConcurrency !== undefined && config.rerankerConcurrency <= 0) {
+			issues.push({
+				path: 'rerankerConcurrency',
+				code: 'invalid_range',
+				message: 'Reranker concurrency must be positive'
+			})
+		}
+
+		if (config.rerankerMaxRetries !== undefined && config.rerankerMaxRetries < 0) {
+			issues.push({
+				path: 'rerankerMaxRetries',
+				code: 'invalid_range',
+				message: 'Reranker max retries must be non-negative'
+			})
+		}
+
+		if (config.rerankerRetryDelayMs !== undefined && config.rerankerRetryDelayMs < 0) {
+			issues.push({
+				path: 'rerankerRetryDelayMs',
+				code: 'invalid_range',
+				message: 'Reranker retry delay must be non-negative'
+			})
+		}
+
 		if (config.vectorSearchMaxResults !== undefined && config.vectorSearchMaxResults <= 0) {
 			issues.push({
 				path: 'vectorSearchMaxResults',

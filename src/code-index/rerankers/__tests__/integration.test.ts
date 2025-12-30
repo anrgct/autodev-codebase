@@ -135,6 +135,30 @@ describe('LLM Reranker Integration Tests', () => {
       expect(reranker).toBeInstanceOf(OllamaLLMReranker)
     })
 
+    it('should create OllamaLLMReranker with concurrency parameters', () => {
+      const mockConfigManager = {
+        rerankerConfig: {
+          enabled: true,
+          provider: 'ollama' as const,
+          ollamaBaseUrl: 'http://localhost:11434',
+          ollamaModelId: 'qwen3-vl:4b-instruct',
+          batchSize: 15,
+          concurrency: 5,
+          maxRetries: 5,
+          retryDelayMs: 2000
+        }
+      }
+
+      const factory = new CodeIndexServiceFactory(
+        mockConfigManager as any,
+        '/test/workspace',
+        cacheManager
+      )
+
+      const reranker = factory.createReranker()
+      expect(reranker).toBeInstanceOf(OllamaLLMReranker)
+    })
+
     describe('createReranker', () => {
       it('should return undefined when reranker config is undefined', () => {
         const mockConfigManager = {

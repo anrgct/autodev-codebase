@@ -30,7 +30,10 @@ export interface RerankerConfig {
 	openAiCompatibleModelId?: string
 	openAiCompatibleApiKey?: string
 	minScore?: number
-	batchSize?: number  // 新增：批次大小，默认10
+	batchSize?: number  // 批次大小，默认10
+	concurrency?: number  // 最大并发批次数，默认3
+	maxRetries?: number  // 最大重试次数，默认3
+	retryDelayMs?: number  // 重试初始延迟(毫秒)，默认1000
 }
 
 export interface IReranker {
