@@ -4,7 +4,13 @@ import {
 	BATCH_SEGMENT_THRESHOLD,
 	MAX_BATCH_RETRIES,
 	INITIAL_RETRY_DELAY_MS,
-	getBatchSizeForEmbedder
+	getBatchSizeForEmbedder,
+	TRUNCATION_INITIAL_THRESHOLD,
+	TRUNCATION_REDUCTION_FACTOR,
+	MIN_TRUNCATION_THRESHOLD,
+	MAX_TRUNCATION_ATTEMPTS,
+	INDIVIDUAL_PROCESSING_TIMEOUT_MS,
+	ENABLE_TRUNCATION_FALLBACK,
 } from "../constants"
 
 export interface BatchProcessingResult {
@@ -28,6 +34,8 @@ export interface BatchProcessorOptions<T> {
 	// Optional callbacks
 	onProgress?: (processed: number, total: number, currentItem?: string) => void
 	onError?: (error: Error) => void
+	/** Called when items are successfully indexed, with the count of indexed items */
+	onItemIndexed?: (count: number) => void
 
 	// Optional file deletion logic
 	getFilesToDelete?: (items: T[]) => string[]
@@ -41,9 +49,260 @@ export interface BatchProcessorOptions<T> {
  * - Embedding generation
  * - Vector store upserts
  * - Cache updates
- * - Retry logic
+ * - Retry logic with truncation fallback for oversized content
  */
 export class BatchProcessor<T> {
+
+	/**
+	 * Determines if an error is recoverable (e.g., context length exceeded)
+	 * Only these types of errors will trigger the truncation fallback
+	 */
+	private _isRecoverableError(error: Error): boolean {
+		const msg = error.message.toLowerCase()
+		return (
+			msg.includes("context length") ||
+			msg.includes("exceeds") ||
+			msg.includes("too long") ||
+			msg.includes("input length") ||
+			msg.includes("invalid input") ||
+			msg.includes("token limit")
+		)
+	}
+
+	/**
+	 * Truncates text by lines to maintain code integrity
+	 * Does not add language-specific truncation markers to avoid syntax compatibility issues
+	 */
+	private _truncateTextByLines(
+		text: string,
+		maxChars: number
+	): string {
+		if (text.length <= maxChars) {
+			return text
+		}
+
+		const lines = text.split('\n')
+		const result: string[] = []
+		let currentLength = 0
+
+		for (const line of lines) {
+			const lineWithNewline = line.length + 1
+			// Stop if adding this line would exceed the limit and we already have content
+			if (currentLength + lineWithNewline > maxChars && result.length > 0) {
+				break
+			}
+			result.push(line)
+			currentLength += lineWithNewline
+		}
+
+		// Preserve at least part of the first line if nothing else was kept
+		if (result.length === 0 && lines.length > 0) {
+			result.push(lines[0].substring(0, maxChars))
+		}
+
+		return result.join('\n')
+	}
+
+	/**
+	 * Processes a single item with truncation retry logic
+	 * Uses the smaller of original text length and initial threshold as starting point
+	 * Recursively reduces threshold until success or minimum reached
+	 */
+	private async _processItemWithTruncation<T>(
+		item: T,
+		options: BatchProcessorOptions<T>,
+		result: BatchProcessingResult,
+		itemIndex: number
+	): Promise<boolean> {
+		const originalText = options.itemToText(item)
+		const filePath = options.itemToFilePath(item)
+
+		// Use the smaller of original text length and initial threshold
+		let threshold = Math.min(originalText.length, TRUNCATION_INITIAL_THRESHOLD)
+
+		// If original text is already short, this might be a different error - skip truncation
+		if (originalText.length <= MIN_TRUNCATION_THRESHOLD) {
+			console.warn(
+				`[BatchProcessor] Original text is already short (${originalText.length} chars), ` +
+				`skipping truncation for: ${filePath}`
+			)
+			return false
+		}
+
+		for (let attempt = 0; attempt < MAX_TRUNCATION_ATTEMPTS; attempt++) {
+			try {
+				const textToEmbed = this._truncateTextByLines(originalText, threshold)
+
+				// Skip if truncated text is too short
+				if (textToEmbed.length < MIN_TRUNCATION_THRESHOLD) {
+					console.warn(
+						`[BatchProcessor] Text too short after truncation ` +
+						`(${textToEmbed.length} chars < ${MIN_TRUNCATION_THRESHOLD}), skipping: ${filePath}`
+					)
+					return false
+				}
+
+				// Try to generate embedding
+				const { embeddings } = await options.embedder.createEmbeddings([textToEmbed])
+
+				// Use correct itemIndex for unique point ID
+				const point = options.itemToPoint(item, embeddings[0], itemIndex)
+				await options.vectorStore.upsertPoints([point])
+
+				const wasTruncated = textToEmbed.length < originalText.length
+
+				if (wasTruncated) {
+					console.info(
+						`[BatchProcessor] Successfully indexed truncated content: ` +
+						`${filePath} (${textToEmbed.length}/${originalText.length} chars, ` +
+						`${(textToEmbed.length / originalText.length * 100).toFixed(1)}%)`
+					)
+				}
+
+				// Update cache (store original file hash)
+				const fileHash = options.getFileHash?.(item)
+				if (fileHash) {
+					options.cacheManager.updateHash(filePath, fileHash)
+				}
+
+				result.processed++
+				result.processedFiles.push({
+					path: filePath,
+					status: "success",
+					newHash: fileHash,
+					truncated: wasTruncated
+				})
+
+				options.onProgress?.(result.processed, result.processed + result.failed, filePath)
+				options.onItemIndexed?.(1)
+
+				return true
+
+			} catch (error) {
+				const nextThreshold = Math.floor(threshold * TRUNCATION_REDUCTION_FACTOR)
+
+				// Stop retrying if below minimum threshold
+				if (nextThreshold < MIN_TRUNCATION_THRESHOLD) {
+					console.warn(
+						`[BatchProcessor] Truncation attempt ${attempt + 1} failed, ` +
+						`next threshold ${nextThreshold} below minimum ${MIN_TRUNCATION_THRESHOLD}, giving up`
+					)
+					break
+				}
+
+				console.warn(
+					`[BatchProcessor] Truncation attempt ${attempt + 1} failed at ${threshold} chars, ` +
+					`will try ${nextThreshold} chars. Error: ${(error as Error).message}`
+				)
+				threshold = nextThreshold
+			}
+		}
+
+		// All attempts failed
+		console.error(`[BatchProcessor] All truncation attempts failed for: ${filePath}`)
+		return false
+	}
+
+	/**
+	 * Fallback to individual item processing with timeout protection
+	 */
+	private async _processItemsIndividually<T>(
+		batchItems: T[],
+		options: BatchProcessorOptions<T>,
+		result: BatchProcessingResult,
+		startIndex: number
+	): Promise<void> {
+		// Boundary check
+		if (!batchItems || batchItems.length === 0) {
+			return
+		}
+
+		console.log(`[BatchProcessor] Falling back to individual processing for ${batchItems.length} items`)
+
+		const startTime = Date.now()
+		let successCount = 0
+		let failureCount = 0
+
+		for (let i = 0; i < batchItems.length; i++) {
+			// Timeout protection
+			if (Date.now() - startTime > INDIVIDUAL_PROCESSING_TIMEOUT_MS) {
+				console.warn(
+					`[BatchProcessor] Individual processing timeout after ${INDIVIDUAL_PROCESSING_TIMEOUT_MS}ms, ` +
+					`skipping remaining ${batchItems.length - i} items`
+				)
+				// Mark remaining items as failed
+				for (let j = i; j < batchItems.length; j++) {
+					const filePath = options.itemToFilePath(batchItems[j])
+					result.failed++
+					result.processedFiles.push({
+						path: filePath,
+						status: "error",
+						error: new Error("Individual processing timeout")
+					})
+				}
+				break
+			}
+
+			const item = batchItems[i]
+			const filePath = options.itemToFilePath(item)
+
+			try {
+				// First try without truncation
+				const text = options.itemToText(item)
+				const { embeddings } = await options.embedder.createEmbeddings([text])
+
+				const point = options.itemToPoint(item, embeddings[0], startIndex + i)
+				await options.vectorStore.upsertPoints([point])
+
+				const fileHash = options.getFileHash?.(item)
+				if (fileHash) {
+					options.cacheManager.updateHash(filePath, fileHash)
+				}
+
+				result.processed++
+				successCount++
+				result.processedFiles.push({
+					path: filePath,
+					status: "success",
+					newHash: fileHash,
+					truncated: false
+				})
+				options.onProgress?.(result.processed, result.processed + result.failed, filePath)
+				options.onItemIndexed?.(1)
+
+			} catch (itemError) {
+				// Individual item failed, try truncation
+				console.warn(`[BatchProcessor] Individual item failed, trying truncation: ${filePath}`)
+
+				// Pass correct itemIndex
+				const success = await this._processItemWithTruncation(
+					item,
+					options,
+					result,
+					startIndex + i
+				)
+
+				if (success) {
+					successCount++
+				} else {
+					// Truncation also failed, record error
+					failureCount++
+					result.failed++
+					result.processedFiles.push({
+						path: filePath,
+						status: "error",
+						error: itemError as Error
+					})
+					options.onProgress?.(result.processed, result.processed + result.failed, filePath)
+				}
+			}
+		}
+
+		console.log(
+			`[BatchProcessor] Individual processing completed: ` +
+			`${successCount} succeeded, ${failureCount} failed`
+		)
+	}
 
 	async processBatch(
 		items: T[],
@@ -133,6 +392,9 @@ export class BatchProcessor<T> {
 		}
 	}
 
+	/**
+	 * Process a single batch with fallback to individual processing on recoverable errors
+	 */
 	private async processSingleBatch<T>(
 		batchItems: T[],
 		options: BatchProcessorOptions<T>,
@@ -173,12 +435,14 @@ export class BatchProcessor<T> {
 					result.processedFiles.push({
 						path: filePath,
 						status: "success",
-						newHash: fileHash
+						newHash: fileHash,
+						truncated: false
 					})
 					options.onProgress?.(result.processed, result.processed + result.failed, filePath)
 				}
 
 				success = true
+
 			} catch (error) {
 				lastError = error as Error
 				console.error(`[BatchProcessor] Error processing batch (attempt ${attempts}):`, error)
@@ -190,13 +454,30 @@ export class BatchProcessor<T> {
 			}
 		}
 
+		// Fallback: batch failed, try individual processing for recoverable errors
 		if (!success && lastError) {
+			// Check if this is a recoverable error and truncation fallback is enabled
+			if (ENABLE_TRUNCATION_FALLBACK && this._isRecoverableError(lastError)) {
+				console.warn(
+					`[BatchProcessor] Batch failed with recoverable error: "${lastError.message}". ` +
+					`Falling back to individual processing...`
+				)
+
+				try {
+					await this._processItemsIndividually(batchItems, options, result, startIndex)
+					return  // Fallback completed successfully, don't throw error
+				} catch (fallbackError) {
+					// Fallback also failed, log and continue with original error handling
+					console.error(`[BatchProcessor] Fallback processing also failed:`, fallbackError)
+				}
+			}
+
+			// Fatal error: mark entire batch as failed (preserve original behavior)
 			result.failed += batchItems.length
 			result.errors.push(lastError)
 
 			const errorMessage = `Failed to process batch after ${MAX_BATCH_RETRIES} attempts: ${lastError.message}`
 			const batchError = new Error(errorMessage)
-			result.errors.push(batchError)
 			options.onError?.(batchError)
 
 			// Record failed items and still report progress

@@ -98,3 +98,13 @@ export const BATCH_PROCESSING_CONCURRENCY = 10
 
 /**Gemini Embedder */
 export const GEMINI_MAX_ITEM_TOKENS = 2048
+
+/**BatchProcessor Truncation - 截断降级功能用于处理超长文本 */
+export const TRUNCATION_INITIAL_THRESHOLD = 800      // 初始截断阈值（chars）
+export const TRUNCATION_REDUCTION_FACTOR = 0.7       // 每次降低 30%
+export const MIN_TRUNCATION_THRESHOLD = 200          // 最小阈值
+export const MAX_TRUNCATION_ATTEMPTS = 3             // 最大重试次数
+export const INDIVIDUAL_PROCESSING_TIMEOUT_MS = 60000 // 降级处理超时（1分钟）
+
+/**Feature Flags - 功能开关 */
+export const ENABLE_TRUNCATION_FALLBACK = true       // 是否启用截断降级功能

@@ -118,6 +118,8 @@ export interface FileProcessingResult {
 	reason?: string
 	newHash?: string
 	pointsToUpsert?: PointStruct[]
+	/** Whether the content was truncated due to being too long for the embedder */
+	truncated?: boolean
 }
 
 /**
