@@ -36,6 +36,7 @@ describe("RooIgnoreController Security Tests", () => {
 			getWorkspaceFolders: vi.fn(),
 			isWorkspaceFile: vi.fn(),
 			getIgnoreRules: vi.fn().mockReturnValue([]),
+			getGlobIgnorePatterns: vi.fn().mockResolvedValue([]),
 			shouldIgnore: vi.fn().mockResolvedValue(false),
 			getName: vi.fn().mockReturnValue('test'),
 		} as Mocked<IWorkspace>

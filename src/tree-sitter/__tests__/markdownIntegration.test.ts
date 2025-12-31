@@ -21,6 +21,7 @@ const createMockDependencies = (): TreeSitterDependencies => ({
 		getRootPath: () => "/test/path",
 		getRelativePath: (path: string) => path.replace("/test/path/", ""),
 		getIgnoreRules: () => [],
+		getGlobIgnorePatterns: () => Promise.resolve([]),
 		shouldIgnore: vi.fn().mockResolvedValue(false),
 		getName: () => "test-workspace",
 		getWorkspaceFolders: () => [],

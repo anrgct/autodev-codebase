@@ -70,6 +70,7 @@ A vector embedding-based code semantic search tool with MCP server and multi-mod
 - **🔄 Multiple Providers**: OpenAI, Ollama, Jina, Gemini, Mistral, OpenRouter, Vercel
 - **📊 Real-time Watching**: Automatic index updates
 - **⚡ Batch Processing**: Efficient parallel processing
+- **📝 Code Outline Extraction**: Generate structured code outlines with AI summaries
 
 ## 📦 Installation
 
@@ -106,6 +107,46 @@ codebase --demo --serve
 ```
 
 ## 📋 Commands
+
+### 📝 AI-Powered Code Outlines
+
+Generate intelligent code summaries with one command:
+
+```bash
+codebase --outline "src/**/*.ts" --summarize
+```
+
+**Output Example:**
+```
+# src/cli.ts (1902 lines)
+└─ Implements a simplified CLI for @autodev/codebase using Node.js native parseArgs. 
+   Manages codebase indexing, searching, and MCP server operations.
+
+   27--35 | function initGlobalLogger
+   └─ Initializes a global logger instance with specified log level and timestamps.
+
+   45--54 | interface SearchResult
+   └─ Defines the structure for search result payloads, including file path, code chunk, 
+      and relevance score.
+
+   ... (full outline with AI summaries)
+```
+
+**Benefits:**
+- 🧠 **Understand code fast** - Get function-level summaries without reading every line
+- 💾 **Smart caching** - Only summarizes changed code blocks
+- 🌐 **Multi-language** - English/Chinese summaries supported
+- ⚡ **Batch processing** - Efficiently handles large codebases
+
+**Quick Setup:**
+```bash
+# Configure Ollama (recommended for free, local AI)
+codebase --set-config summarizerProvider=ollama,summarizerOllamaModelId=qwen3-vl:4b-instruct
+
+# Or use DeepSeek (cost-effective API)
+codebase --set-config summarizerProvider=openai-compatible,summarizerOpenAiCompatibleBaseUrl=https://api.deepseek.com/v1,summarizerOpenAiCompatibleModelId=deepseek-chat,summarizerOpenAiCompatibleApiKey=sk-your-key
+```
+
 
 ### Indexing & Search
 ```bash
@@ -178,6 +219,29 @@ codebase --search="utils" --path-filters="{src,test}/**/*.ts"
 codebase --search="auth" --json
 ```
 
+#### 📝 AI-Powered Code Outlines
+Generate intelligent code summaries and outlines:
+
+```bash
+# Extract code structure
+codebase --outline src/index.ts
+
+# With AI summaries (recommended)
+codebase --outline "src/**/*.ts" --summarize
+
+# Preview before processing
+codebase --outline "src/**/*.ts" --dry-run
+
+# Clear cache and regenerate
+codebase --outline src/index.ts --summarize --clear-summarize-cache
+```
+
+**Key Benefits:**
+- 🎯 **Function-level summaries**: Understand code purpose at a glance
+- 💾 **Smart caching**: Avoid redundant LLM calls
+- 🌐 **Multi-language**: English / Chinese support
+- ⚡ **Batch processing**: Efficiently handle large codebases
+
 ## ⚙️ Configuration
 
 ### Config Layers (Priority Order)
@@ -228,9 +292,15 @@ codebase --search="auth" --json
 | **Vector Store** | `qdrantUrl`, `qdrantApiKey` | Qdrant connection |
 | **Search** | `vectorSearchMinScore`, `vectorSearchMaxResults` | Search behavior |
 | **Reranker** | `rerankerEnabled`, `rerankerProvider` | Result reranking |
+| **Summarizer** | `summarizerProvider`, `summarizerLanguage`, `summarizerBatchSize` | AI summary generation |
 
 **Key CLI Arguments:**
 - `--serve` / `--index` / `--search` - Core operations
+- `--outline <pattern>` - Extract code outlines (supports glob patterns)
+- `--summarize` - Generate AI summaries for code outlines
+- `--dry-run` - Preview operations before execution
+- `--title` - Show only file-level summaries
+- `--clear-summarize-cache` - Clear all summary caches
 - `--get-config` / `--set-config` - Configuration management  
 - `--path`, `--demo`, `--force` - Common options
 - `--limit` / `-l <number>` - Maximum number of search results (default: from config, max 50)
