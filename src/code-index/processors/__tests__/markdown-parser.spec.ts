@@ -106,33 +106,33 @@ describe('CodeParser', () => {
       // Check that we have proper parentChain and hierarchyDisplay
       const h1Block = findHeaderBlock(result, 'markdown_header_h1', '项目概述')
       expect(h1Block?.parentChain).toEqual([])
-      expect(h1Block?.hierarchyDisplay).toBe('md_h1 项目概述')
+      expect(h1Block?.hierarchyDisplay).toBe('header_1 项目概述')
 
       const h2Block = findHeaderBlock(result, 'markdown_header_h2', '技术架构')
       expect(h2Block?.parentChain).toEqual([
-        { identifier: '项目概述', type: 'md_h1' }
+        { identifier: '项目概述', type: 'header_1' }
       ])
-      expect(h2Block?.hierarchyDisplay).toBe('md_h1 项目概述 > md_h2 技术架构')
+      expect(h2Block?.hierarchyDisplay).toBe('header_1 项目概述 > header_2 技术架构')
 
       const h3FrontendBlock = findHeaderBlock(result, 'markdown_header_h3', '前端架构')
       expect(h3FrontendBlock?.parentChain).toEqual([
-        { identifier: '项目概述', type: 'md_h1' },
-        { identifier: '技术架构', type: 'md_h2' }
+        { identifier: '项目概述', type: 'header_1' },
+        { identifier: '技术架构', type: 'header_2' }
       ])
-      expect(h3FrontendBlock?.hierarchyDisplay).toBe('md_h1 项目概述 > md_h2 技术架构 > md_h3 前端架构')
+      expect(h3FrontendBlock?.hierarchyDisplay).toBe('header_1 项目概述 > header_2 技术架构 > header_3 前端架构')
 
       const h3BackendBlock = findHeaderBlock(result, 'markdown_header_h3', '后端架构')
       expect(h3BackendBlock?.parentChain).toEqual([
-        { identifier: '项目概述', type: 'md_h1' },
-        { identifier: '技术架构', type: 'md_h2' }
+        { identifier: '项目概述', type: 'header_1' },
+        { identifier: '技术架构', type: 'header_2' }
       ])
-      expect(h3BackendBlock?.hierarchyDisplay).toBe('md_h1 项目概述 > md_h2 技术架构 > md_h3 后端架构')
+      expect(h3BackendBlock?.hierarchyDisplay).toBe('header_1 项目概述 > header_2 技术架构 > header_3 后端架构')
 
       const h2DeployBlock = findHeaderBlock(result, 'markdown_header_h2', '部署方案')
       expect(h2DeployBlock?.parentChain).toEqual([
-        { identifier: '项目概述', type: 'md_h1' }
+        { identifier: '项目概述', type: 'header_1' }
       ])
-      expect(h2DeployBlock?.hierarchyDisplay).toBe('md_h1 项目概述 > md_h2 部署方案')
+      expect(h2DeployBlock?.hierarchyDisplay).toBe('header_1 项目概述 > header_2 部署方案')
     })
 
     it('should handle complex header nesting correctly', async () => {
@@ -186,34 +186,34 @@ describe('CodeParser', () => {
       })
 
       // Find the deep section
-      const deepSection = result.find(block => 
-        block.type === 'markdown_header_h4' && 
+      const deepSection = result.find(block =>
+        block.type === 'markdown_header_h4' &&
         block.identifier === 'Deep Section'
       )
 
       expect(deepSection?.parentChain).toEqual([
-        { identifier: 'Main Section', type: 'md_h1' },
-        { identifier: 'Sub Section 1', type: 'md_h2' },
-        { identifier: 'Sub Sub Section 1', type: 'md_h3' }
+        { identifier: 'Main Section', type: 'header_1' },
+        { identifier: 'Sub Section 1', type: 'header_2' },
+        { identifier: 'Sub Sub Section 1', type: 'header_3' }
       ])
 
       expect(deepSection?.hierarchyDisplay).toBe(
-        'md_h1 Main Section > md_h2 Sub Section 1 > md_h3 Sub Sub Section 1 > md_h4 Deep Section'
+        'header_1 Main Section > header_2 Sub Section 1 > header_3 Sub Sub Section 1 > header_4 Deep Section'
       )
 
       // Find the second sub sub section
-      const secondSubSub = result.find(block => 
-        block.type === 'markdown_header_h3' && 
+      const secondSubSub = result.find(block =>
+        block.type === 'markdown_header_h3' &&
         block.identifier === 'Sub Sub Section 2'
       )
 
       expect(secondSubSub?.parentChain).toEqual([
-        { identifier: 'Main Section', type: 'md_h1' },
-        { identifier: 'Sub Section 1', type: 'md_h2' }
+        { identifier: 'Main Section', type: 'header_1' },
+        { identifier: 'Sub Section 1', type: 'header_2' }
       ])
 
       expect(secondSubSub?.hierarchyDisplay).toBe(
-        'md_h1 Main Section > md_h2 Sub Section 1 > md_h3 Sub Sub Section 2'
+        'header_1 Main Section > header_2 Sub Section 1 > header_3 Sub Sub Section 2'
       )
     })
 
@@ -251,10 +251,10 @@ describe('CodeParser', () => {
 
       // All chapters should have empty parentChain (they are all h1)
       const chapters = result.filter(block => block.type === 'markdown_header_h1')
-      
+
       chapters.forEach(chapter => {
         expect(chapter.parentChain).toEqual([])
-        expect(chapter.hierarchyDisplay).toBe(`md_h1 ${chapter.identifier}`)
+        expect(chapter.hierarchyDisplay).toBe(`header_1 ${chapter.identifier}`)
       })
     })
 

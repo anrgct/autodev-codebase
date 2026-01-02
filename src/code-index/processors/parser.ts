@@ -11,7 +11,7 @@ import { MAX_BLOCK_CHARS, MIN_BLOCK_CHARS, MIN_CHUNK_REMAINDER_CHARS, MAX_CHARS_
 /**
  * Node types that represent "leaf" definitions - functions/methods that should not drill down
  * to children when oversized. Instead, they should be chunked by lines to preserve implementation.
- * 
+ *
  * Container types like class_declaration, module, namespace are NOT included here,
  * as they should continue to drill down to process their members.
  */
@@ -192,7 +192,7 @@ export class CodeParser implements ICodeParser {
 
 		// Process captures if not empty - build a map to track node identifiers
 		const nodeIdentifierMap = new Map<treeSitter.SyntaxNode, string>()
-		
+
 		// Extract identifiers from captures
 		for (const capture of captures) {
 			if (capture.name === "name" || capture.name === "property.name.definition") {
@@ -248,7 +248,7 @@ export class CodeParser implements ICodeParser {
 				if (currentNode.text.length > MAX_BLOCK_CHARS * MAX_CHARS_TOLERANCE_FACTOR) {
 					// Check if this is a "leaf" definition (function/method) that should not drill down
 					const isLeafDefinition = LEAF_DEFINITION_TYPES.has(currentNode.type)
-					
+
 					if (isLeafDefinition) {
 						// For functions/methods: chunk by lines instead of drilling down to children
 						// This ensures implementation is captured, not just docstrings
@@ -291,11 +291,11 @@ export class CodeParser implements ICodeParser {
 
 					if (!seenSegmentHashes.has(segmentHash)) {
 						seenSegmentHashes.add(segmentHash)
-						
+
 						// Build parent chain and hierarchy display
 						const parentChain = this.buildParentChain('tree-sitter', currentNode, nodeIdentifierMap)
 						const hierarchyDisplay = this.buildHierarchyDisplay(parentChain, identifier, type)
-						
+
 						results.push({
 							file_path: filePath,
 							identifier,
@@ -522,7 +522,7 @@ export class CodeParser implements ICodeParser {
 		}
 		const lines = node.text.split("\n")
 		const baseStartLine = node.startPosition.row + 1
-		
+
 		// Build parent chain and hierarchy display to preserve context
 		// For non-definition nodes (like string_content), we still want to show
 		// which class/function they belong to
@@ -530,7 +530,7 @@ export class CodeParser implements ICodeParser {
 		const identifier = null // Leaf nodes like string_content don't have their own identifier
 		const type = node.type
 		const hierarchyDisplay = this.buildHierarchyDisplay(parentChain, identifier, type)
-		
+
 		return this._chunkTextByLines(
 			lines,
 			filePath,
@@ -598,13 +598,13 @@ export class CodeParser implements ICodeParser {
 	 */
 	private deduplicateBlocks(blocks: CodeBlock[]): CodeBlock[] {
 		const sourceOrder = ['tree-sitter', 'fallback', 'line-segment']
-		blocks.sort((a, b) => 
+		blocks.sort((a, b) =>
 			sourceOrder.indexOf(a.chunkSource) - sourceOrder.indexOf(b.chunkSource)
 		)
-		
+
 		const result: CodeBlock[] = []
 		for (const block of blocks) {
-			const isDuplicate = result.some(existing => 
+			const isDuplicate = result.some(existing =>
 				this.isBlockContained(block, existing)
 			)
 			if (!isDuplicate) {
@@ -635,11 +635,11 @@ export class CodeParser implements ICodeParser {
 	 * 原有方法重命名 - tree-sitter专用
 	 */
 	private buildTreeSitterParentChain(
-		node: treeSitter.SyntaxNode, 
+		node: treeSitter.SyntaxNode,
 		nodeIdentifierMap: Map<treeSitter.SyntaxNode, string>
 	): ParentContainer[] {
 		const parentChain: ParentContainer[] = []
-		
+
 		// Container node types that we want to track in the hierarchy
 		const containerTypes = new Set([
 			'class_declaration', 'class_definition',
@@ -651,7 +651,7 @@ export class CodeParser implements ICodeParser {
 			'object', 'pair', // JSON objects and properties
 			'program', 'source_file'
 		])
-		
+
 		let currentNode = node.parent
 		while (currentNode) {
 			// Skip non-container nodes
@@ -659,21 +659,21 @@ export class CodeParser implements ICodeParser {
 				currentNode = currentNode.parent
 				continue
 			}
-			
+
 			// Skip program/source_file as they're too generic
 			if (currentNode.type === 'program' || currentNode.type === 'source_file') {
 				currentNode = currentNode.parent
 				continue
 			}
-			
+
 			// Try to get identifier from various sources
 			let identifier = nodeIdentifierMap.get(currentNode) || null
-			
+
 			if (!identifier) {
 				// Try to extract identifier from the node structure
 				identifier = this.extractNodeIdentifier(currentNode)
 			}
-			
+
 			// Only add to chain if we found a meaningful identifier
 			if (identifier) {
 				parentChain.unshift({ // Add to beginning to maintain correct order
@@ -681,10 +681,10 @@ export class CodeParser implements ICodeParser {
 					type: this.normalizeNodeType(currentNode.type)
 				})
 			}
-			
+
 			currentNode = currentNode.parent
 		}
-		
+
 		return parentChain
 	}
 
@@ -703,7 +703,7 @@ export class CodeParser implements ICodeParser {
 		if (parentLevel < 1) {
 			return parentChain // h1没有父级
 		}
-		
+
 		// 从栈顶开始查找最近的父级header
 		for (let i = headerStack.length - 1; i >= 0; i--) {
 			const header = headerStack[i]
@@ -714,25 +714,25 @@ export class CodeParser implements ICodeParser {
 					// 使用更简洁的display类型，避免hierarchyDisplay过长
 					type: this.getMarkdownDisplayType(header.level),
 				})
-				
+
 				// 递归查找父级的父级
 				const grandParentChain = this.buildMarkdownParentChain(header, headerStack.slice(0, i))
 				parentChain.unshift(...grandParentChain)
 				break
 			}
 		}
-		
+
 		return parentChain
 	}
 
 	/**
 	 * 为Markdown header提供统一的、精简的展示类型
-	 * 例如：h1 -> "md_h1"
+	 * 例如：h1 -> "header_1"
 	 */
 	private getMarkdownDisplayType(level: number): string {
-		return `md_h${level}`
+		return `header_${level}`
 	}
-	
+
 	/**
 	 * Extracts identifier from a tree-sitter node using various strategies
 	 */
@@ -747,10 +747,10 @@ export class CodeParser implements ICodeParser {
 			}
 			return name
 		}
-		
+
 		// Try to find identifier child nodes
-		const identifierChild = node.children?.find(child => 
-			child.type === "identifier" || 
+		const identifierChild = node.children?.find(child =>
+			child.type === "identifier" ||
 			child.type === "type_identifier" ||
 			child.type === "property_identifier"
 		)
@@ -762,7 +762,7 @@ export class CodeParser implements ICodeParser {
 			}
 			return name
 		}
-		
+
 		// For JSON pairs, try to get the key
 		if (node.type === 'pair' && node.children && node.children.length > 0) {
 			const key = node.children[0]
@@ -775,10 +775,10 @@ export class CodeParser implements ICodeParser {
 				return name
 			}
 		}
-		
+
 		return null
 	}
-	
+
 	/**
 	 * Normalizes node types to more readable format
 	 */
@@ -800,27 +800,27 @@ export class CodeParser implements ICodeParser {
 			'object': 'object',
 			'pair': 'property'
 		}
-		
+
 		return typeMap[nodeType] || nodeType
 	}
-	
+
 	/**
 	 * Builds hierarchy display string from parent chain
 	 */
 	private buildHierarchyDisplay(parentChain: ParentContainer[], currentIdentifier: string | null, currentType: string): string | null {
 		const parts: string[] = []
-		
+
 		// Add parent parts
 		for (const parent of parentChain) {
 			parts.push(`${parent.type} ${parent.identifier}`)
 		}
-		
+
 		// Add current node if it has an identifier
 		if (currentIdentifier) {
 			const normalizedCurrentType = this.normalizeNodeType(currentType)
 			parts.push(`${normalizedCurrentType} ${currentIdentifier}`)
 		}
-		
+
 		return parts.length > 0 ? parts.join(' > ') : null
 	}
 
@@ -833,14 +833,14 @@ export class CodeParser implements ICodeParser {
 	): string {
 		const parts: string[] = []
 
-		// 添加父级链（这里的type已经是精简后的md_hX）
+		// 添加父级链（这里的type已经是精简后的header_X）
 		for (const parent of parentChain) {
 			parts.push(`${parent.type} ${parent.identifier}`)
 		}
-		
-		// 添加当前header（使用精简后的md_hX）
+
+		// 添加当前header（使用精简后的header_X）
 		parts.push(`${this.getMarkdownDisplayType(currentHeader.level)} ${currentHeader.text}`)
-		
+
 		return parts.join(' > ')
 	}
 
@@ -852,10 +852,10 @@ export class CodeParser implements ICodeParser {
 		while (headerStack.length > 0 && headerStack[headerStack.length - 1].level >= newHeader.level) {
 			headerStack.pop()
 		}
-		
+
 		// 添加新的header
 		headerStack.push(newHeader)
-		
+
 		return headerStack
 	}
 
@@ -959,7 +959,7 @@ export class CodeParser implements ICodeParser {
 
 		const results: CodeBlock[] = []
 		let lastProcessedLine = 0
-		
+
 		// 维护一个header栈来跟踪层级关系
 		const headerStack: MarkdownHeader[] = []
 
@@ -1010,10 +1010,10 @@ export class CodeParser implements ICodeParser {
 
 			// 构建parentChain - 在更新栈之前使用当前栈来查找父级
 			const parentChain = this.buildMarkdownParentChain(currentHeader, headerStack)
-			
+
 			// 更新header栈
 			this.updateHeaderStack(headerStack, currentHeader)
-			
+
 			// 构建hierarchyDisplay
 			const hierarchyDisplay = this.buildMarkdownHierarchyDisplay(parentChain, currentHeader)
 
