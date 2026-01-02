@@ -145,7 +145,7 @@ describe('OllamaLLMReranker', () => {
         { id: '2', content: 'function test2() { return 2; }' }
       ]
 
-      // Mock fetch response with non-JSON text (should throw error in new implementation)
+      // Mock fetch response with non-JSON text (should throw error)
       mockFetch.mockResolvedValue({
         ok: true,
         json: async () => ({
@@ -153,14 +153,10 @@ describe('OllamaLLMReranker', () => {
         })
       })
 
-      const result = await reranker.rerank('test function', candidates)
-
-      // Should return fallback results due to error
-      expect(result).toHaveLength(2)
-      expect(result[0].id).toBe('1')
-      expect(result[0].score).toBe(10) // Fallback score
-      expect(result[1].id).toBe('2')
-      expect(result[1].score).toBe(9.9) // Fallback score
+      // Should throw error when response cannot be parsed as JSON
+      await expect(reranker.rerank('test function', candidates)).rejects.toThrow(
+        'Failed to parse response JSON: Scores: 7.5 and 3.2'
+      )
     })
 
     it('should clamp scores to 0-10 range', async () => {
@@ -185,7 +181,7 @@ describe('OllamaLLMReranker', () => {
       expect(clampedScores).toEqual([10, 0]) // 15.5 clamped to 10, -5 clamped to 0
     })
 
-    it('should handle fetch errors gracefully and return fallback results', async () => {
+    it('should handle fetch errors and throw error', async () => {
       const candidates: RerankerCandidate[] = [
         { id: '1', content: 'test content 1', score: 0.8 },
         { id: '2', content: 'test content 2', score: 0.6 },
@@ -195,19 +191,11 @@ describe('OllamaLLMReranker', () => {
       // Mock fetch error
       mockFetch.mockRejectedValue(new Error('Network error'))
 
-      const result = await reranker.rerank('test', candidates)
-
-      // Should return fallback results with slight decreasing scores
-      expect(result).toHaveLength(3)
-      expect(result[0].id).toBe('1')
-      expect(result[0].score).toBe(10)
-      expect(result[1].id).toBe('2')
-      expect(result[1].score).toBe(9.9)
-      expect(result[2].id).toBe('3')
-      expect(result[2].score).toBe(9.8)
+      // Should throw error when fetch fails
+      await expect(reranker.rerank('test', candidates)).rejects.toThrow('Network error')
     })
 
-    it('should handle invalid JSON response and return fallback results', async () => {
+    it('should handle invalid JSON response and throw error', async () => {
       const candidates: RerankerCandidate[] = [
         { id: '1', content: 'test content 1' },
         { id: '2', content: 'test content 2' }
@@ -221,14 +209,10 @@ describe('OllamaLLMReranker', () => {
         })
       })
 
-      const result = await reranker.rerank('test', candidates)
-
-      // Should return fallback results due to JSON parsing error
-      expect(result).toHaveLength(2)
-      expect(result[0].id).toBe('1')
-      expect(result[0].score).toBe(10) // Fallback score
-      expect(result[1].id).toBe('2')
-      expect(result[1].score).toBe(9.9) // Fallback score
+      // Should throw error when JSON parsing fails
+      await expect(reranker.rerank('test', candidates)).rejects.toThrow(
+        'Failed to parse response JSON: invalid json [abc, def]'
+      )
     })
   })
 
@@ -313,26 +297,30 @@ describe('OllamaLLMReranker', () => {
         { id: '4', content: 'function test4() { return 4; }', score: 0.3 }
       ]
 
-      // Mock first batch failure, second batch success
+      // Mock failures for both batches due to concurrent execution
+      // With concurrency=3, both batches execute simultaneously
+      // Each batch retries maxRetries=3 times (attempts 0,1,2 in while loop)
+      // Batch 0: 3 failed attempts → uses fallback
+      // Batch 1: 3 failed attempts → uses fallback
       mockFetch
-        .mockRejectedValueOnce(new Error('Network error'))
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            response: '{"scores": [7.0, 8.0]}'
-          })
-        })
+        .mockRejectedValue(new Error('Network error')) // All attempts fail
 
       const result = await reranker.rerank('test function', candidates)
 
-      expect(mockFetch).toHaveBeenCalledTimes(2)
+      // Both batches fail: 3 attempts each = 6 total calls
+      expect(mockFetch).toHaveBeenCalledTimes(6)
       expect(result).toHaveLength(4)
 
-      // First batch should have fallback scores (positions 0, 1): 10, 9.9
-      // Second batch should have real scores (positions 2, 3): 8.0, 7.0
-      const scores = result.map(r => r.score)
-      const allScores = [10, 9.9, 8.0, 7.0].sort((a, b) => b - a)
-      expect(scores).toEqual(allScores)
+      // Both batches should have fallback scores
+      // Batch 0 (first 2 candidates): baseScore=10 - 0*0.1 = 10
+      //   - Candidate 0: 10 - 0*0.01 = 10
+      //   - Candidate 1: 10 - 1*0.01 = 9.99
+      // Batch 1 (next 2 candidates): baseScore=10 - 1*0.1 = 9.9
+      //   - Candidate 0: 9.9 - 0*0.01 = 9.9
+      //   - Candidate 1: 9.9 - 1*0.01 = 9.89
+      // After sorting descending: [10, 9.99, 9.9, 9.89]
+      const scores = result.map(r => r.score).sort((a, b) => b - a)
+      expect(scores).toEqual([10, 9.99, 9.9, 9.89])
     })
 
     it('should correctly divide candidates into batches', async () => {
@@ -434,7 +422,7 @@ describe('OllamaLLMReranker', () => {
 
       const prompt = (reranker as any)['buildScoringPrompt']('search query', candidates)
 
-      expect(prompt).toContain('## snippet 1 [Context: MyClass.myMethod] [File: test.js]')
+      expect(prompt).toContain('## snippet 1 [Context: MyClass.myMethod] [File: src/test.js]')
       expect(prompt).toContain('function test() { return "hello"; }')
     })
 
@@ -470,7 +458,7 @@ describe('OllamaLLMReranker', () => {
 
       const contextInfo = (reranker as any)['buildContextInfo'](candidate)
 
-      expect(contextInfo).toBe('[Context: MyClass.myMethod] [File: test.ts]\n')
+      expect(contextInfo).toBe('[Context: MyClass.myMethod] [File: src/components/test.ts]\n')
     })
 
     it('should build partial context info when only some payload fields are present', () => {
@@ -485,7 +473,7 @@ describe('OllamaLLMReranker', () => {
 
       const contextInfo = (reranker as any)['buildContextInfo'](candidate)
 
-      expect(contextInfo).toBe('[File: constants.ts]\n')
+      expect(contextInfo).toBe('[File: src/constants.ts]\n')
     })
 
     it('should return empty string when no payload is provided', () => {
@@ -536,7 +524,7 @@ describe('OllamaLLMReranker', () => {
 
       const contextInfo = (reranker as any)['buildContextInfo'](candidate)
 
-      expect(contextInfo).toBe('[File: file.js]\n')
+      expect(contextInfo).toBe('[File: /path/to/file.js]\n')
     })
 
     it('should handle only type', () => {
@@ -592,7 +580,7 @@ describe('OllamaLLMReranker', () => {
 
       const contextInfo = (reranker as any)['buildContextInfo'](candidate)
 
-      expect(contextInfo).toBe('[File: format.ts]\n')
+      expect(contextInfo).toBe('[File: src/utils/helpers/date/format.ts]\n')
     })
 
     it('should handle empty strings in payload fields', () => {

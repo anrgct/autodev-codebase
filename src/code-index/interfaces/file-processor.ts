@@ -127,7 +127,7 @@ export interface FileProcessingResult {
  */
 
 export interface ParentContainer {
-	identifier: string
+	identifier: string | null
 	type: string
 }
 

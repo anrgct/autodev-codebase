@@ -9,7 +9,7 @@ import { MAX_BLOCK_CHARS, MIN_BLOCK_CHARS, MIN_CHUNK_REMAINDER_CHARS, MAX_CHARS_
  * 父级容器信息
  */
 export interface ParentContainer {
-	identifier: string
+	identifier: string | null
 	type: string
 }
 

@@ -213,8 +213,7 @@ Snippets:
 
         // Add file path information
         if (candidate.payload?.filePath) {
-            const fileName = candidate.payload.filePath.split('/').pop()
-            parts.push(`[File: ${fileName}]`)
+            parts.push(`[File: ${candidate.payload.filePath}]`)
         }
 
         // // Add code type information

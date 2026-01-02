@@ -1,6 +1,7 @@
 import { listFiles } from "../../glob/list-files"
 import { Ignore } from "ignore"
 import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
+import { generateBlockEmbeddingText } from "../shared/block-text-generator"
 import { scannerExtensions } from "../shared/supported-extensions"
 import { CodeBlock, ICodeParser, IEmbedder, IVectorStore, IDirectoryScanner } from "../interfaces"
 import { BatchProcessor, BatchProcessorOptions } from "./batch-processor"
@@ -361,7 +362,7 @@ export class DirectoryScanner implements IDirectoryScanner {
 			vectorStore: this.deps.qdrantClient,
 			cacheManager: this.deps.cacheManager,
 			
-			itemToText: (block) => block.content,
+			itemToText: (block) => generateBlockEmbeddingText(block, scanWorkspace),
 			itemToFilePath: (block) => block.file_path,
 			getFileHash: (block) => {
 				// Find the corresponding file info for this block

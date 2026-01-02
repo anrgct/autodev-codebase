@@ -25,6 +25,7 @@ import { BatchProcessor, BatchProcessorOptions } from "./batch-processor"
 import { codeParser } from "./parser"
 import { CacheManager } from "../cache-manager"
 import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
+import { generateBlockEmbeddingText } from "../shared/block-text-generator"
 import { IEventBus, IFileSystem } from "../../abstractions/core"
 import { IWorkspace, IPathUtils } from "../../abstractions/workspace"
 
@@ -362,7 +363,7 @@ export class FileWatcher implements ICodeFileWatcher {
 					vectorStore: this.vectorStore,
 					cacheManager: this.cacheManager,
 
-					itemToText: (block) => block.content,
+					itemToText: (block) => generateBlockEmbeddingText(block, this.workspacePath),
 					itemToFilePath: (block) => block.file_path,
 					getFileHash: (block) => {
 						// Find the corresponding file info for this block
