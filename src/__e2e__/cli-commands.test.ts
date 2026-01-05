@@ -609,6 +609,15 @@ describe('CLI Commands E2E Tests', () => {
         expect(searchTool.description).toBeDefined()
         expect(searchTool.inputSchema).toBeDefined()
         expect(searchTool.inputSchema.properties.query).toBeDefined()
+
+        // 验证outline_codebase工具存在
+        const outlineTool = tools.find((t: any) => t.name === 'outline_codebase')
+        expect(outlineTool).toBeDefined()
+        expect(outlineTool.description).toBeDefined()
+        expect(outlineTool.inputSchema).toBeDefined()
+        expect(outlineTool.inputSchema.properties.path).toBeDefined()
+        expect(outlineTool.inputSchema.properties.summarize).toBeDefined()
+        expect(outlineTool.inputSchema.properties.title).toBeDefined()
       })
 
       it('should search for function definitions with proper format', async () => {
@@ -749,6 +758,110 @@ describe('CLI Commands E2E Tests', () => {
           expect(textContent.text).toBeDefined()
         }
       }, 60000)
+
+      it('should extract outline from a single file', async () => {
+        const client = new MCPHTTPTestClient(serverUrl)
+        await client.initialize()
+
+        // 使用 demo 目录下的文件
+        const response = await client.callTool('outline_codebase', {
+          path: 'hello.js'
+        })
+
+        expect(response).toBeDefined()
+
+        const content = response.result?.content || response.content
+        expect(content).toBeDefined()
+        expect(content).toBeInstanceOf(Array)
+
+        const textContent = content[0]
+        expect(textContent.type).toBe('text')
+        expect(textContent.text).toBeDefined()
+        expect(textContent.text.length).toBeGreaterThan(0)
+
+        // 验证输出包含文件路径
+        expect(textContent.text).toContain('# hello.js')
+        // 验证输出包含定义
+        expect(textContent.text).toContain('function')
+      }, 60000)
+
+      it('should extract outline from glob pattern', async () => {
+        const client = new MCPHTTPTestClient(serverUrl)
+        await client.initialize()
+
+        const response = await client.callTool('outline_codebase', {
+          path: '*.py'
+        })
+
+        expect(response).toBeDefined()
+
+        const content = response.result?.content || response.content
+        expect(content).toBeDefined()
+        expect(content).toBeInstanceOf(Array)
+
+        const textContent = content[0]
+        expect(textContent.type).toBe('text')
+        expect(textContent.text).toBeDefined()
+
+        // 验证输出包含 Python 文件
+        expect(textContent.text).toContain('.py')
+      }, 60000)
+
+      it('should handle title mode correctly', async () => {
+        const client = new MCPHTTPTestClient(serverUrl)
+        await client.initialize()
+
+        const response = await client.callTool('outline_codebase', {
+          path: 'hello.js',
+          title: true
+        })
+
+        expect(response).toBeDefined()
+
+        const content = response.result?.content || response.content
+        expect(content).toBeDefined()
+        expect(content).toBeInstanceOf(Array)
+
+        const textContent = content[0]
+        expect(textContent.type).toBe('text')
+        expect(textContent.text).toBeDefined()
+
+        // Title 模式应该只显示文件头，不显示具体定义
+        expect(textContent.text).toContain('# hello.js')
+      }, 30000)
+
+      it('should validate path parameter', async () => {
+        const client = new MCPHTTPTestClient(serverUrl)
+        await client.initialize()
+
+        // 测试空路径参数
+        const response = await client.callTool('outline_codebase', {
+          path: ''
+        })
+
+        expect(response).toBeDefined()
+        // 应该返回错误响应
+        const content = response.result?.content || response.content
+        expect(content).toBeDefined()
+        const textContent = content[0]
+        expect(textContent.text).toContain('Error')
+      }, 30000)
+
+      it('should handle non-existent file gracefully', async () => {
+        const client = new MCPHTTPTestClient(serverUrl)
+        await client.initialize()
+
+        const response = await client.callTool('outline_codebase', {
+          path: 'non-existent-file.ts'
+        })
+
+        expect(response).toBeDefined()
+        const content = response.result?.content || response.content
+        expect(content).toBeDefined()
+        const textContent = content[0]
+        expect(textContent.type).toBe('text')
+        expect(textContent.text).toContain('Error')
+      }, 30000)
     })
 
     describe('Stdio adapter mode (CLI --stdio-adapter)', () => {
@@ -774,6 +887,9 @@ describe('CLI Commands E2E Tests', () => {
 
           const searchTool = tools.find((t: any) => t.name === 'search_codebase')
           expect(searchTool).toBeDefined()
+
+          const outlineTool = tools.find((t: any) => t.name === 'outline_codebase')
+          expect(outlineTool).toBeDefined()
         } finally {
           stdioClient.stop()
         }

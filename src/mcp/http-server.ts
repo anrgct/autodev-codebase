@@ -10,8 +10,12 @@ import {
     TextContent,
     isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
-import { CodeIndexManager } from '../code-index/manager.js';
-import { validateLimit, validateMinScore } from '../code-index/validate-search-params.js';
+import { CodeIndexManager } from '../code-index/manager';
+import { validateLimit, validateMinScore } from '../code-index/validate-search-params';
+import { extractOutline } from '../cli-tools/outline';
+import { resolveOutlineTargets } from '../cli-tools/outline-targets';
+import * as path from 'path';
+import { createNodeDependencies } from '../adapters/nodejs';
 
 export interface HTTPMCPServerOptions {
     codeIndexManager: CodeIndexManager;
@@ -54,10 +58,13 @@ export class CodebaseHTTPMCPServer {
                     z.coerce.number(),
                     z.string().transform(s => Number(s))
                 ]).optional()
-                .describe('Maximum number of results to return (default from config, max 50)'),
+                .describe(
+                    'Max results. Do NOT set this parameter manually - let the server use its configured default (20). ' +
+                    'Only override if user explicitly requests a specific number.'
+                ),
                 filters: z.object({
                     pathFilters: z.array(z.string()).optional().describe(
-                        "Filter paths using glob-like patterns.\n\n" +
+                        "Filter paths using glob-like patterns. **Patterns are relative to the project root directory.**\n\n" +
 
                         "**Logic:**\n" +
                         "- Include patterns (no ! prefix): OR logic - matches ANY pattern\n" +
@@ -71,13 +78,17 @@ export class CodebaseHTTPMCPServer {
                         "- ['src/**/*.ts'] → src tree only\n" +
                         "- ['src/**/*.ts', 'lib/**/*.ts'] → src OR lib\n" +
                         "- ['**/*.ts', '!**/*.test.ts'] → all .ts excluding tests\n" +
-                        "- ['src/{components,utils}/*.ts'] → specific folders"
+                        "- ['src/{components,utils}/*.ts'] → specific folders\n" +
+                        "- ['!.md'] → code only, exclude docs"
                     ),
                     minScore: z.union([
                         z.coerce.number(),
                         z.string().transform(s => Number(s))
                     ]).optional()
-                    .describe('Minimum similarity score threshold (0-1, default from config)')
+                    .describe(
+                        'Minimum similarity threshold. Do NOT set manually - uses configured default. ' +
+                        'Only override if user requests specific quality level.'
+                    )
                 }).optional().describe('Optional filters for file types, paths, etc.')
             },
             async ({ query, limit, filters }): Promise<CallToolResult> => {
@@ -86,6 +97,40 @@ export class CodebaseHTTPMCPServer {
                 }
                 // console.log(`🔍[MCP Server] Handling search_codebase with query: "${query}", limit: ${limit}, filters:`, filters);
                 return await this.handleSearchCodebase({ query, limit, filters });
+            }
+        );
+
+        // Register outline_codebase tool
+        this.mcpServer.tool(
+            'outline_codebase',
+            "Extract code structure outline from source files using tree-sitter parsing. Supports both single files and glob patterns.",
+            {
+                path: z.string()
+                    .describe(
+                        "File path or glob pattern to extract outline from. **Paths are relative to the project root directory.**\n\n" +
+                        "**Examples:**\n" +
+                        "- 'src/index.ts' → Single file\n" +
+                        "- '*' → List files in root directory(Recommended)\n" +
+                        "- '**/*.ts' → All TypeScript files\n" +
+                        "- 'src/**/*.ts' → TypeScript files in src directory\n" +
+                        "- 'src/**/*.ts,lib/**/*.ts' → Multiple patterns (comma-separated)\n" +
+                        "- '**/*.ts,!**/*.test.ts' → Include + exclude patterns"
+                    ),
+                summarize: z.boolean().optional()
+                    .describe(
+                        "Generate AI summaries for each code definition (functions, classes, etc.).\n" +
+                        "Requires a configured summarizer in autodev-config.json.\n" +
+                        "Default: false"
+                    ),
+                title: z.boolean().optional()
+                    .describe(
+                        "Only show file summary without detailed definition listings.\n" +
+                        "When true, displays only file path and overall file-level summary(summarize on).\n" +
+                        "Default: false"
+                    )
+            },
+            async ({ path, summarize, title }): Promise<CallToolResult> => {
+                return await this.handleOutlineCodebase({ path, summarize, title });
             }
         );
 
@@ -139,7 +184,7 @@ export class CodebaseHTTPMCPServer {
             // 只有传入时才验证，未传则让service层处理
             const finalLimit = limit === undefined ? undefined : validateLimit(limit)
             const finalMinScore = filters?.minScore === undefined ? undefined : validateMinScore(filters.minScore)
-            
+
             // Extract search filter from the filters parameter
             const searchFilter = {
                 limit: finalLimit,
@@ -328,6 +373,142 @@ Note: Configuration changes will apply to subsequent searches.
             ],
         };
     }
+
+    /**
+     * Handle outline_codebase tool request
+     */
+    private async handleOutlineCodebase(args: { path: string; summarize?: boolean; title?: boolean }): Promise<CallToolResult> {
+        const { path: pattern, summarize, title } = args;
+
+        // Validate path parameter
+        if (!pattern || typeof pattern !== 'string' || !pattern.trim()) {
+            return {
+                content: [{ type: 'text', text: 'Error: Path parameter is required and must be a non-empty string' }],
+                isError: true
+            };
+        }
+
+        const trimmedPattern = pattern.trim();
+        const workspacePath = this.codeIndexManager.workspacePathValue;
+
+        try {
+            // Create dependencies inline (similar to CLI approach)
+            const configPath = path.join(workspacePath, 'autodev-config.json');
+            const deps = createNodeDependencies({
+                workspacePath,
+                storageOptions: {
+                    globalStoragePath: path.join(workspacePath, '.autodev-storage')
+                },
+                loggerOptions: {
+                    name: 'outline-mcp',
+                    level: 'error',
+                    timestamps: false,
+                    colors: false
+                },
+                configOptions: { configPath }
+            });
+
+            const resolved = await resolveOutlineTargets({
+                input: trimmedPattern,
+                workspacePath,
+                workspace: deps.workspace,
+                pathUtils: deps.pathUtils,
+                fileSystem: deps.fileSystem,
+                skipIgnoreCheckForSingleFile: true,
+                logger: deps.logger
+            })
+
+            if (resolved.files.length === 0) {
+                return {
+                    content: [{ type: 'text', text: `No files found matching: ${trimmedPattern}` }]
+                };
+            }
+
+            if (!resolved.isGlob) {
+                const result = await extractOutline({
+                    filePath: resolved.files[0],
+                    workspacePath,
+                    json: false,
+                    summarize: summarize ?? false,
+                    title: title ?? false,
+                    configPath,
+                    fileSystem: deps.fileSystem,
+                    workspace: deps.workspace,
+                    pathUtils: deps.pathUtils,
+                    logger: deps.logger,
+                    skipIgnoreCheck: true
+                });
+
+                return {
+                    content: [{ type: 'text', text: result }]
+                };
+            }
+
+            const maxFiles = summarize ? 5 : 20;
+            const wasLimited = resolved.files.length > maxFiles;
+            const filesToProcess = wasLimited ? resolved.files.slice(0, maxFiles) : resolved.files;
+
+            const results: string[] = [];
+            const errors: string[] = [];
+
+            for (const file of filesToProcess) {
+                try {
+                    const result = await extractOutline({
+                        filePath: file,
+                        workspacePath,
+                        json: false,
+                        summarize: summarize ?? false,
+                        title: title ?? false,
+                        configPath,
+                        fileSystem: deps.fileSystem,
+                        workspace: deps.workspace,
+                        pathUtils: deps.pathUtils,
+                        logger: deps.logger
+                    });
+                    results.push(result);
+                } catch (error) {
+                    const fileRelativePath = deps.workspace.getRelativePath(file)
+                    const errorMsg = error instanceof Error ? error.message : String(error);
+                    errors.push(`${fileRelativePath}: ${errorMsg}`);
+                    deps.logger?.warn?.(`Failed to process ${file}: ${errorMsg}`);
+                }
+            }
+
+            let output = results.join('\n\n---\n\n');
+
+            if (wasLimited) {
+                const excludedFiles = resolved.files.slice(maxFiles);
+                const sampleSize = 5;
+                const sampledExcluded = excludedFiles.slice(0, sampleSize);
+                let excludedList = sampledExcluded.map(f => `  - ${deps.workspace.getRelativePath(f)}`).join('\n');
+                if (excludedFiles.length > sampleSize) {
+                    excludedList += `\n  ... and ${excludedFiles.length - sampleSize} more files`;
+                }
+
+                output = output +
+                    '\n\n---\n\n' +
+                    `Found ${resolved.files.length} files matching pattern "${trimmedPattern}", limiting to first ${maxFiles} files.\n\n` +
+                    `Excluded (${excludedFiles.length} files):\n${excludedList}\n\n` +
+                    `Tip: Use exact filenames to view specific files.`;
+            }
+
+            if (errors.length > 0) {
+                output += '\n\nErrors:\n' + errors.map(e => `  - ${e}`).join('\n');
+            }
+
+            return {
+                content: [{ type: 'text', text: output }]
+            };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+                content: [{ type: 'text', text: `Error: ${message}` }],
+                isError: true
+            };
+        }
+    }
+
+
 
 
     private generateSessionId(): string {

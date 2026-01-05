@@ -356,7 +356,8 @@ export async function loadRequiredLanguageParsers(filesToParse: string[]): Promi
 				query = language.query(elixirQuery)
 				break
 			default:
-				console.warn(`Unsupported language: ${ext}`)
+				// Silently skip unsupported file types (e.g., .cff, .yml, .sh)
+				// console.warn(`Unsupported language: ${ext}`)
 				continue
 		}
 		const parser = new Parser()

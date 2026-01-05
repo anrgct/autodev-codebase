@@ -12,8 +12,8 @@ import { saveJsoncPreservingComments } from './utils/jsonc-helpers';
 import { ensureGitGlobalIgnorePatterns } from './utils/git-global-ignore';
 import { createNodeDependencies } from './adapters/nodejs';
 import { CodeIndexManager } from './code-index/manager';
-import { CodebaseHTTPMCPServer } from './mcp/http-server.js';
-import { StdioToStreamableHTTPAdapter } from './mcp/stdio-adapter.js';
+import { CodebaseHTTPMCPServer } from './mcp/http-server';
+import { StdioToStreamableHTTPAdapter } from './mcp/stdio-adapter';
 import createSampleFiles from './examples/create-sample-files';
 import { getGlobalLogger, setGlobalLogger, Logger, LogLevel } from './utils/logger';
 import { VectorStoreSearchResult, SearchFilter } from './code-index/interfaces';
@@ -22,6 +22,7 @@ import { CodeIndexConfig } from './code-index/interfaces/config';
 import { scannerExtensions } from './code-index/shared/supported-extensions';
 import { ConfigValidator } from './code-index/config-validator';
 import { validateLimit, validateMinScore } from './code-index/validate-search-params';
+import { isGlobPattern, parsePathFilters } from './utils/path-filters';
 
 // Initialize global logger with CLI settings
 function initGlobalLogger(level: LogLevel) {
@@ -429,10 +430,10 @@ Examples:
   codebase --outline "**/*.py" --summarize
   codebase --outline lib/utils.py --json
 
-	  # Extract code outline with AI summaries
-	  codebase --outline src/index.ts --summarize
-	  codebase --outline lib/utils.py --summarize --json
-	  codebase --outline "src/**/*.ts" --summarize --title  # Only file summaries
+  # Extract code outline with AI summaries
+  codebase --outline src/index.ts --summarize
+  codebase --outline lib/utils.py --summarize --json
+  codebase --outline "src/**/*.ts" --summarize --title  # Only file summaries
 
   # Clear summary caches
   codebase --clear-summarize-cache
@@ -468,7 +469,6 @@ Examples:
   # Run with demo files
   codebase --serve --demo --log-level=debug
 
-Note: Values containing commas will be split and cause an error (missing '=' in subsequent parts). For complex values, edit config files directly.
 `);
 }
 
@@ -731,7 +731,7 @@ async function performIndexDryRun(manager: CodeIndexManager, options: SimpleCliO
     // 1. Get all supported files from filesystem
     getLogger().info('Scanning workspace for supported files...');
     const allFilePaths = await scanner.getAllFilePaths(options.path);
-    
+
     // 2. Check vector store availability
     let vectorStoreAvailable = false;
     let indexedRelativePaths: string[] = [];
@@ -853,12 +853,12 @@ async function performIndexDryRun(manager: CodeIndexManager, options: SimpleCliO
     // 4. Output results
     console.log('\n=== Dry-Run Analysis Report ===\n');
     console.log(`Workspace: ${options.path}`);
-    
+
     // Detailed statistics section
     console.log('\n--- Statistics ---');
     console.log(`\nCache Manager Stats:`);
     console.log(`  Files in cache: ${Object.keys(cachedHashes).length}`);
-    
+
     console.log(`\nVector Store Stats:`);
     if (vectorStoreAvailable) {
       console.log(`  Status: Available`);
@@ -866,14 +866,14 @@ async function performIndexDryRun(manager: CodeIndexManager, options: SimpleCliO
     } else {
       console.log(`  Status: Not Available or Empty`);
     }
-    
+
     console.log(`\nScanner Stats:`);
     console.log(`  Total files found: ${allFilePaths.length}`);
     console.log(`  Supported files: ${analysisResults.totalFiles}`);
-    
+
     // Note: Some files may be in cache but not in vector store due to filtering
     // (e.g., files too small, parsing errors, etc.) This is normal behavior.
-    
+
     console.log(`\n--- Analysis Results ---`);
 
     console.log('\nSummary:');
@@ -902,17 +902,17 @@ async function performIndexDryRun(manager: CodeIndexManager, options: SimpleCliO
     const totalToProcess = grouped.new.length + grouped.changed.length + grouped.deleted.length;
     if (totalToProcess > 0) {
       console.log('Files that will be processed:');
-      
+
       if (grouped.new.length > 0) {
         console.log(`\n  New files (${grouped.new.length}):`);
         grouped.new.forEach(f => console.log(`    + ${f.path}`));
       }
-      
+
       if (grouped.changed.length > 0) {
         console.log(`\n  Changed files (${grouped.changed.length}):`);
         grouped.changed.forEach(f => console.log(`    ~ ${f.path}`));
       }
-      
+
       if (grouped.deleted.length > 0) {
         console.log(`\n  Deleted files (${grouped.deleted.length}):`);
         grouped.deleted.forEach(f => console.log(`    - ${f.path}`));
@@ -988,46 +988,6 @@ async function indexCodebase(options: SimpleCliOptions): Promise<void> {
     manager.dispose();
     getLogger().info('Indexing mode completed. Exiting...');
   }
-}
-
-/**
- * Split path filters by comma, but respect brace expansion {a,b}
- * @param filtersString Comma-separated filter string
- * @returns Array of filter patterns
- */
-function parsePathFilters(filtersString: string): string[] {
-  const filters: string[] = []
-  let current = ''
-  let braceDepth = 0
-
-  for (let i = 0; i < filtersString.length; i++) {
-    const char = filtersString[i]
-
-    if (char === '{') {
-      braceDepth++
-      current += char
-    } else if (char === '}') {
-      braceDepth--
-      current += char
-    } else if (char === ',' && braceDepth === 0) {
-      // Only split on comma when not inside braces
-      const trimmed = current.trim()
-      if (trimmed.length > 0) {
-        filters.push(trimmed)
-      }
-      current = ''
-    } else {
-      current += char
-    }
-  }
-
-  // Add the last segment
-  const trimmed = current.trim()
-  if (trimmed.length > 0) {
-    filters.push(trimmed)
-  }
-
-  return filters
 }
 
 /**
@@ -1627,197 +1587,73 @@ async function setConfigHandler(configString: string, global?: boolean): Promise
 }
 
 /**
- * Check if a path string contains glob pattern characters
- */
-function isGlobPattern(path: string): boolean {
-  return /[*?{}\[\]]/.test(path);
-}
-
-/**
  * Handle --outline command with glob pattern support
  */
 async function handleOutlineCommand(filePath: string, options: SimpleCliOptions): Promise<void> {
   // Create dependencies
   const deps = createDependencies(options);
 
-  // Import extractOutline and fast-glob
+  // Import extractOutline + shared resolver (keeps CLI and MCP consistent)
   const { extractOutline } = await import('./cli-tools/outline');
-  const fastGlob = (await import('fast-glob')).default;
+  const { resolveOutlineTargets } = await import('./cli-tools/outline-targets');
 
   const workspacePath = options.path;
   const configPath = options.config || path.join(options.path, 'autodev-config.json');
   const workspace = deps.workspace;
 
   try {
-    // Check if input is a glob pattern
-    if (isGlobPattern(filePath)) {
-      // Check if the pattern contains comma-separated multiple patterns
-      if (filePath.includes(',')) {
-        // Multi-pattern support with include/exclude logic
-        const patterns = parsePathFilters(filePath);
+    const resolved = await resolveOutlineTargets({
+      input: filePath,
+      workspacePath,
+      workspace,
+      pathUtils: deps.pathUtils,
+      fileSystem: deps.fileSystem,
+      skipIgnoreCheckForSingleFile: true
+    })
 
-        // Separate include and exclude patterns
-        const includePatterns = patterns.filter(p => !p.startsWith('!'));
-        const excludePatterns = patterns
-          .filter(p => p.startsWith('!'))
-          .map(p => p.slice(1)); // Remove ! prefix
+    if (resolved.files.length === 0) {
+      if (resolved.isGlob) deps.logger?.warn(`No files found matching pattern: ${filePath}`)
+      else deps.logger?.warn(`No file found (or ignored): ${filePath}`)
+      return
+    }
 
-        deps.logger?.debug(`Include patterns: ${includePatterns.join(', ')}`);
-        deps.logger?.debug(`Exclude patterns: ${excludePatterns.join(', ')}`);
+    if (resolved.isGlob) {
+      if (options.dryRun) {
+        console.log(`Dry-run mode: Files matched by pattern "${filePath}"\n`)
+        console.log(`Total: ${resolved.files.length} file(s)\n`)
+        resolved.files.forEach((file, index) => {
+          console.log(`${index + 1}. ${workspace.getRelativePath(file)}`)
+        })
+        return
+      }
 
-        // Get ignore patterns from workspace
-        const globIgnorePatterns = await workspace.getGlobIgnorePatterns();
+      deps.logger?.info(`Found ${resolved.files.length} file(s) matching pattern: ${filePath}`)
+    }
 
-        // Merge workspace ignore patterns with user-specified exclude patterns
-        const allIgnorePatterns = [...globIgnorePatterns, ...excludePatterns];
+    for (const file of resolved.files) {
+      try {
+        const result = await extractOutline({
+          filePath: file,
+          workspacePath,
+          json: options.json,
+          summarize: options.summarize,
+          title: options.title,
+          clearSummarizeCache: options.clearSummarizeCache,
+          configPath,
+          fileSystem: deps.fileSystem,
+          workspace,
+          pathUtils: deps.pathUtils,
+          logger: deps.logger,
+          skipIgnoreCheck: !resolved.isGlob
+        })
 
-        // Use fast-glob with multiple include patterns and combined ignore patterns
-        let files = await fastGlob(includePatterns, {
-          cwd: workspacePath,
-          absolute: true,
-          ignore: allIgnorePatterns
-        });
-
-        // Layer 2: Flexible filtering (project-specific rules)
-        const filteredFiles = [];
-        for (const file of files) {
-          if (!(await workspace.shouldIgnore(file))) {
-            filteredFiles.push(file);
-          }
-        }
-
-        if (filteredFiles.length === 0) {
-          deps.logger?.warn(`No files found matching pattern: ${filePath}`);
-          return;
-        }
-
-        // Handle --dry-run mode
-        if (options.dryRun) {
-          console.log(`Dry-run mode: Files matched by pattern "${filePath}"\n`);
-          console.log(`Total: ${filteredFiles.length} file(s)\n`);
-
-          filteredFiles.forEach((file, index) => {
-            const relativePath = workspace.getRelativePath(file);
-            console.log(`${index + 1}. ${relativePath}`);
-          });
-
-          return; // Don't execute actual outline extraction
-        }
-
-        deps.logger?.info(`Found ${filteredFiles.length} file(s) matching pattern: ${filePath}`);
-
-        // Process each file
-        for (const file of filteredFiles) {
-          try {
-            const result = await extractOutline({
-                filePath: file,
-                workspacePath,
-                json: options.json,
-                summarize: options.summarize,
-                title: options.title,
-                clearSummarizeCache: options.clearSummarizeCache,
-                configPath,
-                fileSystem: deps.fileSystem,
-                workspace,
-                pathUtils: deps.pathUtils,
-                logger: deps.logger
-              });
-
-            console.log(result);
-            console.log('\n---\n');
-          } catch (error) {
-            // Skip failed files but continue processing others
-            if (error instanceof Error) {
-              deps.logger?.warn(`Failed to process ${file}: ${error.message}`);
-            }
-          }
-        }
-      } else {
-        // Single pattern (original logic)
-        // Get ignore patterns from workspace (reuses existing ignore logic)
-        const globIgnorePatterns = await workspace.getGlobIgnorePatterns()
-
-        // Use fast-glob for pattern matching with dual-layer filtering
-        let files = await fastGlob(filePath, {
-          cwd: workspacePath,
-          absolute: true,
-          // Layer 1: High-performance filtering (prune during traversal)
-          ignore: globIgnorePatterns
-        });
-
-        // Layer 2: Flexible filtering (project-specific rules)
-        const filteredFiles = [];
-        for (const file of files) {
-          if (!(await workspace.shouldIgnore(file))) {
-            filteredFiles.push(file);
-          }
-        }
-
-        if (filteredFiles.length === 0) {
-          deps.logger?.warn(`No files found matching pattern: ${filePath}`);
-          return;
-        }
-
-        // Handle --dry-run mode
-        if (options.dryRun) {
-          console.log(`Dry-run mode: Files matched by pattern "${filePath}"\n`);
-          console.log(`Total: ${filteredFiles.length} file(s)\n`);
-
-          filteredFiles.forEach((file, index) => {
-            const relativePath = workspace.getRelativePath(file);
-            console.log(`${index + 1}. ${relativePath}`);
-          });
-
-          return; // Don't execute actual outline extraction
-        }
-
-        deps.logger?.info(`Found ${filteredFiles.length} file(s) matching pattern: ${filePath}`);
-
-        // Process each file
-        for (const file of filteredFiles) {
-          try {
-            const result = await extractOutline({
-                filePath: file,
-                workspacePath,
-                json: options.json,
-                summarize: options.summarize,
-                title: options.title,
-                clearSummarizeCache: options.clearSummarizeCache,
-                configPath,
-                fileSystem: deps.fileSystem,
-                workspace,
-                pathUtils: deps.pathUtils,
-                logger: deps.logger
-              });
-
-            console.log(result);
-            console.log('\n---\n');
-          } catch (error) {
-            // Skip failed files but continue processing others
-            if (error instanceof Error) {
-              deps.logger?.warn(`Failed to process ${file}: ${error.message}`);
-            }
-          }
+        console.log(result)
+        if (resolved.isGlob) console.log('\n---\n')
+      } catch (error) {
+        if (error instanceof Error) {
+          deps.logger?.warn(`Failed to process ${file}: ${error.message}`)
         }
       }
-    } else {
-      // Single file processing (original logic) - skip ignore checks
-      const result = await extractOutline({
-              filePath,
-              workspacePath,
-              json: options.json,
-              summarize: options.summarize,
-              title: options.title,
-              clearSummarizeCache: options.clearSummarizeCache,
-              configPath,
-              fileSystem: deps.fileSystem,
-              workspace,
-              pathUtils: deps.pathUtils,
-              logger: deps.logger,
-              skipIgnoreCheck: true  // Skip ignore checks for single-file mode
-            });
-
-      console.log(result);
     }
   } catch (error) {
     if (error instanceof Error) {
