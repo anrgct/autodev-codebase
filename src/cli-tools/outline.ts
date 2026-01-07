@@ -538,7 +538,7 @@ function renderDefinitionsAsJson(outlineData: OutlineData, title?: boolean): str
 /**
  * Creates a storage abstraction for the outline tool.
  */
-async function createStorageForOutline(workspacePath: string): Promise<IStorage> {
+export async function createStorageForOutline(workspacePath: string): Promise<IStorage> {
 	const { createNodeDependencies } = await import('../adapters/nodejs');
 
 	const deps = createNodeDependencies({
@@ -945,6 +945,4 @@ async function applySummaryCache(
 		);
 	}
 
-	// 8. Clean up orphaned caches (run on every summarize call)
-	cacheManager.cleanOrphanedCaches().catch(() => {});
 }

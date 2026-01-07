@@ -1655,6 +1655,32 @@ async function handleOutlineCommand(filePath: string, options: SimpleCliOptions)
         }
       }
     }
+
+    // Clean up orphaned caches after all files are processed
+    if (options.summarize) {
+      const { SummaryCacheManager } = await import('./cli-tools/summary-cache');
+      const { createStorageForOutline } = await import('./cli-tools/outline');
+
+      // Use the same storage creation method as applySummaryCache
+      const storage = await createStorageForOutline(workspacePath);
+
+      const cacheManager = new SummaryCacheManager(
+        workspacePath,
+        storage,
+        deps.fileSystem,
+        {
+          info: (msg: string) => deps.logger?.info(msg),
+          warn: (msg: string) => deps.logger?.warn(msg),
+          error: (msg: string) => deps.logger?.error(msg)
+        }
+      );
+
+      deps.logger?.info('Cleaning orphaned caches...');
+      const result = await cacheManager.cleanOrphanedCaches();
+      if (result.removed > 0) {
+        deps.logger?.info(`Cleaned ${result.removed} orphaned cache files`);
+      }
+    }
   } catch (error) {
     if (error instanceof Error) {
       deps.logger?.error(error.message);
