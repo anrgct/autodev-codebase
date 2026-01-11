@@ -1,500 +1,205 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) and other AI assistants when working with code in this repository.
+## 项目概述
 
----
+基于向量嵌入的代码语义搜索工具，支持 MCP (Model Context Protocol) 服务器集成。
 
-# @autodev/codebase - Development Guide
+**核心功能：**
+- 多嵌入提供商支持（Ollama、OpenAI、Jina、OpenAI-Compatible 等）
+- MCP HTTP 服务器（http-streamable/stdio 支持）
+- LLM 重排序
+- 代码结构大纲提取（带 AI 摘要）
+- 40+ 语言的 Tree-sitter 解析
+- Qdrant 向量数据库后端
 
-## Project Overview
-
-A vector embedding-based code semantic search tool with MCP (Model Context Protocol) server integration. This is a platform-agnostic library that supports multiple embedding providers (Ollama, OpenAI, Jina, Gemini, Mistral, etc.) and offers both CLI tool and MCP server modes. It enables intelligent code search through semantic understanding rather than simple text matching.
-
-**Key Characteristics:**
-- Pure CLI tool (no GUI dependencies)
-- HTTP-based MCP server with SSE support
-- LLM-powered search reranking
-- Multi-provider embedding support
-- Tree-sitter parsing for 40+ languages
-- Qdrant vector database backend
-- Layered configuration system (CLI → Project → Global → Defaults)
-
----
-
-## Architecture
+## 项目结构
 
 ```
-CLI Layer          (src/cli.ts)
-     ↓
-MCP Server Layer   (src/mcp/http-server.ts, stdio-adapter.ts)
-     ↓
-Code Index Manager (src/code-index/manager.ts)
-     ↓
-Service Layer      (search-service, service-factory, orchestrator)
-     ↓
-Processor Layer    (scanner, parser, batch-processor, file-watcher)
-     ↓
-Adapter Layer      (src/adapters/nodejs/)
-     ↓
-Abstraction Layer  (src/abstractions/)
+src/
+├── cli.ts              # CLI 入口
+├── index.ts            # 库主导出
+├── abstractions/       # 核心接口定义
+├── adapters/nodejs/    # Node.js 平台适配
+├── cli-tools/          # CLI 工具（outline, search 等）
+├── config/             # 配置管理
+├── glob/               # 文件匹配
+├── mcp/                # MCP 服务器
+├── search/             # 搜索服务
+├── tree-sitter/        # 代码解析
+└── lib/                # 核心库逻辑
 ```
 
-### Core Design Patterns
+## 核心 API
 
-1. **Dependency Injection** - All components receive dependencies via constructors
-2. **Interface-First Design** - All abstractions defined as interfaces (I* prefix)
-3. **Platform Agnostic** - Core logic independent of any specific platform
-4. **Service Factory Pattern** - Centralized creation of embedders, vector stores, rerankers
-5. **State Management** - Dedicated state manager for indexing progress tracking
-6. **Layered Configuration** - 4-tier config system with clear priority rules
-
----
-
-## Core Abstractions (`src/abstractions/`)
-
-### Core Platform Interfaces
-- **IFileSystem** - File operations (readFile, writeFile, exists, stat, readdir, mkdir, delete)
-- **IStorage** - Cache and storage path management
-- **IEventBus** - Event emission and subscription (emit, on, off, once)
-- **ILogger** - Logging abstraction (debug, info, warn, error)
-- **IFileWatcher** - File system monitoring (watchFile, watchDirectory)
-
-### Workspace Interfaces
-- **IWorkspace** - Workspace folder management
-- **IPathUtils** - Path manipulation utilities
-- **WorkspaceFolder** - Workspace folder type definition
-
-### Configuration Interfaces
-- **IConfigProvider** - Configuration management (get, set, snapshot)
-- **EmbedderConfig** - Embedding provider configuration
-- **VectorStoreConfig** - Vector database configuration
-- **SearchConfig** - Search behavior configuration
-- **CodeIndexConfig** - Complete code index configuration
-- **ConfigSnapshot** - Configuration state snapshot
-
----
-
-## Core Components
-
-### CodeIndexManager (`src/code-index/manager.ts`)
-
-**Primary API entry point** for the library. Orchestrates all code indexing and search operations.
-
-**Key Methods:**
-- `initialize(options)` - Initialize with optional force/searchOnly modes
-- `startIndexing(force?)` - Trigger file indexing
-- `searchIndex(query, filter)` - Semantic code search
-- `clearIndexData()` - Clear all indexed data
-- `getCurrentStatus()` - Get current indexing state
-- `stopWatcher()` - Stop file system monitoring
-
-**Initialization Flow:**
-1. Create platform dependencies via `createNodeDependencies()`
-2. Get singleton instance via `CodeIndexManager.getInstance(deps)`
-3. Call `initialize()` to set up services
-4. Call `startIndexing()` to begin indexing
-
-### Configuration System (`src/code-index/config-manager.ts`)
-
-**4-Layer Priority System:**
-1. CLI Arguments (highest) - Runtime paths, logging, operational flags
-2. Project Config (`./autodev-config.json`) - Project-specific settings
-3. Global Config (`~/.autodev-cache/autodev-config.json`) - User defaults
-4. Built-in Defaults (lowest) - Fallback values
-
-**Configuration Commands:**
-```bash
-codebase --get-config                    # View all layers
-codebase --get-config --json             # JSON output
-codebase --get-config embedderProvider   # Specific keys
-codebase --set-config k=v,k2=v2          # Set project config
-codebase --set-config --global k=v       # Set global config
-```
-
-### Service Factory (`src/code-index/service-factory.ts`)
-
-Creates embedders, vector stores, and rerankers based on configuration.
-
-**Supported Embedders:**
-- Ollama (local, recommended)
-- OpenAI
-- OpenAI-Compatible (DeepSeek, etc.)
-- Jina
-- Gemini
-- Mistral
-- Vercel AI Gateway
-- OpenRouter
-
-**Supported Rerankers:**
-- Ollama (LLM-based)
-- OpenAI-Compatible (LLM-based)
-
-### Search Service (`src/code-index/search-service.ts`)
-
-Handles semantic search with optional LLM reranking.
-
-**Search Flow:**
-1. Apply query prefill (model-specific optimizations)
-2. Generate embedding for query
-3. Perform vector similarity search
-4. (Optional) Rerank results with LLM
-5. Return sorted results
-
-### Orchestrator (`src/code-index/orchestrator.ts`)
-
-Manages the indexing pipeline: scanning → parsing → embedding → storage.
-
-**State Machine:** `Idle` → `Scanning` → `Parsing` → `Indexing` → `Indexed` | `Error`
-
-### Processors (`src/code-index/processors/`)
-
-- **scanner.ts** - File discovery and filtering
-- **parser.ts** - Tree-sitter code parsing and definition extraction
-- **batch-processor.ts** - Parallel embedding generation
-- **file-watcher.ts** - File system change monitoring
-
-### Cache Manager (`src/code-index/cache-manager.ts`)
-
-Manages vector embedding cache to avoid re-embedding unchanged code.
-
----
-
-## MCP Server Integration
-
-### HTTP Streamable Mode (Recommended)
-
-**Server:**
-```bash
-codebase --serve --port=3001 --path=/my/project
-```
-
-**Client Config:**
-```json
-{
-  "mcpServers": {
-    "codebase": {
-      "url": "http://localhost:3001/mcp"
-    }
-  }
-}
-```
-
-### Stdio Adapter Mode
-
-**For IDEs requiring stdio:**
-```bash
-# Terminal 1: Start HTTP server
-codebase --serve --port=3001
-
-# Terminal 2: Start stdio adapter
-codebase --stdio-adapter --server-url=http://localhost:3001/mcp
-```
-
-**Client Config:**
-```json
-{
-  "mcpServers": {
-    "codebase": {
-      "command": "codebase",
-      "args": ["stdio-adapter", "--server-url=http://localhost:3001/mcp"]
-    }
-  }
-}
-```
-
-### MCP Tool: `search_codebase`
-
-**Parameters:**
-- `query` (string, required) - Natural language search query
-- `limit` (number, optional) - Max results (default: from config, max: 50)
-- `filters.pathFilters` (string[], optional) - Path pattern filters
-- `filters.minScore` (number, optional) - Minimum similarity (0-1)
-
----
-
-## CLI Commands
-
-### Core Operations
-
-```bash
-# Index the codebase
-codebase --index --path=/my/project --force
-
-# Search code
-codebase --search="user authentication"
-codebase --search="API" --limit=20 --min-score=0.7
-codebase -q "database" -l 30 -S 0.5  # Short form
-
-# Search with path filters
-codebase --search="utils" --path-filters="src/**/*.ts"
-
-# Export results as JSON
-codebase --search="auth" --json
-
-# Clear index
-codebase --clear --path=/my/project
-```
-
-### MCP Server
-
-```bash
-# Start HTTP MCP server
-codebase --serve --port=3001 --path=/my/project
-
-# Start stdio adapter
-codebase --stdio-adapter --server-url=http://localhost:3001/mcp
-```
-
-### Configuration
-
-```bash
-# View configuration
-codebase --get-config
-codebase --get-config --json
-
-# Set configuration
-codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
-codebase --set-config --global qdrantUrl=http://localhost:6333
-```
-
-### CLI Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `--path, -p <path>` | Working directory path |
-| `--demo` | Create demo files for testing |
-| `--force` | Force reindex all files |
-| `--config, -c <path>` | Custom config file path |
-| `--storage <path>` | Custom storage path |
-| `--cache <path>` | Custom cache path |
-| `--log-level <level>` | Log level (debug\|info\|warn\|error) |
-| `--limit, -l <number>` | Max search results (max 50) |
-| `--min-score, -S <number>` | Minimum similarity score (0-1) |
-| `--path-filters, -f <patterns>` | Path filter patterns |
-| `--json` | JSON output format |
-| `--serve` | Start MCP HTTP server |
-| `--stdio-adapter` | Start stdio adapter |
-| `--index` | Index codebase |
-| `--search=<query>` | Search index |
-| `--clear` | Clear index data |
-| `--get-config` | View configuration |
-| `--set-config k=v,...` | Set configuration |
-
----
-
-## Development Guidelines
-
-### Building
-
-```bash
-npm run build          # Build both library and CLI
-npm run type-check     # TypeScript validation
-```
-
-**Output:**
-- `dist/index.js` - Main library (ESM)
-- `dist/cli.js` - CLI executable (with shebang)
-- TypeScript declarations included
-
-### Running
-
-```bash
-npm run dev            # Demo mode with auto-restart
-npm run mcp-server     # Start MCP server on port 3001
-npm run test           # Run tests
-npm run test:e2e       # End-to-end tests
-```
-
-### Code Style
-
-- TypeScript strict mode enabled
-- Dependency injection throughout
-- Interface-based abstractions (I* prefix)
-- Platform-agnostic core logic
-- No platform-specific imports in core library
-
----
-
-## Key Files Reference
-
-| File | Purpose |
-|------|---------|
-| `src/cli.ts` | CLI entry point with argument parsing |
-| `src/index.ts` | Main library exports |
-| `src/code-index/manager.ts` | Primary API entry point |
-| `src/code-index/config-manager.ts` | Configuration management |
-| `src/code-index/search-service.ts` | Search orchestration |
-| `src/code-index/orchestrator.ts` | Indexing pipeline |
-| `src/mcp/http-server.ts` | MCP HTTP server |
-| `src/mcp/stdio-adapter.ts` | Stdio to HTTP bridge |
-| `src/adapters/nodejs/index.ts` | Node.js platform adapters |
-| `src/abstractions/index.ts` | Core interface definitions |
-| `src/tree-sitter/` | Code parsing (40+ languages) |
-| `src/glob/list-files.ts` | Pattern-based file discovery |
-
----
-
-## Configuration Examples
-
-### Ollama (Local, Recommended)
-
-**File:** `~/.autodev-cache/autodev-config.json`
-```json
-{
-  "embedderProvider": "ollama",
-  "embedderModelId": "nomic-embed-text",
-  "embedderOllamaBaseUrl": "http://localhost:11434",
-  "qdrantUrl": "http://localhost:6333",
-  "vectorSearchMinScore": 0.3,
-  "vectorSearchMaxResults": 20,
-  "rerankerEnabled": false
-}
-```
-
-### OpenAI (Production)
-
-**File:** `./autodev-config.json`
-```json
-{
-  "embedderProvider": "openai",
-  "embedderModelId": "text-embedding-3-small",
-  "embedderOpenAiApiKey": "sk-your-key",
-  "qdrantUrl": "http://localhost:6333",
-  "vectorSearchMinScore": 0.4,
-  "vectorSearchMaxResults": 15,
-  "rerankerEnabled": true,
-  "rerankerProvider": "openai-compatible",
-  "rerankerOpenAiCompatibleModelId": "deepseek-chat",
-  "rerankerOpenAiCompatibleBaseUrl": "https://api.deepseek.com/v1",
-  "rerankerOpenAiCompatibleApiKey": "sk-deepseek-key",
-  "rerankerMinScore": 0.5
-}
-```
-
----
-
-## Environment Variables
-
-API keys can be set via environment variables:
-
-| Variable | Maps To |
-|----------|---------|
-| `OPENAI_API_KEY` | `embedderOpenAiApiKey` |
-| `QDRANT_API_KEY` | `qdrantApiKey` |
-| `GEMINI_API_KEY` | `embedderGeminiApiKey` |
-| `JINA_API_KEY` | `embedderJinaApiKey` |
-| `MISTRAL_API_KEY` | `embedderMistralApiKey` |
-
----
-
-## Notes for AI Assistants
-
-### Important Principles
-
-1. **Dependency Injection**: Never directly import platform-specific modules in core library
-2. **Interface First**: Always program against I* interfaces, not concrete implementations
-3. **Platform Agnostic**: Core library must work in any JavaScript environment
-4. **Configuration Layers**: Respect the 4-tier config priority system
-5. **Error Recovery**: Use state manager for error tracking and recovery
-6. **Validation**: Validate all user inputs (CLI args, config values, search params)
-
-### Common Pitfalls
-
-- **Direct Platform Imports**: Never import `fs`, `path`, `vscode` directly in core library
-- **Hardcoded Paths**: Always use `IWorkspace` and `IPathUtils` for path operations
-- **Missing Abstractions**: Don't bypass interfaces for convenience
-- **Config Priority**: Remember CLI args > Project > Global > Defaults
-- **Search Params**: Always validate limit (max 50) and minScore (0-1)
-
-### Testing Strategy
-
-- Use mock implementations of I* interfaces for unit tests
-- Integration tests should use real Node.js adapters
-- E2E tests cover full CLI workflows
-- Test configuration layering and priority rules
-
----
-
-## Build System
-
-**Tool:** Rollup with TypeScript plugin
-
-**Outputs:**
-- ESM format for both library and CLI
-- Inline sourcemaps
-- Tree-shaking enabled
-- External dependencies: `vscode`, Node.js built-ins, `web-tree-sitter`
-
-**Special Handling:**
-- Copies `tree-sitter.wasm` files to dist root
-- Adds shebang to CLI output
-- Sets executable permission on CLI output
-
----
-
-## Search Feature Details
-
-### Query Prefill
-
-Model-specific query optimization for better embeddings:
+**CodeIndexManager** (`src/search/manager.ts`) - 库的主入口：
 
 ```typescript
-// Applied automatically in search-service.ts
-const prefillQuery = applyQueryPrefill(query, embedderProvider, modelId)
+import { CodeIndexManager, createNodeDependencies } from './src/index.ts';
+
+const deps = createNodeDependencies();
+const manager = CodeIndexManager.getInstance(deps);
+await manager.initialize();
+await manager.startIndexing();
+const results = await manager.searchIndex(query, { limit: 20 });
 ```
 
-Example: For Qwen3 embedding models, adds "Represent this sentence for searching relevant passages:" prefix.
+## 重要原则
 
-### Path Filtering
+1. **依赖注入** - 通过构造函数注入依赖
+2. **接口优先** - 使用 I* 前缀的接口
+3. **平台无关** - 核心库不直接导入平台模块
+4. **配置优先级** - CLI > 项目配置 > 全局配置 > 默认值
 
-Limited glob support with Qdrant substring filters:
-- `**` - Recursive wildcard
-- `*` - Single-level wildcard
-- `{a,b}` - Brace expansion
-- `!` - Exclusion prefix
+## 构建与运行
 
-**Note:** Not a full glob implementation; compiled to Qdrant substring filters.
+```bash
+npm run build          # 构建
+npm run type-check     # 类型检查
+npm run dev            # 用 demo 目录的开发模式
+npm run mcp-server     # 启动 MCP 服务器（端口 3001）
+npm run test           # vitest 单元测试
+npm run test -- --silent=false  # vitest 测试（显示详细输出）
+npm run test:e2e       # e2e 测试
+```
 
-### Reranking
+## 关键命令
 
-LLM-powered reranking for improved relevance:
+```bash
+# 索引代码库
+codebase --index --path=. --force
 
-**Benefits:**
-- Higher precision through semantic understanding
-- 0-10 scoring scale for better result quality
-- Batch processing for efficiency
-- Configurable minimum score threshold
+# 语义搜索
+codebase --search="用户认证" --limit=20
+codebase --search="数据库" --path-filters="src/**/*.ts" --json
+codebase --search="认证" --log-level=info  # 显示详细日志
 
-**Providers:**
-- Ollama: Uses vision models (qwen3-vl)
-- OpenAI-Compatible: Works with DeepSeek, etc.
+# 提取代码大纲
+codebase --outline "src/**/*.ts"
+
+# 生成带 AI 摘要的代码大纲
+codebase --outline "src/**/*.ts" --summarize
+
+# 预览 outline 操作
+codebase --outline "src/**/*.ts" --dry-run
+
+# 清除摘要缓存
+codebase --outline "src/**/*.ts" --clear-summarize-cache
+
+# 启动 MCP HTTP 服务器
+codebase --serve --port=3001 --path=.
+
+# 启动 stdio 适配器
+codebase --stdio-adapter --server-url=http://localhost:3001/mcp
+```
+
+## MCP 工具
+
+### search_codebase - 语义搜索
+
+```json
+{
+  "query": "用户认证逻辑",
+  "limit": 20,
+  "filters": {
+    "pathFilters": ["src/**/*.ts"],
+    "minScore": 0.3
+  }
+}
+```
+
+## 配置位置
+
+- **项目配置**：`./autodev-config.json`
+- **全局配置**：`~/.autodev-cache/autodev-config.json`
 
 ---
 
-## Dependencies
+## 代码库开发通用经验
 
-### Runtime
-- `@modelcontextprotocol/sdk` - MCP protocol implementation
-- `@qdrant/js-client-rest` - Vector database client
-- `tree-sitter` / `web-tree-sitter` - Code parsing
-- `openai` - OpenAI API client
-- `fzf` - Fuzzy finder (CLI)
-- `ignore` - Gitignore-style filtering
+### 主控与子代理的分工
 
-### Dev
-- `typescript` - Type checking
-- `rollup` - Bundling
-- `vitest` - Testing framework
-- `tsx` - TypeScript execution
+- **主控**：制定验收标准、把控流程、协调子代理、不写代码
+- **子代理**：根据设计文档编写代码
+- **关键**：主控必须明确指定设计文档路径，子代理不知道它在哪里
 
----
+### 设计文档驱动的开发
 
-## License
+1. **先有设计，再有代码** - 设计文档是唯一真相来源
+2. **验收测试先行** - 在开发前先写好验收测试
+3. **设计文档路径显式传递** - 每次调用子代理都要明确告诉它
 
-MIT License - See LICENSE file for details.
+### 数据模型变更的影响
 
----
+修改核心模型会产生连锁反应，建议：
+- 先用子代理批量修改所有依赖文件
+- 再统一测试
 
-## Acknowledgments
+### 多语言解析器的架构模式
 
-Derived from [Roo Code](https://github.com/RooCodeInc/Roo-Code). Built upon their excellent foundation to create a specialized codebase analysis tool with enhanced MCP server capabilities and multi-provider support.
+```typescript
+class LanguageAnalyzer extends BaseAnalyzer {
+  getNodeTypes(): NodeTypes      // 配置节点类型
+  extractFunctionName(node): string | null
+  extractClassName(node): string | null
+  extractCallName(node): string | null
+  extractImports(root): void
+}
+```
+
+### 验收测试的价值
+
+- 快速验证每次修改
+- 暴露接口不匹配
+- 展示 API 正确使用方式
+
+
+
+<skills_system priority="1">
+
+## Available Skills
+
+<!-- SKILLS_TABLE_START -->
+<usage>
+When users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge.
+
+How to use skills:
+- Invoke: Bash("openskills read <skill-name>")
+- The skill content will load with detailed instructions on how to complete the task
+- Base directory provided in output for resolving bundled resources (references/, scripts/, assets/)
+
+Usage notes:
+- Only use skills listed in <available_skills> below
+- Do not invoke a skill that is already loaded in your context
+- Each skill invocation is stateless
+</usage>
+
+<available_skills>
+
+<skill>
+<name>chatting-ai-skill</name>
+<description>与本地AI助手（codex/claude code）交互式对话，自动管理多轮对话状态。当你需要分析代码、重构优化、编写新功能、调试问题或技术咨询时使用。支持多种输入方式（直接输入、Here document、文件、管道）。</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>create-agent-skills</name>
+<description>Expert guidance for creating, writing, and refining Claude Code Skills. Use when working with SKILL.md files, authoring new skills, improving existing skills, or understanding skill structure and best practices.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>planning-with-files</name>
+<description>Transforms workflow to use Manus-style persistent markdown files for planning, progress tracking, and knowledge storage. Use when starting complex tasks, multi-step projects, research tasks, or when the user mentions planning, organizing work, tracking progress, or wants structured output.</description>
+<location>project</location>
+</skill>
+
+<skill>
+<name>searching-codebase-skill</name>
+<description>基于向量嵌入的代码库语义搜索与大纲提取工具。当你需要快速定位代码功能、理解代码结构、进行代码审查或重构分析时使用。支持智能语义搜索（理解代码意图）和代码结构分析（AI摘要）。</description>
+<location>project</location>
+</skill>
+
+</available_skills>
+<!-- SKILLS_TABLE_END -->
+
+</skills_system>

@@ -148,7 +148,7 @@ codebase --set-config summarizerProvider=openai-compatible,summarizerOpenAiCompa
 ```
 
 
-### Indexing & Search
+### 🔍 Indexing & Search
 ```bash
 # Index the codebase
 codebase --index --path=/my/project --force
@@ -167,7 +167,7 @@ codebase --search="authentication" --json
 codebase --clear --path=/my/project
 ```
 
-### MCP Server
+### 🌐 MCP Server
 ```bash
 # HTTP mode (recommended)
 codebase --serve --port=3001 --path=/my/project
@@ -176,7 +176,7 @@ codebase --serve --port=3001 --path=/my/project
 codebase --stdio-adapter --server-url=http://localhost:3001/mcp
 ```
 
-### Configuration
+### ⚙️ Configuration
 ```bash
 # View config
 codebase --get-config
@@ -187,7 +187,7 @@ codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
 codebase --set-config --global qdrantUrl=http://localhost:6333
 ```
 
-### Advanced Features
+### 🚀 Advanced Features
 
 #### 🔍 LLM-Powered Search Reranking
 Enable LLM reranking to dramatically improve search relevance:
@@ -219,28 +219,16 @@ codebase --search="utils" --path-filters="{src,test}/**/*.ts"
 codebase --search="auth" --json
 ```
 
-#### 📝 AI-Powered Code Outlines
-Generate intelligent code summaries and outlines:
+#### Path Filtering & Export
 
 ```bash
-# Extract code structure
-codebase --outline src/index.ts
+# Path filtering with brace expansion and exclusions
+codebase --search="API" --path-filters="src/**/*.ts,lib/**/*.js"
+codebase --search="utils" --path-filters="{src,test}/**/*.ts"
 
-# With AI summaries (recommended)
-codebase --outline "src/**/*.ts" --summarize
-
-# Preview before processing
-codebase --outline "src/**/*.ts" --dry-run
-
-# Clear cache and regenerate
-codebase --outline src/index.ts --summarize --clear-summarize-cache
+# Export results in JSON format for scripts
+codebase --search="auth" --json
 ```
-
-**Key Benefits:**
-- 🎯 **Function-level summaries**: Understand code purpose at a glance
-- 💾 **Smart caching**: Avoid redundant LLM calls
-- 🌐 **Multi-language**: English / Chinese support
-- ⚡ **Batch processing**: Efficiently handle large codebases
 
 ## ⚙️ Configuration
 
@@ -307,8 +295,6 @@ codebase --outline src/index.ts --summarize --clear-summarize-cache
 - `--min-score` / `-S <number>` - Minimum similarity score for search results (0-1, default: from config)
 - `--help` - Show all available options
 
-For complete CLI reference, see [CONFIG.md](CONFIG.md).
-
 **Configuration Commands:**
 ```bash
 # View config
@@ -362,7 +348,7 @@ codebase --stdio-adapter --server-url=http://localhost:3001/mcp
   "mcpServers": {
     "codebase": {
       "command": "codebase",
-      "args": ["stdio-adapter", "--server-url=http://localhost:3001/mcp"]
+      "args": ["--stdio-adapter", "--server-url=http://localhost:3001/mcp"]
     }
   }
 }
