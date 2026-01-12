@@ -10,3 +10,4 @@ export * from './glob';
 export * from './search';
 export * from './tree-sitter';
 export * from './lib/codebase';
+export * from './dependency';

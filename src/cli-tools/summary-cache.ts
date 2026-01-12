@@ -487,40 +487,40 @@ export class SummaryCacheManager {
 		// Recursively scan all cache files
 		const scanDir = async (dir: string): Promise<void> => {
 			try {
-				// readdir returns full paths
-				const entries = await this.fileSystem.readdir(dir);
+					const entries = await this.fileSystem.readdir(dir);
 
-				for (const fullPath of entries) {
-					try {
-						const stat = await this.fileSystem.stat(fullPath);
+					for (const entry of entries) {
+						try {
+							const fullPath = path.join(dir, entry);
+							const stat = await this.fileSystem.stat(fullPath);
 
-						if (stat.isDirectory) {
-							await scanDir(fullPath);
-						} else if (fullPath.endsWith('.summary.json')) {
-							// Calculate relative path from cache dir
-							const relativePath = path.relative(cacheDir, fullPath);
+							if (stat.isDirectory) {
+								await scanDir(fullPath);
+							} else if (fullPath.endsWith('.summary.json')) {
+								// Calculate relative path from cache dir
+								const relativePath = path.relative(cacheDir, fullPath);
 							
-							// Reverse calculate source file path
-							const sourceRelPath = relativePath.replace('.summary.json', '');
-							const sourcePath = path.join(this.workspacePath, sourceRelPath);
+								// Reverse calculate source file path
+								const sourceRelPath = relativePath.replace('.summary.json', '');
+								const sourcePath = path.join(this.workspacePath, sourceRelPath);
 
-							// Check if source file exists
-							const exists = await this.fileSystem.exists(sourcePath);
-							if (!exists) {
-								await this.fileSystem.delete(fullPath);
-								removed++;
-							} else {
-								kept++;
+								// Check if source file exists
+								const exists = await this.fileSystem.exists(sourcePath);
+								if (!exists) {
+									await this.fileSystem.delete(fullPath);
+									removed++;
+								} else {
+									kept++;
+								}
 							}
+						} catch {
+							// Skip entries that can't be stat'd
 						}
-					} catch {
-						// Skip entries that can't be stat'd
 					}
+				} catch {
+					// Directory doesn't exist or can't be read
 				}
-			} catch {
-				// Directory doesn't exist or can't be read
-			}
-		};
+			};
 
 		const exists = await this.fileSystem.exists(cacheDir);
 		if (exists) {
@@ -551,46 +551,51 @@ export class SummaryCacheManager {
 		);
 
 		let removed = 0;
-		const cutoffDate = new Date(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000);
+		let kept = 0;
+		const maxAgeMs = maxAgeDays * 24 * 60 * 60 * 1000;
+		const cutoffDate = new Date(Date.now() - maxAgeMs);
 
 		const scanDir = async (dir: string): Promise<void> => {
 			try {
-				const entries = await this.fileSystem.readdir(dir);
+					const entries = await this.fileSystem.readdir(dir);
 
-				for (const entry of entries) {
-					// Note: Node.js readdir returns full paths, not just names
-					const fullPath = entry;
+					for (const entry of entries) {
+						const fullPath = path.join(dir, entry);
 
-					try {
-						const stat = await this.fileSystem.stat(fullPath);
+						try {
+							const stat = await this.fileSystem.stat(fullPath);
 
-						if (stat.isDirectory) {
-							await scanDir(fullPath);
-						} else if (fullPath.endsWith('.summary.json')) {
-							try {
-								const content = await this.fileSystem.readFile(fullPath);
-								const cache = JSON.parse(new TextDecoder().decode(content)) as SummaryCache;
+							if (stat.isDirectory) {
+								await scanDir(fullPath);
+							} else if (fullPath.endsWith('.summary.json')) {
+								try {
+									const content = await this.fileSystem.readFile(fullPath);
+									const cache = JSON.parse(new TextDecoder().decode(content)) as SummaryCache;
 
-								// Check last access time
-								const lastAccessed = new Date(cache.lastAccessed);
-								if (lastAccessed < cutoffDate) {
+									// Check last access time
+									const lastAccessed = new Date(cache.lastAccessed);
+									const ageMs = Date.now() - lastAccessed.getTime();
+
+									if (ageMs > maxAgeMs) {
+										await this.fileSystem.delete(fullPath);
+										removed++;
+									} else {
+										kept++;
+									}
+								} catch {
+									// Invalid or corrupted cache file - delete it
 									await this.fileSystem.delete(fullPath);
 									removed++;
 								}
-							} catch {
-								// Cache file corrupted - delete it
-								await this.fileSystem.delete(fullPath);
-								removed++;
 							}
+						} catch {
+							// Skip entries that can't be stat'd
 						}
-					} catch {
-						// Skip entries that can't be stat'd
 					}
+				} catch {
+					// Directory doesn't exist or can't be read
 				}
-			} catch {
-				// Directory doesn't exist or can't be read
-			}
-		};
+			};
 
 		const exists = await this.fileSystem.exists(cacheDir);
 		if (exists) {
@@ -632,15 +637,16 @@ export class SummaryCacheManager {
 				try {
 					const entries = await this.fileSystem.readdir(dir);
 					for (const entry of entries) {
-						const stat = await this.fileSystem.stat(entry);
+						const fullPath = path.join(dir, entry);
+						const stat = await this.fileSystem.stat(fullPath);
 						if (stat.isDirectory) {
-							await countFiles(entry);
+							await countFiles(fullPath);
 						} else {
 							fileCount++;
 						}
 					}
 				} catch {
-					// Ignore errors during counting
+					// Directory doesn't exist or can't be read
 				}
 			};
 			await countFiles(projectCacheDir);

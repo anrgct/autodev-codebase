@@ -54,7 +54,7 @@ export class NodeFileSystem implements IFileSystem {
   async readdir(uri: string): Promise<string[]> {
     try {
       const entries = await fs.readdir(uri)
-      return entries.map(entry => path.join(uri, entry))
+      return entries
     } catch (error) {
       throw new Error(`Failed to read directory ${uri}: ${error}`)
     }

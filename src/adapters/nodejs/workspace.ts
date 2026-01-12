@@ -182,12 +182,13 @@ export class NodeWorkspace implements IWorkspace {
       const entries = await this.fileSystem.readdir(dir)
       
       for (const entry of entries) {
-        const stat = await this.fileSystem.stat(entry)
+        const fullPath = path.join(dir, entry)
+        const stat = await this.fileSystem.stat(fullPath)
         
         if (stat.isDirectory) {
-          await this.walkDirectory(entry, callback)
+          await this.walkDirectory(fullPath, callback)
         } else if (stat.isFile) {
-          await callback(entry)
+          await callback(fullPath)
         }
       }
     } catch (error) {

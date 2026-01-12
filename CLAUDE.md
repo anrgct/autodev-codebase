@@ -112,47 +112,6 @@ codebase --stdio-adapter --server-url=http://localhost:3001/mcp
 - **项目配置**：`./autodev-config.json`
 - **全局配置**：`~/.autodev-cache/autodev-config.json`
 
----
-
-## 代码库开发通用经验
-
-### 主控与子代理的分工
-
-- **主控**：制定验收标准、把控流程、协调子代理、不写代码
-- **子代理**：根据设计文档编写代码
-- **关键**：主控必须明确指定设计文档路径，子代理不知道它在哪里
-
-### 设计文档驱动的开发
-
-1. **先有设计，再有代码** - 设计文档是唯一真相来源
-2. **验收测试先行** - 在开发前先写好验收测试
-3. **设计文档路径显式传递** - 每次调用子代理都要明确告诉它
-
-### 数据模型变更的影响
-
-修改核心模型会产生连锁反应，建议：
-- 先用子代理批量修改所有依赖文件
-- 再统一测试
-
-### 多语言解析器的架构模式
-
-```typescript
-class LanguageAnalyzer extends BaseAnalyzer {
-  getNodeTypes(): NodeTypes      // 配置节点类型
-  extractFunctionName(node): string | null
-  extractClassName(node): string | null
-  extractCallName(node): string | null
-  extractImports(root): void
-}
-```
-
-### 验收测试的价值
-
-- 快速验证每次修改
-- 暴露接口不匹配
-- 展示 API 正确使用方式
-
-
 
 <skills_system priority="1">
 

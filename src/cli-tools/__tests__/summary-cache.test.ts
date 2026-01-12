@@ -590,13 +590,13 @@ describe('SummaryCacheManager', () => {
 				return false;
 			});
 			
-			// Mock readdir to return full paths (as cleanOrphanedCaches expects)
+			// Mock readdir to return entry names (not full paths, per IFileSystem spec)
 			mockFileSystem.readdir.mockImplementation(async (dir: string) => {
 				if (dir === cacheDir) {
 					return [
-						`${cacheDir}/src/utils/helper.ts.summary.json`,
-						`${cacheDir}/src/components/button.ts.summary.json`,
-						`${cacheDir}/nested/dir/config.json.summary.json`
+						`src/utils/helper.ts.summary.json`,
+						`src/components/button.ts.summary.json`,
+						`nested/dir/config.json.summary.json`
 					];
 				}
 				// No subdirectories to scan

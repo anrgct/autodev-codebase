@@ -91,8 +91,8 @@ describe('Node.js Adapters Integration', () => {
 
       const entries = await fileSystem.readdir(dirPath)
       expect(entries).toHaveLength(2)
-      expect(entries).toContain(file1)
-      expect(entries).toContain(file2)
+      expect(entries).toContain('file1.txt')
+      expect(entries).toContain('file2.txt')
     })
   })
 

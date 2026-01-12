@@ -1,0 +1,2089 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>代码依赖关系可视化</title>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary-color: #4a90d9;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --info-color: #17a2b8;
+            --warning-color: #ffc107;
+            --danger-color: #dc3545;
+            --light-bg: #f8f9fa;
+            --dark-bg: #1e1e1e;
+            --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            --card-shadow-hover: 0 8px 15px rgba(0, 0, 0, 0.15);
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--light-bg);
+            overflow: hidden;
+        }
+
+        /* 顶部导航栏 */
+        .navbar {
+            background: linear-gradient(135deg, var(--primary-color) 0%, #357abd 100%);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 5px 10px;
+        }
+
+        .navbar h1 {
+            color: white;
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .stats-bar {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .stat-item {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+
+        .stat-item .value {
+            font-size: 20px;
+            font-weight: bold;
+            display: inline;
+        }
+
+        .stat-item .label {
+            font-size: 12px;
+            opacity: 0.9;
+            display: inline;
+        }
+
+        /* 主容器 */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 80px);
+            padding: 20px;
+            gap: 20px;
+        }
+
+        /* 左侧控制面板 */
+        .control-panel {
+            width: 220px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            padding: 20px;
+            overflow-y: auto;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .control-panel.collapsed {
+            transform: translateX(-100%);
+            width: 0;
+            min-width: 0;
+            padding: 0;
+            margin: 0;
+            opacity: 0;
+        }
+
+        .panel-section {
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .panel-section:last-child {
+            border-bottom: none;
+        }
+
+        .section-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #495057;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .section-title i {
+            color: var(--primary-color);
+        }
+
+        /* 搜索框 */
+        .search-box {
+            position: relative;
+        }
+
+        .search-box textarea {
+            width: 100%;
+            min-height: 40px;
+            max-height: 120px;
+            padding: 10px 70px 10px 15px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s ease;
+            resize: none;
+            overflow-y: auto;
+            font-family: inherit;
+            line-height: 1.4;
+        }
+
+        .search-box textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.1);
+        }
+
+        .search-box .search-icon {
+            position: absolute;
+            right: 15px;
+            top: 12px;
+            color: #adb5bd;
+            pointer-events: none;
+        }
+
+        /* 清空按钮 */
+        .search-box .clear-btn {
+            position: absolute;
+            right: 40px;
+            top: 12px;
+            width: 20px;
+            height: 20px;
+            border: none;
+            background: #adb5bd;
+            color: white;
+            border-radius: 50%;
+            cursor: pointer;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            transition: all 0.2s ease;
+            padding: 0;
+        }
+
+        .search-box .clear-btn:hover {
+            background: #6c757d;
+            transform: scale(1.1);
+        }
+
+        .search-box .clear-btn.show {
+            display: flex;
+        }
+
+        /* 筛选按钮组 */
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .filter-btn {
+            padding: 10px 15px;
+            border: 2px solid #e9ecef;
+            background: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .filter-btn:hover {
+            border-color: var(--primary-color);
+            background: #f8f9fa;
+        }
+
+        .filter-btn.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+        .filter-btn .count {
+            background: rgba(0,0,0,0.1);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+        }
+
+        /* 布局选择 */
+        .layout-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .layout-btn {
+            padding: 10px;
+            border: 2px solid #e9ecef;
+            background: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        .layout-btn:hover {
+            border-color: var(--primary-color);
+        }
+
+        .layout-btn.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+
+        /* 图例 */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+        }
+
+        .legend-color {
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            font-size: 12px;
+        }
+
+        .legend-label {
+            flex: 1;
+            font-size: 13px;
+        }
+
+        /* 工具按钮 */
+        .tool-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .tool-btn {
+            padding: 12px;
+            border: none;
+            background: var(--primary-color);
+            color: white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+        }
+
+        .tool-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(74, 144, 217, 0.3);
+        }
+
+        .tool-btn i {
+            font-size: 20px;
+        }
+
+        /* 中间图形区域 */
+        .graph-container {
+            flex: 1;
+            background: white;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* 边缘恢复按钮 */
+        .edge-toggle-btn {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 28px;
+            height: 80px;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            z-index: 100;
+        }
+
+        /* 折叠状态 - 深色背景 */
+        .edge-toggle-btn.collapsed {
+            background: #2c3e50;
+            color: white;
+        }
+
+        .edge-toggle-btn.collapsed:hover {
+            background: #34495e;
+            width: 36px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        /* 展开状态 - 浅色背景 */
+        .edge-toggle-btn.expanded {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+
+        .edge-toggle-btn.expanded:hover {
+            background: #bdc3c7;
+            width: 36px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .edge-toggle-btn:hover {
+            width: 36px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        /* 左侧边缘按钮 */
+        .edge-toggle-btn.left-edge {
+            left: 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        /* 右侧边缘按钮 */
+        .edge-toggle-btn.right-edge {
+            right: 0;
+            border-radius: 8px 0 0 8px;
+        }
+
+        /* 边缘按钮始终可见，通过 collapsed/expanded 类控制样式 */
+
+        #cy {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 控制按钮组 */
+        .control-buttons {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        /* 导航按钮组 - 右下角 */
+        .nav-buttons {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+        }
+
+        .ctrl-btn {
+            width: 40px;
+            height: 40px;
+            border: none;
+            background: white;
+            border-radius: 8px;
+            box-shadow: var(--card-shadow);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 18px;
+            color: #495057;
+        }
+
+        .ctrl-btn:hover:not(:disabled) {
+            background: var(--primary-color);
+            color: white;
+            transform: scale(1.1);
+        }
+
+        .ctrl-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .ctrl-btn.active-nav {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        .nav-btn {
+            width: 50px;
+            height: 50px;
+            border: none;
+            background: white;
+            border-radius: 50%;
+            box-shadow: var(--card-shadow);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 20px;
+            color: #495057;
+        }
+
+        .nav-btn:hover:not(:disabled) {
+            background: var(--primary-color);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 6px 12px rgba(74, 144, 217, 0.4);
+        }
+
+        .nav-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+
+        .nav-btn.active-nav {
+            background: var(--primary-color);
+            color: white;
+        }
+
+        /* 右侧信息面板 */
+        .info-panel {
+            width: 350px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: var(--card-shadow);
+            padding: 20px;
+            overflow-y: auto;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .info-panel.collapsed {
+            transform: translateX(100%);
+            width: 0;
+            min-width: 0;
+            padding: 0;
+            margin: 0;
+            opacity: 0;
+        }
+
+        .info-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e9ecef;
+        }
+
+        .info-header h3 {
+            margin: 0;
+            color: #495057;
+            font-size: 18px;
+        }
+
+        .info-content {
+            display: none;
+        }
+
+        .info-content.active {
+            display: block;
+        }
+
+        .info-row {
+            display: flex;
+            padding: 10px 0;
+            border-bottom: 1px solid #f8f9fa;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .info-label {
+            font-weight: 600;
+            color: #495057;
+            width: 100px;
+            flex-shrink: 0;
+        }
+
+        .info-value {
+            color: #6c757d;
+            flex: 1;
+            word-break: break-all;
+        }
+
+        /* 连接节点列表样式 */
+        .connection-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .connection-item {
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 3px solid #e9ecef;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .connection-main {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .connection-item:hover {
+            background: #e9ecef;
+            border-left-color: var(--primary-color);
+            transform: translateX(2px);
+        }
+
+        .connection-item.incoming {
+            border-left-color: #28a745;
+        }
+
+        .connection-item.incoming:hover {
+            background: #d4edda;
+        }
+
+        .connection-item.outgoing {
+            border-left-color: #ffc107;
+        }
+
+        .connection-item.outgoing:hover {
+            background: #fff3cd;
+        }
+
+        .connection-type-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            text-transform: uppercase;
+            min-width: 45px;
+            text-align: center;
+        }
+
+        .connection-type-badge.incoming {
+            background: #28a745;
+            color: white;
+        }
+
+        .connection-type-badge.outgoing {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .connection-node-type {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 600;
+            min-width: 24px;
+            text-align: center;
+        }
+
+        .connection-node-type.class {
+            background: #4a90d9;
+            color: white;
+        }
+
+        .connection-node-type.function {
+            background: #28a745;
+            color: white;
+        }
+
+        .connection-node-type.module {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .connection-name {
+            flex: 1;
+            color: #495057;
+            word-break: break-all;
+        }
+
+        .connection-id {
+            font-size: 11px;
+            color: #6c757d;
+            font-family: 'Courier New', monospace;
+            padding-left: 4px;
+            word-break: break-all;
+        }
+
+        .connection-connections {
+            font-size: 10px;
+            color: #adb5bd;
+        }
+
+        .connections-header {
+            font-size: 11px;
+            color: #6c757d;
+            padding: 8px 10px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .connections-header .count {
+            background: var(--primary-color);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 5px;
+        }
+
+        .no-selection {
+            text-align: center;
+            padding: 40px 20px;
+            color: #adb5bd;
+        }
+
+        .no-selection i {
+            font-size: 48px;
+            margin-bottom: 15px;
+            display: block;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 1400px) {
+            .info-panel {
+                width: 310px;
+            }
+        }
+
+        @media (max-width: 1200px) {
+            .info-panel {
+                width: 250px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .control-panel {
+                position: absolute;
+                left: 0;
+                top: 0;
+                height: 100%;
+                z-index: 1000;
+            }
+
+            .main-container {
+                padding: 10px;
+            }
+        }
+
+        /* 加载动画 */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Toast 提示 */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            z-index: 10000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <!-- 加载和文件选择界面 -->
+    <div class="loading-overlay" id="loading">
+        <div class="loading-content" id="drop-zone" style="text-align: center; padding: 40px; border: 3px dashed #e9ecef; border-radius: 12px; margin: 40px; transition: all 0.3s ease;">
+            <h2 style="color: #4a90d9; margin-bottom: 20px;">
+                <i class="bi bi-diagram-3"></i> 代码依赖关系可视化
+            </h2>
+            <div style="margin-bottom: 20px;">
+                <p style="color: #6c757d; margin-bottom: 15px;">选择或拖拽 JSON 数据文件：</p>
+                <input type="file" id="json-file-input" accept=".json"
+                       style="padding: 10px; border: 2px solid #e9ecef; border-radius: 8px; width: 80%;">
+                <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
+                    <p style="font-size: 13px; color: #495057; margin: 0;">
+                        <i class="bi bi-arrow-down-up" style="color: #4a90d9;"></i> 拖拽 .json 文件到这里
+                    </p>
+                    <p style="font-size: 12px; color: #adb5bd; margin-top: 8px; margin-bottom: 0;">
+                        提示：通过 generate_visualization.py 生成
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div class="toast" id="toast"></div>
+
+    <!-- 顶部导航栏 -->
+    <div class="navbar">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <h1><i class="bi bi-diagram-3"></i> 代码依赖关系可视化</h1>
+            <div class="stats-bar">
+                <div class="stat-item">
+                    <div class="value" id="node-count">-</div>
+                    <div class="label">节点</div>
+                </div>
+                <div class="stat-item">
+                    <div class="value" id="edge-count">-</div>
+                    <div class="label">关系</div>
+                </div>
+                <div class="stat-item">
+                    <div class="value" id="depth-count">-</div>
+                    <div class="label">层级</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主容器 -->
+    <div class="main-container">
+        <!-- 左侧控制面板 -->
+        <div class="control-panel" id="control-panel">
+            <div class="panel-section">
+                <div class="section-title">
+                    <i class="bi bi-search"></i>
+                    搜索节点
+                </div>
+                <div class="search-box">
+                    <textarea id="search-input" placeholder="输入节点名称搜索（支持逗号分隔多个词）" rows="1"></textarea>
+                    <button class="clear-btn" id="search-clear-btn" title="清空搜索">
+                        <i class="bi bi-x"></i>
+                    </button>
+                    <i class="bi bi-search search-icon"></i>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="section-title">
+                    <i class="bi bi-funnel"></i>
+                    筛选类型
+                </div>
+                <div class="filter-group" id="filter-group">
+                    <div class="filter-btn active" data-filter="all">
+                        <span>全部</span>
+                        <span class="count" id="count-all">0</span>
+                    </div>
+                    <div class="filter-btn" data-filter="class">
+                        <span>类</span>
+                        <span class="count" id="count-class">0</span>
+                    </div>
+                    <div class="filter-btn" data-filter="function">
+                        <span>函数</span>
+                        <span class="count" id="count-function">0</span>
+                    </div>
+                    <div class="filter-btn" data-filter="module">
+                        <span>模块</span>
+                        <span class="count" id="count-module">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="section-title">
+                    <i class="bi bi-grid-3x3"></i>
+                    布局方式
+                </div>
+                <div class="layout-grid">
+                    <div class="layout-btn active" data-layout="cose">
+                        <i class="bi bi-bounding-box"></i>
+                        <div>力导向</div>
+                    </div>
+                    <div class="layout-btn" data-layout="circle">
+                        <i class="bi bi-circle"></i>
+                        <div>圆形</div>
+                    </div>
+                    <div class="layout-btn" data-layout="concentric">
+                        <i class="bi bi-bullseye"></i>
+                        <div>同心圆</div>
+                    </div>
+                    <div class="layout-btn" data-layout="breadthfirst">
+                        <i class="bi bi-list-nested"></i>
+                        <div>层级</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="section-title">
+                    <i class="bi bi-palette"></i>
+                    图例
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #4a90d9;">C</div>
+                    <div class="legend-label">类 (Class)</div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #28a745;">F</div>
+                    <div class="legend-label">函数 (Function)</div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #ffc107;">M</div>
+                    <div class="legend-label">模块 (Module)</div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <div class="section-title">
+                    <i class="bi bi-tools"></i>
+                    工具
+                </div>
+                <div class="tool-buttons">
+                    <button class="tool-btn" onclick="exportImage()">
+                        <i class="bi bi-download"></i>
+                        <span>导出图片</span>
+                    </button>
+                    <button class="tool-btn" onclick="resetView()">
+                        <i class="bi bi-arrow-counterclockwise"></i>
+                        <span>重置视图</span>
+                    </button>
+                    <button class="tool-btn" onclick="fitGraph()">
+                        <i class="bi bi-aspect-ratio"></i>
+                        <span>适应窗口</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 中间图形区域 -->
+        <div class="graph-container">
+            <div id="cy"></div>
+
+            <!-- 边缘恢复按钮 -->
+            <button class="edge-toggle-btn left-edge expanded" onclick="togglePanel('control-panel')" title="隐藏控制面板">
+                <i class="bi bi-chevron-left"></i>
+            </button>
+            <button class="edge-toggle-btn right-edge expanded" onclick="togglePanel('info-panel')" title="隐藏信息面板">
+                <i class="bi bi-chevron-right"></i>
+            </button>
+
+            <!-- 控制按钮组 - 仅缩放按钮 -->
+            <div class="control-buttons">
+                <button class="ctrl-btn" onclick="zoomIn()" title="放大">
+                    <i class="bi bi-plus-lg"></i>
+                </button>
+                <button class="ctrl-btn" onclick="zoomOut()" title="缩小">
+                    <i class="bi bi-dash-lg"></i>
+                </button>
+            </div>
+
+            <!-- 导航按钮组 - 右下角 -->
+            <div class="nav-buttons">
+                <button class="nav-btn" onclick="navigateBack()" title="后退" id="btn-back" disabled>
+                    <i class="bi bi-arrow-left"></i>
+                </button>
+                <button class="nav-btn" onclick="navigateForward()" title="前进" id="btn-forward" disabled>
+                    <i class="bi bi-arrow-right"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 右侧信息面板 -->
+        <div class="info-panel" id="info-panel">
+            <div class="info-header">
+                <i class="bi bi-info-circle" style="font-size: 24px; color: var(--primary-color);"></i>
+                <h3>节点详情</h3>
+            </div>
+
+            <div class="no-selection" id="no-selection">
+                <i class="bi bi-hand-index-thumb"></i>
+                <p>点击节点查看详细信息</p>
+            </div>
+
+            <div class="info-content" id="info-content">
+                <div class="info-row">
+                    <div class="info-label">ID:</div>
+                    <div class="info-value" id="info-id">-</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">名称:</div>
+                    <div class="info-value" id="info-label">-</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">类型:</div>
+                    <div class="info-value" id="info-type">-</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">文件:</div>
+                    <div class="info-value" id="info-file">-</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">起始行:</div>
+                    <div class="info-value" id="info-start-line">-</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">结束行:</div>
+                    <div class="info-value" id="info-end-line">-</div>
+                </div>
+                <div class="info-row">
+                    <div class="info-label">连接数:</div>
+                    <div class="info-value" id="info-connections">-</div>
+                </div>
+
+                <!-- 连接节点列表 -->
+                <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #e9ecef;">
+                    <div style="font-weight: 600; color: #495057; margin-bottom: 10px; font-size: 18px;">
+                        <i class="bi bi-diagram-3" style="color: var(--primary-color);"></i>
+                        连接节点
+                    </div>
+                    <div id="connections-container" style="max-height: 300px; overflow-y: auto;">
+                        <div style="text-align: center; padding: 20px; color: #adb5bd; font-size: 12px;">
+                            点击节点查看连接关系
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let cy;
+        let currentFilter = 'all';
+        let currentLayout = 'cose';
+
+        // 历史记录管理
+        let nodeHistory = [];
+        let historyIndex = -1;
+        let isNavigatingHistory = false;
+
+        // 搜索过滤状态
+        let searchFilteredNodes = null; // 存储搜索过滤的节点
+        let isSearchActive = false; // 搜索是否激活
+        let isClearing = false; // 是否正在执行清空操作（避免事件冲突）
+
+        // 初始化 - 等待用户选择文件或拖拽
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.getElementById('json-file-input');
+            const dropZone = document.getElementById('drop-zone');
+
+            // 文件选择器
+            fileInput.addEventListener('change', async function(e) {
+                const file = e.target.files[0];
+                if (!file) return;
+                await loadFile(file);
+            });
+
+            // 拖拽事件处理
+            dropZone.addEventListener('dragover', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.style.borderColor = '#4a90d9';
+                dropZone.style.backgroundColor = 'rgba(74, 144, 217, 0.05)';
+            });
+
+            dropZone.addEventListener('dragleave', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.style.borderColor = '#e9ecef';
+                dropZone.style.backgroundColor = 'transparent';
+            });
+
+            dropZone.addEventListener('drop', async function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.style.borderColor = '#e9ecef';
+                dropZone.style.backgroundColor = 'transparent';
+
+                const files = e.dataTransfer.files;
+                if (files.length === 0) return;
+
+                const file = files[0];
+                if (!file.name.endsWith('.json')) {
+                    alert('请选择 .json 文件');
+                    return;
+                }
+
+                await loadFile(file);
+            });
+        });
+
+        // 加载文件函数
+        async function loadFile(file) {
+            try {
+                // 显示加载动画
+                document.getElementById('loading').querySelector('.loading-content').innerHTML =
+                    '<div class="loading-spinner"></div><p style="margin-top: 20px; color: #6c757d;">正在加载数据...</p>';
+
+                // 读取文件
+                const text = await file.text();
+                const elements = JSON.parse(text);
+
+                // 隐藏加载界面
+                document.getElementById('loading').style.display = 'none';
+
+                // 初始化图表
+                await initVisualization(elements);
+            } catch (error) {
+                alert('文件加载失败：' + error.message);
+                document.getElementById('loading').querySelector('.loading-content').innerHTML =
+                    '<h2 style="color: #dc3545;">加载失败</h2>' +
+                    '<p>' + error.message + '</p>' +
+                    '<button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #4a90d9; color: white; border: none; border-radius: 8px; cursor: pointer;">重新选择文件</button>';
+            }
+        }
+
+        // 初始化可视化（接收 elements 参数）
+        async function initVisualization(elements) {
+            try {
+                console.log('开始初始化...');
+                console.log('数据元素数量:', elements.length);
+
+                // 检查数据量，对大数据量给出提示
+                const nodeCount = elements.filter(e => e.group === 'nodes').length;
+                if (nodeCount > 500) {
+                    showToast(`数据量较大(${nodeCount}个节点)，加载可能需要几秒钟...`);
+                }
+                if (nodeCount > 1000) {
+                    const confirmed = confirm(`数据量非常大(${nodeCount}个节点)，可能导致浏览器卡顿。是否继续？建议：\n1. 减少分析范围\n2. 使用筛选功能\n\n是否继续加载？`);
+                    if (!confirmed) {
+                        return;
+                    }
+                }
+
+                // 使用 setTimeout 让浏览器先渲染加载动画
+                setTimeout(() => {
+                    initCytoscape(elements);
+                    initFilters();
+                    initSearch();
+                    initLayouts();
+                    initConnectionListClickHandlers();
+                    console.log('初始化完成，节点数:', cy.nodes().length, '边数:', cy.edges().length);
+                }, 100);
+            } catch (error) {
+                console.error('初始化错误:', error);
+                showToast('初始化失败: ' + error.message);
+            }
+        }
+
+        // 初始化 Cytoscape
+        function initCytoscape(elements) {
+            // 检查数据
+            console.log('元素数量:', elements.length);
+            if (!elements || elements.length === 0) {
+                throw new Error('没有可用的图数据');
+            }
+
+            // 检查容器
+            const container = document.getElementById('cy');
+            if (!container) {
+                throw new Error('找不到图形容器 #cy');
+            }
+
+            try {
+                cy = cytoscape({
+                    container: container,
+                    elements: elements,
+                style: [
+                    {
+                        selector: 'node',
+                        style: {
+                            'label': 'data(label)',
+                            'width': 60,
+                            'height': 60,
+                            'background-color': '#4a90d9',
+                            'color': '#333',
+                            'font-size': '11px',
+                            'text-valign': 'bottom',
+                            'text-margin-y': 5,
+                            'border-width': 3,
+                            'border-color': '#357abd',
+                            'text-wrap': 'wrap',
+                            'text-max-width': '80px'
+                        }
+                    },
+                    {
+                        selector: 'node[type="class"]',
+                        style: {
+                            'shape': 'round-rectangle',
+                            'width': 70,
+                            'height': 45,
+                            'background-color': '#4a90d9',
+                            'border-color': '#357abd'
+                        }
+                    },
+                    {
+                        selector: 'node[type="function"]',
+                        style: {
+                            'shape': 'ellipse',
+                            'width': 50,
+                            'height': 50,
+                            'background-color': '#28a745',
+                            'border-color': '#218838'
+                        }
+                    },
+                    {
+                        selector: 'node[type="module"]',
+                        style: {
+                            'shape': 'round-rectangle',
+                            'width': 80,
+                            'height': 50,
+                            'background-color': '#ffc107',
+                            'border-color': '#e0a800'
+                        }
+                    },
+                    {
+                        selector: 'node:selected',
+                        style: {
+                            'border-width': 4,
+                            'border-color': '#dc3545'
+                        }
+                    },
+                    {
+                        selector: 'node.highlighted',
+                        style: {
+                            'border-width': 4,
+                            'border-color': '#ffc107'
+                        }
+                    },
+                    {
+                        selector: 'node.faded',
+                        style: {
+                            'opacity': 0.3
+                        }
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'width': 2,
+                            'line-color': '#adb5bd',
+                            'target-arrow-color': '#adb5bd',
+                            'target-arrow-shape': 'triangle',
+                            'curve-style': 'bezier',
+                            'arrow-scale': 1.2
+                        }
+                    },
+                    {
+                        selector: 'edge:selected',
+                        style: {
+                            'line-color': '#dc3545',
+                            'target-arrow-color': '#dc3545'
+                        }
+                    }
+                ],
+                layout: getLayoutOptions('cose')
+                });
+            } catch (error) {
+                console.error('Cytoscape 初始化失败:', error);
+                throw new Error('图初始化失败: ' + error.message);
+            }
+
+            // 延迟更新统计信息，避免阻塞UI
+            setTimeout(() => {
+                updateStats();
+                // 隐藏加载动画
+                const loading = document.getElementById('loading');
+                if (loading) {
+                    loading.style.display = 'none';
+                }
+            }, 100);
+
+
+            // 节点点击事件 - 使用 'click' 事件替代 'tap' 以确保兼容性
+            cy.on('click', 'node', function(evt) {
+                try {
+                    const node = evt.target;
+                    console.log('节点被点击:', node.data());
+
+                    // 记录到历史（如果不是在导航中）
+                    if (!isNavigatingHistory) {
+                        addToHistory(node);
+                    }
+
+                    showNodeInfo(node);
+                    highlightConnections(node);
+                } catch (error) {
+                    console.error('显示节点信息时出错:', error);
+                }
+            });
+
+            // 点击空白处取消选择
+            cy.on('click', function(evt) {
+                if (evt.target === cy) {
+                    clearSelection();
+                }
+            });
+        }
+
+        // 获取布局选项
+        function getLayoutOptions(layoutName) {
+            const options = {
+                cose: {
+                    name: 'cose',
+                    padding: 50,
+                    nodeRepulsion: 8000,
+                    idealEdgeLength: 100,
+                    edgeElasticity: 100,
+                    animate: true,
+                    animationDuration: 500,
+                    // 随机化初始位置避免卡顿
+                    randomize: true,
+                    // 大数据量时禁用某些优化
+                    nodeDimensionsIncludeLabels: false,
+                    // 性能优化参数
+                    refresh: 30, // 每30帧刷新一次，提高响应速度
+                    fit: true,
+                    padding: 30,
+                    boundingBox: undefined,
+                    nodeOverlap: 20,
+                    // 停止条件优化
+                    stopThreshold: 0.1, // 降低停止阈值
+                    stopThresholdMaxIter: 500 // 最大迭代次数
+                },
+                circle: {
+                    name: 'circle',
+                    padding: 50,
+                    radius: 200,
+                    animate: true,
+                    animationDuration: 500
+                },
+                concentric: {
+                    name: 'concentric',
+                    padding: 50,
+                    concentric: function(node) {
+                        return node.degree();
+                    },
+                    minNodeSpacing: 50,
+                    animate: true,
+                    animationDuration: 500
+                },
+                breadthfirst: {
+                    name: 'breadthfirst',
+                    padding: 50,
+                    directed: true,
+                    animate: true,
+                    animationDuration: 500
+                }
+            };
+            return options[layoutName] || options.cose;
+        }
+
+        // 更新统计信息（优化版 - 移除深度计算）
+        function updateStats() {
+            const nodes = cy.nodes();
+            const edges = cy.edges();
+
+            document.getElementById('node-count').textContent = nodes.length;
+            document.getElementById('edge-count').textContent = edges.length;
+
+            // 移除深度计算以提升性能
+            // 对于大图，深度计算非常耗时且意义不大
+            document.getElementById('depth-count').textContent = 'N/A';
+
+            // 更新过滤器计数（使用缓存提升性能）
+                document.getElementById('count-all').textContent = nodes.length;
+
+                // 使用reduce一次性计算，避免多次遍历
+                const typeCounts = nodes.reduce((acc, node) => {
+                    const type = node.data('type');
+                    acc[type] = (acc[type] || 0) + 1;
+                    return acc;
+                }, {});
+
+                document.getElementById('count-class').textContent = typeCounts['class'] || 0;
+                document.getElementById('count-function').textContent = typeCounts['function'] || 0;
+                document.getElementById('count-module').textContent = typeCounts['module'] || 0;
+        }
+
+        // 移除深度计算函数以提升性能
+        // 该函数对大图性能影响极大，已移除
+
+
+        // 显示节点信息
+        function showNodeInfo(node) {
+            try {
+                console.log('显示节点信息:', node.data());
+
+                // 获取DOM元素
+                const noSelection = document.getElementById('no-selection');
+                const infoContent = document.getElementById('info-content');
+                const infoPanel = document.getElementById('info-panel');
+
+                console.log('DOM元素状态:', {
+                    noSelection: noSelection ? 'found' : 'not found',
+                    infoContent: infoContent ? 'found' : 'not found',
+                    infoPanel: infoPanel ? 'found' : 'not found',
+                    infoPanelDisplay: infoPanel ? window.getComputedStyle(infoPanel).display : 'N/A',
+                    infoContentDisplay: infoContent ? window.getComputedStyle(infoContent).display : 'N/A'
+                });
+
+                // 确保info-panel可见
+                if (infoPanel) {
+                    infoPanel.style.display = 'block';
+                    infoPanel.classList.remove('collapsed');
+                }
+
+                // 隐藏"无选择"提示
+                if (noSelection) {
+                    noSelection.style.display = 'none';
+                    console.log('隐藏no-selection提示');
+                }
+
+                // 显示信息内容
+                if (infoContent) {
+                    infoContent.classList.add('active');
+                    infoContent.style.display = 'block';
+                    infoContent.style.visibility = 'visible';
+                    console.log('显示info-content, display:', infoContent.style.display);
+                }
+
+                // 获取并显示节点数据
+                const nodeId = node.data('id') || '-';
+                const nodeLabel = node.data('label') || '-';
+                const nodeType = node.data('type') || '-';
+                const nodeFile = node.data('file') || '-';
+                const nodeStartLine = node.data('startLine') || '-';
+                const nodeEndLine = node.data('endLine') || '-';
+                const nodeConnections = node.degree() || 0;
+
+                console.log('节点数据:', { nodeId, nodeLabel, nodeType, nodeFile, nodeStartLine, nodeEndLine, nodeConnections });
+
+                // 更新各个字段
+                const infoId = document.getElementById('info-id');
+                const infoLabel = document.getElementById('info-label');
+                const infoType = document.getElementById('info-type');
+                const infoFile = document.getElementById('info-file');
+                const infoStartLine = document.getElementById('info-start-line');
+                const infoEndLine = document.getElementById('info-end-line');
+                const infoConnections = document.getElementById('info-connections');
+
+                if (infoId) {
+                    infoId.textContent = nodeId;
+                    console.log('更新info-id:', nodeId);
+                }
+                if (infoLabel) {
+                    infoLabel.textContent = nodeLabel;
+                    console.log('更新info-label:', nodeLabel);
+                }
+                if (infoType) {
+                    infoType.textContent = nodeType;
+                    console.log('更新info-type:', nodeType);
+                }
+                if (infoFile) {
+                    infoFile.textContent = nodeFile;
+                    console.log('更新info-file:', nodeFile);
+                }
+                if (infoStartLine) {
+                    infoStartLine.textContent = nodeStartLine;
+                    console.log('更新info-start-line:', nodeStartLine);
+                }
+                if (infoEndLine) {
+                    infoEndLine.textContent = nodeEndLine;
+                    console.log('更新info-end-line:', nodeEndLine);
+                }
+                if (infoConnections) {
+                    infoConnections.textContent = nodeConnections;
+                    console.log('更新info-connections:', nodeConnections);
+                }
+
+                // 显示连接节点列表
+                displayConnectionList(node);
+
+                console.log('节点信息已显示完成');
+            } catch (error) {
+                console.error('显示节点信息时出错:', error);
+                console.error('错误堆栈:', error.stack);
+                showToast('显示节点信息失败: ' + error.message);
+            }
+        }
+
+        // 显示连接节点列表
+        function displayConnectionList(node) {
+            try {
+                const container = document.getElementById('connections-container');
+                if (!container) return;
+
+                // 获取所有连接
+                const neighborhood = node.neighborhood().nodes();
+                const edges = node.connectedEdges();
+
+                if (neighborhood.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; padding: 20px; color: #adb5bd; font-size: 12px;">暂无连接节点</div>';
+                    return;
+                }
+
+                // 分类连接：incoming（指向当前节点）和outgoing（从当前节点指出）
+                const incomingNodes = [];
+                const outgoingNodes = [];
+
+                edges.forEach(edge => {
+                    const source = edge.source();
+                    const target = edge.target();
+
+                    if (source.id() === node.id()) {
+                        // 当前节点是源，这是outgoing连接
+                        if (!outgoingNodes.find(n => n.id === target.id())) {
+                            outgoingNodes.push({
+                                node: target,
+                                edge: edge
+                            });
+                        }
+                    } else {
+                        // 当前节点是目标，这是incoming连接
+                        if (!incomingNodes.find(n => n.id === source.id())) {
+                            incomingNodes.push({
+                                node: source,
+                                edge: edge
+                            });
+                        }
+                    }
+                });
+
+                // 生成HTML
+                let html = '';
+
+                // Incoming连接
+                if (incomingNodes.length > 0) {
+                    html += '<div class="connections-header">';
+                    html += '<i class="bi bi-arrow-left"></i> 被依赖';
+                    html += '<span class="count">' + incomingNodes.length + '</span>';
+                    html += '</div>';
+                    html += '<ul class="connection-list">';
+
+                    incomingNodes.forEach(item => {
+                        const connNode = item.node;
+                        const nodeType = connNode.data('type') || 'unknown';
+                        const typeLabel = getTypeLabel(nodeType);
+
+                        html += '<li class="connection-item incoming" data-node-id="' + connNode.id() + '">';
+                        html += '<div class="connection-main">';
+                        html += '<span class="connection-type-badge incoming">被依赖</span>';
+                        html += '<span class="connection-node-type ' + nodeType + '">' + typeLabel + '</span>';
+                        html += '<span class="connection-name">' + connNode.data('label') + '</span>';
+                        html += '<span class="connection-connections">' + connNode.degree() + ' 连接</span>';
+                        html += '</div>';
+                        html += '<div class="connection-id">ID: ' + connNode.id() + '</div>';
+                        html += '</li>';
+                    });
+
+                    html += '</ul>';
+                }
+
+                // Outgoing连接
+                if (outgoingNodes.length > 0) {
+                    html += '<div class="connections-header" style="margin-top: 15px;">';
+                    html += '<i class="bi bi-arrow-right"></i> 依赖';
+                    html += '<span class="count">' + outgoingNodes.length + '</span>';
+                    html += '</div>';
+                    html += '<ul class="connection-list">';
+
+                    outgoingNodes.forEach(item => {
+                        const connNode = item.node;
+                        const nodeType = connNode.data('type') || 'unknown';
+                        const typeLabel = getTypeLabel(nodeType);
+
+                        html += '<li class="connection-item outgoing" data-node-id="' + connNode.id() + '">';
+                        html += '<div class="connection-main">';
+                        html += '<span class="connection-type-badge outgoing">依赖</span>';
+                        html += '<span class="connection-node-type ' + nodeType + '">' + typeLabel + '</span>';
+                        html += '<span class="connection-name">' + connNode.data('label') + '</span>';
+                        html += '<span class="connection-connections">' + connNode.degree() + ' 连接</span>';
+                        html += '</div>';
+                        html += '<div class="connection-id">ID: ' + connNode.id() + '</div>';
+                        html += '</li>';
+                    });
+
+                    html += '</ul>';
+                }
+
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('显示连接列表时出错:', error);
+            }
+        }
+
+        // 获取类型标签
+        function getTypeLabel(type) {
+            const labels = {
+                'class': '类',
+                'function': '函数',
+                'module': '模块'
+            };
+            return labels[type] || type.substring(0, 1).toUpperCase();
+        }
+
+        // 选中指定节点
+        function selectNode(nodeId) {
+            try {
+                const node = cy.getElementById(nodeId);
+                if (node) {
+                    // 记录到历史（如果不是在导航中）
+                    if (!isNavigatingHistory) {
+                        addToHistory(node);
+                    }
+
+                    // 选中节点
+                    cy.nodes().unselect();
+                    node.select();
+
+                    // 居中显示
+                    cy.animate({
+                        center: { eles: node },
+                        zoom: 1.5
+                    }, {
+                        duration: 300
+                    });
+
+                    // 显示节点信息
+                    showNodeInfo(node);
+                    highlightConnections(node);
+
+                    showToast('已选中: ' + node.data('label'));
+                }
+            } catch (error) {
+                console.error('选中节点时出错:', error);
+            }
+        }
+
+        // 添加到历史记录
+        function addToHistory(node) {
+            const nodeId = node.id();
+
+            // 如果当前位置不在历史末尾，删除当前位置之后的所有记录
+            if (historyIndex < nodeHistory.length - 1) {
+                nodeHistory = nodeHistory.slice(0, historyIndex + 1);
+            }
+
+            // 如果当前节点与历史中最后一个节点不同，才添加
+            if (nodeHistory.length === 0 || nodeHistory[historyIndex].id !== nodeId) {
+                nodeHistory.push({
+                    id: nodeId,
+                    label: node.data('label'),
+                    timestamp: new Date().getTime()
+                });
+                historyIndex = nodeHistory.length - 1;
+
+                // 更新按钮状态
+                updateNavigationButtons();
+
+                console.log('添加到历史:', nodeId, '历史索引:', historyIndex);
+            }
+        }
+
+        // 更新导航按钮状态
+        function updateNavigationButtons() {
+            const btnBack = document.getElementById('btn-back');
+            const btnForward = document.getElementById('btn-forward');
+
+            if (btnBack) {
+                btnBack.disabled = historyIndex <= 0;
+            }
+            if (btnForward) {
+                btnForward.disabled = historyIndex >= nodeHistory.length - 1;
+            }
+        }
+
+        // 后退
+        function navigateBack() {
+            if (historyIndex > 0) {
+                isNavigatingHistory = true;
+                historyIndex--;
+
+                const historyItem = nodeHistory[historyIndex];
+                const node = cy.getElementById(historyItem.id);
+
+                if (node) {
+                    // 选中节点
+                    cy.nodes().unselect();
+                    node.select();
+
+                    // 居中显示
+                    cy.animate({
+                        center: { eles: node },
+                        zoom: 1.5
+                    }, {
+                        duration: 300
+                    });
+
+                    // 显示节点信息
+                    showNodeInfo(node);
+                    highlightConnections(node);
+
+                    showToast(`后退 (${historyIndex + 1}/${nodeHistory.length}): ${historyItem.label}`);
+                }
+
+                updateNavigationButtons();
+                isNavigatingHistory = false;
+            }
+        }
+
+        // 前进
+        function navigateForward() {
+            if (historyIndex < nodeHistory.length - 1) {
+                isNavigatingHistory = true;
+                historyIndex++;
+
+                const historyItem = nodeHistory[historyIndex];
+                const node = cy.getElementById(historyItem.id);
+
+                if (node) {
+                    // 选中节点
+                    cy.nodes().unselect();
+                    node.select();
+
+                    // 居中显示
+                    cy.animate({
+                        center: { eles: node },
+                        zoom: 1.5
+                    }, {
+                        duration: 300
+                    });
+
+                    // 显示节点信息
+                    showNodeInfo(node);
+                    highlightConnections(node);
+
+                    showToast(`前进 (${historyIndex + 1}/${nodeHistory.length}): ${historyItem.label}`);
+                }
+
+                updateNavigationButtons();
+                isNavigatingHistory = false;
+            }
+        }
+
+        // 初始化连接节点点击事件委托
+        function initConnectionListClickHandlers() {
+            // 使用事件委托处理连接列表项的点击
+            const container = document.getElementById('connections-container');
+            if (container) {
+                container.addEventListener('click', function(e) {
+                    const listItem = e.target.closest('.connection-item');
+                    if (listItem) {
+                        const nodeId = listItem.getAttribute('data-node-id');
+                        if (nodeId) {
+                            selectNode(nodeId);
+                        }
+                    }
+                });
+            }
+        }
+
+        // 高亮连接
+        function highlightConnections(node) {
+            cy.elements().removeClass('highlighted faded');
+
+            const neighborhood = node.closedNeighborhood();
+            cy.elements().not(neighborhood).addClass('faded');
+            neighborhood.addClass('highlighted');
+        }
+
+        // 清除选择（不影响搜索过滤状态）
+        function clearSelection() {
+            try {
+                cy.elements().removeClass('highlighted faded selected');
+
+                // 如果搜索激活状态，保持搜索过滤的可见性
+                if (isSearchActive && searchFilteredNodes) {
+                    // 保持搜索过滤状态，只移除高亮
+                    return;
+                }
+
+                const noSelection = document.getElementById('no-selection');
+                const infoContent = document.getElementById('info-content');
+
+                console.log('清除选择');
+
+                if (noSelection) {
+                    noSelection.style.display = 'block';
+                    console.log('显示no-selection提示');
+                }
+
+                if (infoContent) {
+                    infoContent.classList.remove('active');
+                    infoContent.style.display = 'none';
+                    infoContent.style.visibility = 'hidden';
+                    console.log('隐藏info-content');
+                }
+            } catch (error) {
+                console.error('清除选择时出错:', error);
+            }
+        }
+
+        // 初始化筛选器
+        function initFilters() {
+            const filterButtons = document.querySelectorAll('.filter-btn');
+            filterButtons.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    filterButtons.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+
+                    currentFilter = this.dataset.filter;
+                    applyFilter(currentFilter);
+                });
+            });
+        }
+
+        // 应用筛选（优化版 - 批量操作）
+        function applyFilter(filter) {
+            // 清除搜索状态
+            isSearchActive = false;
+            searchFilteredNodes = null;
+            document.getElementById('search-input').value = '';
+
+            cy.elements().removeClass('highlighted faded');
+
+            if (filter === 'all') {
+                cy.elements().show();
+            } else {
+                // 使用批量操作提升性能
+                const nodesToShow = cy.nodes().filter(n => n.data('type') === filter);
+                const nodesToHide = cy.nodes().filter(n => n.data('type') !== filter);
+
+                nodesToShow.show();
+                nodesToHide.connectedEdges().show();
+                nodesToHide.hide();
+
+                showToast(`已显示 ${nodesToShow.length} 个${filter}类型的节点`);
+            }
+        }
+
+        // 初始化搜索（优化版 - 添加结果限制）
+        function initSearch() {
+            const searchInput = document.getElementById('search-input');
+            const clearBtn = document.getElementById('search-clear-btn');
+            let searchTimeout;
+
+            // 自动调整textarea高度
+            function autoResizeTextarea() {
+                searchInput.style.height = 'auto';
+                const newHeight = Math.min(searchInput.scrollHeight, 120);
+                searchInput.style.height = newHeight + 'px';
+            }
+
+            // 更新清空按钮显示状态
+            function updateClearButton() {
+                if (searchInput.value.trim().length > 0) {
+                    clearBtn.classList.add('show');
+                } else {
+                    clearBtn.classList.remove('show');
+                }
+            }
+
+            // 清空搜索
+            function clearSearch() {
+                isClearing = true;
+                isSearchActive = false;
+                searchFilteredNodes = null;
+                cy.elements().removeClass('highlighted faded');
+                cy.elements().show();
+                searchInput.value = '';
+                autoResizeTextarea(); // 自动调整高度
+                updateClearButton();
+                console.log('搜索已清空，恢复显示所有节点');
+
+                // 延迟重置标志，确保 input 事件已经处理完毕
+                setTimeout(() => {
+                    isClearing = false;
+                }, 100);
+            }
+
+            // 清空按钮点击事件
+            clearBtn.addEventListener('click', function(e) {
+                e.preventDefault(); // 阻止默认行为
+                e.stopPropagation(); // 阻止事件冒泡
+                console.log('清空按钮被点击');
+                clearSearch();
+                searchInput.focus();
+            });
+
+            searchInput.addEventListener('input', function() {
+                autoResizeTextarea(); // 自动调整高度
+                updateClearButton();
+
+                // 如果正在执行清空操作，跳过处理
+                if (isClearing) {
+                    console.log('正在清空，跳过 input 事件处理');
+                    return;
+                }
+
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    const searchTerm = this.value.toLowerCase().trim();
+
+                    if (searchTerm === '') {
+                        // 清空搜索框，恢复显示所有节点
+                        clearSearch();
+                        return;
+                    }
+
+                    // 支持逗号分割的多个搜索词（OR 关系）
+                    const searchTerms = searchTerm.split(',')
+                        .map(term => term.trim())
+                        .filter(term => term.length > 0);
+
+                    if (searchTerms.length === 0) {
+                        clearSearch();
+                        return;
+                    }
+
+                    // 搜索匹配的节点（任意一个搜索词匹配即可）
+                    const matchingNodes = cy.nodes().filter(node => {
+                        const nodeLabel = node.data('label').toLowerCase();
+                        const nodeId = node.data('id').toLowerCase();
+                        return searchTerms.some(term =>
+                            nodeLabel.includes(term) || nodeId.includes(term)
+                        );
+                    });
+
+                    if (matchingNodes.length > 0) {
+                        // 设置搜索激活状态
+                        isSearchActive = true;
+                        searchFilteredNodes = matchingNodes;
+
+                        // 隐藏所有元素
+                        cy.elements().hide();
+
+                        // 只显示匹配的节点
+                        matchingNodes.show();
+
+                        // 显示匹配节点之间的边（两个端点都在匹配集合中）
+                        const edgesBetweenMatched = cy.edges().filter(edge => {
+                            const source = edge.source();
+                            const target = edge.target();
+                            return source.inside(matchingNodes) && target.inside(matchingNodes);
+                        });
+                        edgesBetweenMatched.show();
+
+                        // 限制最多显示100个结果，避免性能问题
+                        const maxResults = 100;
+                        const nodesToHighlight = matchingNodes.slice(0, maxResults);
+
+                        nodesToHighlight.addClass('highlighted');
+
+                        // 选中第一个匹配项并居中
+                        const firstNode = matchingNodes[0];
+                        cy.animate({
+                            center: { eles: firstNode },
+                            zoom: 1.5
+                        }, {
+                            duration: 300
+                        });
+
+                        if (matchingNodes.length > maxResults) {
+                            showToast(`找到 ${matchingNodes.length} 个匹配节点，仅显示前 ${maxResults} 个`);
+                        } else {
+                            showToast(`找到 ${matchingNodes.length} 个匹配节点`);
+                        }
+
+                        console.log(`搜索完成：显示 ${matchingNodes.length} 个节点`);
+                    } else {
+                        isSearchActive = true;
+                        searchFilteredNodes = $();
+                        cy.elements().hide();
+                        showToast('未找到匹配节点');
+                    }
+                }, 300);
+            });
+        }
+
+        // 初始化布局
+        function initLayouts() {
+            const layoutButtons = document.querySelectorAll('.layout-btn');
+            layoutButtons.forEach(btn => {
+                btn.addEventListener('click', function() {
+                    layoutButtons.forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+
+                    currentLayout = this.dataset.layout;
+                    applyLayout(currentLayout);
+                });
+            });
+        }
+
+        // 应用布局（优化版 - 添加进度反馈）
+        function applyLayout(layoutName) {
+            const nodeCount = cy.nodes().length;
+
+            if (nodeCount > 500) {
+                showToast('正在应用新布局，请稍候...');
+            }
+
+            const layout = cy.layout(getLayoutOptions(layoutName));
+
+            layout.on('layoutstart', function() {
+                if (nodeCount > 300) {
+                    document.body.style.cursor = 'wait';
+                }
+            });
+
+            layout.on('layoutstop', function() {
+                document.body.style.cursor = 'default';
+                if (nodeCount > 500) {
+                    showToast('布局已更新');
+                }
+            });
+
+            layout.run();
+        }
+
+        // 放大
+        function zoomIn() {
+            cy.zoom({
+                level: cy.zoom() * 1.2,
+                renderedPosition: {
+                    x: cy.width() / 2,
+                    y: cy.height() / 2
+                }
+            });
+        }
+
+        // 缩小
+        function zoomOut() {
+            cy.zoom({
+                level: cy.zoom() * 0.8,
+                renderedPosition: {
+                    x: cy.width() / 2,
+                    y: cy.height() / 2
+                }
+            });
+        }
+
+        // 重置视图
+        function resetView() {
+            cy.fit();
+            cy.center();
+            showToast('视图已重置');
+        }
+
+        // 适应窗口
+        function fitGraph() {
+            cy.fit();
+            showToast('已适应窗口');
+        }
+
+        // 导出图片
+        function exportImage() {
+            const png = cy.png({ full: true, scale: 2 });
+            const link = document.createElement('a');
+            link.href = png;
+            link.download = 'dependency-graph.png';
+            link.click();
+            showToast('图片已导出');
+        }
+
+        // 切换面板
+        function togglePanel(panelId) {
+            const panel = document.getElementById(panelId);
+            const isCurrentlyCollapsed = panel.classList.contains('collapsed');
+
+            if (isCurrentlyCollapsed) {
+                // 显示面板
+                panel.classList.remove('collapsed');
+
+                // 更新按钮样式和图标
+                const btnClass = panelId === 'control-panel' ? '.edge-toggle-btn.left-edge' : '.edge-toggle-btn.right-edge';
+                const btn = document.querySelector(btnClass);
+                if (btn) {
+                    btn.classList.remove('collapsed');
+                    btn.classList.add('expanded');
+                    // 反向图标：展开时图标指向外
+                    const icon = btn.querySelector('i');
+                    if (panelId === 'control-panel') {
+                        icon.classList.remove('bi-chevron-right');
+                        icon.classList.add('bi-chevron-left');
+                    } else {
+                        icon.classList.remove('bi-chevron-left');
+                        icon.classList.add('bi-chevron-right');
+                    }
+                }
+
+                showToast(`${panelId === 'control-panel' ? '控制面板' : '信息面板'}已显示`);
+            } else {
+                // 隐藏面板
+                panel.classList.add('collapsed');
+
+                // 更新按钮样式和图标
+                const btnClass = panelId === 'control-panel' ? '.edge-toggle-btn.left-edge' : '.edge-toggle-btn.right-edge';
+                const btn = document.querySelector(btnClass);
+                if (btn) {
+                    btn.classList.remove('expanded');
+                    btn.classList.add('collapsed');
+                    // 反向图标：折叠时图标指向内
+                    const icon = btn.querySelector('i');
+                    if (panelId === 'control-panel') {
+                        icon.classList.remove('bi-chevron-left');
+                        icon.classList.add('bi-chevron-right');
+                    } else {
+                        icon.classList.remove('bi-chevron-right');
+                        icon.classList.add('bi-chevron-left');
+                    }
+                }
+
+                showToast(`${panelId === 'control-panel' ? '控制面板' : '信息面板'}已隐藏`);
+            }
+        }
+
+        // 显示提示
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
