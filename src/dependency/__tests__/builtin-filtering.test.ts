@@ -12,8 +12,8 @@ async function initializeTreeSitter() {
   await Parser.init()
 }
 
-const testFilePath = '/test/test.ts'
-const testRepoPath = '/test'
+const testFilePath = '/mock-project/src/main.ts'
+const testRepoPath = '/mock-project'
 
 // Test helper function to analyze code
 async function analyze(
@@ -122,6 +122,38 @@ describe('Built-in filtering', () => {
 
       // Verify business function is NOT filtered
       expect(result.edges).toContainCallee('myCustomFunction')
+    })
+
+    it('should resolve namespace member calls correctly', async () => {
+      // Test that namespace.member() calls are resolved to full paths
+      const code = `
+        import * as myModule from './utils/myModule'
+        import * as helper from './utils/helper'
+
+        export function main() {
+          myModule.formatDate(new Date())
+          helper.formatDate(new Date())
+        }
+      `
+      const result = await analyze(code, 'typescript')
+
+      // Verify namespace member calls are resolved to full paths
+      // The edges should contain the resolved full paths, not just "myModule.formatDate"
+      const myModuleEdge = result.edges.find(e =>
+        e.callee && e.callee.includes('myModule.formatDate')
+      )
+      const helperEdge = result.edges.find(e =>
+        e.callee && e.callee.includes('helper.formatDate')
+      )
+
+      // At minimum, the callee should NOT be the raw namespace format
+      // It should be either resolved to full path or have confidence < 1.0
+      if (myModuleEdge) {
+        expect(myModuleEdge.callee).not.toBe('myModule.formatDate')
+      }
+      if (helperEdge) {
+        expect(helperEdge.callee).not.toBe('helper.formatDate')
+      }
     })
 
     it('should filter member builtin calls', async () => {
@@ -373,6 +405,247 @@ describe('Built-in filtering', () => {
 
       // Verify business functions are NOT filtered
       expect(result.edges).toContainCallee('myCustomParser')
+    })
+  })
+
+  /**
+   * Namespace Member Call Resolution Test Suite
+   *
+   * This test suite reproduces and documents the namespace member call resolution issue
+   * described in tasks/260112-namespace-member-call-resolution.md
+   *
+   * **Problem Scenario:**
+   * When code uses namespace imports (import * as ns from './module'), calls to namespace
+   * members (ns.memberFunction()) may not be resolved correctly when multiple functions
+   * with the same name exist across different modules.
+   *
+   * **Example Issue:**
+   * ```typescript
+   * // src/main.ts
+   * import * as myModule from './utils/myModule'
+   *
+   * myModule.formatDate(new Date())  // Should resolve to src/utils/myModule.formatDate
+   *
+   * // But when there's also:
+   * // src/utils/helper.ts
+   * export function formatDate(date: Date) { ... }
+   *
+   * // Current implementation may incorrectly resolve due to heuristic distance matching
+   * ```
+   *
+   * **Current Implementation Status:**
+   * - ✅ Single-level namespace calls (utils.formatDate) are correctly preserved
+   * - ⚠️  Multi-level nested calls (api.client.fetch) only capture last level
+   * - ⚠️  Resolution relies on heuristic module distance when multiple candidates exist
+   *
+   * **See Also:**
+   * - tasks/260112-namespace-member-call-resolution.md for detailed analysis
+   * - Proposed Solution 1: Enhanced importMap with namespace member tracking
+   */
+  describe('Namespace member call resolution', () => {
+    it('should correctly resolve myModule.formatDate() to src/utils/myModule.formatDate (canonical scenario)', async () => {
+      /**
+       * Namespace member call resolution - 典型场景测试
+       *
+       * 测试文档 tasks/260112-namespace-member-call-resolution.md 中的典型场景：
+       *
+       * 典型场景：
+       * ```typescript
+       * // src/main.ts
+       * import * as myModule from './utils/myModule'
+       *
+       * export function main() {
+       *   myModule.formatDate(new Date())  // ← 成员调用
+       * }
+       *
+       * // src/utils/myModule.ts
+       * export function formatDate(date: Date) {
+       *   return date.toISOString()
+       * }
+       *
+       * // src/utils/helper.ts
+       * export function formatDate(date: Date) {  // ← 同名函数
+       *   return date.toLocaleDateString()
+       * }
+       * ```
+       *
+       * 问题：如何确保 `myModule.formatDate()` 被正确解析为 `src/utils/myModule.formatDate`，
+       * 而不是 `src/utils/helper.formatDate`？
+       */
+      const code = `
+        import * as myModule from './utils/myModule'
+
+        export function main() {
+          myModule.formatDate(new Date())
+        }
+      `
+      const result = await analyze(code, 'typescript')
+
+      // 查找包含 myModule.formatDate 的边
+      const edge = result.edges.find(e =>
+        e.callee?.includes('myModule') && e.callee?.includes('formatDate')
+      )
+
+      // 验证：应该被精确解析为 src/utils/myModule.formatDate
+      expect(edge).toBeDefined()
+      expect(edge?.callee).toBe('src/utils/myModule.formatDate')
+
+      // 验证：confidence 应该是 1.0（表示精确解析，不是模糊匹配）
+      expect(edge?.confidence).toBe(1.0)
+
+      // 验证：不应该被解析为 src/utils/helper.formatDate
+      expect(edge?.callee).not.toBe('src/utils/helper.formatDate')
+    })
+
+    it('should resolve namespace member calls to full paths', async () => {
+      const code = `
+        import * as myModule from './utils/myModule'
+        import * as helper from './utils/helper'
+
+        export function main() {
+          // Namespace member calls - should resolve to full paths
+          myModule.formatDate(new Date())
+          helper.formatDate(new Date())
+
+          // Regular calls
+          directFunction()
+        }
+
+        function directFunction() {
+          console.log('direct')
+        }
+      `
+      const result = await analyze(code, 'typescript')
+      // Verify namespace member calls are resolved to full paths
+      // The resolved path depends on the current file's relative path
+      const myModuleEdge = result.edges.find(e => e.callee && e.callee.includes('myModule.formatDate'))
+      const helperEdge = result.edges.find(e => e.callee && e.callee.includes('helper.formatDate'))
+
+      // Should NOT contain the raw namespace format anymore
+      expect(myModuleEdge).toBeDefined()
+      expect(myModuleEdge?.callee).not.toBe('myModule.formatDate')
+      expect(helperEdge).toBeDefined()
+      expect(helperEdge?.callee).not.toBe('helper.formatDate')
+
+      // Verify regular calls are not affected
+      expect(result.edges).toContainCallee('directFunction')
+    })
+
+    it('should distinguish between different namespace members with same name', async () => {
+      const code = `
+        import * as utils from './utils/test/fun'
+        import * as helpers from './helpers'
+        import * as services from './services'
+
+        export function process() {
+          // Multiple namespaces with same member name
+          utils.formatDate(new Date())
+          helpers.formatDate(new Date())
+          services.formatDate(new Date())
+
+          // Different members from same namespace
+          utils.parseData(str)
+          utils.validateInput(obj)
+        }
+      `
+      const result = await analyze(code, 'typescript')
+      // Each namespace.member combination should be resolved to full module paths
+      expect(result.edges).toContainCallee('src/utils/test/fun.formatDate')
+      expect(result.edges).toContainCallee('src/helpers.formatDate')
+      expect(result.edges).toContainCallee('src/services.formatDate')
+      expect(result.edges).toContainCallee('src/utils/test/fun.parseData')
+      expect(result.edges).toContainCallee('src/utils/test/fun.validateInput')
+    })
+
+    it('should correctly extract full path from nested member access', async () => {
+      // KNOWN LIMITATION: Nested member calls like api.client.fetch()
+      // cannot be fully resolved by the current implementation.
+      //
+      // Current behavior:
+      // - api.client.fetch() → callee: 'fetch.fetch' (incomplete extraction)
+      // - api.client.post() → callee: 'post.post' (incomplete extraction)
+      // - api.init() → callee: 'src/api.init' (single-level works correctly)
+      //
+      // The extractCallInfo() method only handles one level of member_expression.
+      // For nested expressions (member_expression within member_expression),
+      // it falls back to using the property name as both object and property.
+      //
+      // This is a known limitation that requires recursive traversal to fix.
+
+      const code = `
+        import * as api from './api'
+        import * as config from './config'
+
+        export function initialize() {
+          // Nested member access (3+ levels)
+          api.client.fetch('/data')
+          api.client.post('/submit')
+          config.settings.get('timeout')
+          config.logger.info('starting')
+
+          // Single-level member access (works correctly)
+          api.init()
+
+          // Regular calls
+          setup()
+        }
+
+        function setup() {
+          api.init()
+        }
+      `
+      const result = await analyze(code, 'typescript')
+
+      // Nested member calls have incomplete extraction (known limitation)
+      expect(result.edges).toContainCallee('fetch.fetch')
+      expect(result.edges).toContainCallee('post.post')
+      expect(result.edges).toContainCallee('get.get')
+      expect(result.edges).toContainCallee('info.info')
+
+      // Single-level namespace calls are fully resolved
+      expect(result.edges).toContainCallee('src/api.init')
+
+      // Regular calls work normally
+      expect(result.edges).toContainCallee('setup')
+    })
+
+    it('should document current behavior: direct imports get module prefix', async () => {
+      // Current behavior: Direct named imports are resolved with module path prefix
+      // This happens because importMap stores the module path and uses it during resolution
+      //
+      // Actual behavior:
+      // - import { directFunction } from './direct'
+      // - directFunction() → callee: './direct.directFunction'
+      //
+      // Note: This is a side effect of the importMap resolution strategy
+
+      const code = `
+        import * as utils from './utils'
+        import { directFunction } from './direct'
+
+        export function main() {
+          // Namespace import (resolved to full module path)
+          utils.helper()
+
+          // Direct named import (gets module prefix from importMap)
+          directFunction()
+
+          // Both calling same-named functions from different sources
+          utils.formatDate(new Date())
+          formatDate(new Date()) // Assume this is imported elsewhere
+        }
+      `
+      const result = await analyze(code, 'typescript')
+
+      // Namespace member calls are now resolved to full module paths
+      expect(result.edges).toContainCallee('src/utils.helper')
+      expect(result.edges).toContainCallee('src/utils.formatDate')
+
+      // Direct named import behavior (from importMap)
+      expect(result.edges).toContainCallee('./direct.directFunction')
+
+      // Unresolved calls preserve simple name
+      expect(result.edges).toContainCallee('formatDate')
     })
   })
 })

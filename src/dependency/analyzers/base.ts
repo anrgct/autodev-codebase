@@ -306,20 +306,71 @@ export abstract class BaseAnalyzer {
   }
 
   protected addEdge(caller: string, calleeName: string, line: number): void {
-    // 使用 importMap 解析简单名称
-    const resolved = this.importMap.get(calleeName) ?? calleeName
+    let resolved: string | undefined
 
-    const key = `${caller}:${resolved}:${line}`
+    // 1. 尝试直接匹配（命名导入：import { foo } from './module'）
+    resolved = this.importMap.get(calleeName)
+
+    // 2. 尝试解析成员调用（通用处理所有 prefix.member 格式）
+    if (!resolved) {
+      const firstDot = calleeName.indexOf('.')
+      if (firstDot !== -1) {
+        const prefix = calleeName.slice(0, firstDot)
+        const member = calleeName.slice(firstDot + 1)
+
+        const modulePath = this.importMap.get(prefix)
+        if (modulePath) {
+          resolved = `${this.resolveModulePath(modulePath)}.${member}`
+        }
+      }
+    }
+
+    // 3. 回退：保持原样（交给 resolveEdges 处理）
+    const finalCallee = resolved ?? calleeName
+
+    const key = `${caller}:${finalCallee}:${line}`
     if (!this.seenEdges.has(key)) {
       this.seenEdges.add(key)
       this.edges.push({
         caller,
-        callee: resolved,
+        callee: finalCallee,
         callLine: line,
         isResolved: false, // Will be resolved by graph.ts
         confidence: 1.0,
       })
     }
+  }
+
+  /**
+   * 解析模块路径为相对于 repo 根目录的路径
+   *
+   * @example
+   *   当前文件: src/main.ts
+   *   modulePath: './utils/helper' → 'src/utils/helper'
+   *   modulePath: '../lib/core'    → 'lib/core'
+   */
+  private resolveModulePath(modulePath: string): string {
+    if (!modulePath.startsWith('.')) {
+      // 非相对路径（npm 包等），保持原样
+      return modulePath
+    }
+
+    // 获取当前文件所在目录
+    const currentDir = this.getRelativePath().split('/').slice(0, -1)
+    const parts = modulePath.split('/')
+
+    const result: string[] = [...currentDir]
+
+    for (const part of parts) {
+      if (part === '.') continue
+      if (part === '..') {
+        result.pop()
+      } else {
+        result.push(part)
+      }
+    }
+
+    return result.join('/')
   }
 
   // ═══════════════════════════════════════════════════════

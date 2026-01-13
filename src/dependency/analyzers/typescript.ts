@@ -210,6 +210,15 @@ export class TypeScriptAnalyzer extends BaseAnalyzer {
           }
         }
       }
+
+      // Namespace import: import * as ns from ...
+      else if (child.type === 'namespace_import') {
+        const alias = this.findChildByType(child, 'identifier')
+        if (alias) {
+          const aliasName = this.getNodeText(alias)
+          this.importMap.set(aliasName, modulePath)
+        }
+      }
     }
   }
 
