@@ -58,9 +58,31 @@ npm run type-check     # 类型检查
 npm run dev            # 用 demo 目录的开发模式
 npm run mcp-server     # 启动 MCP 服务器（端口 3001）
 npm run test           # vitest 单元测试
-npm run test -- --silent=false  # vitest 测试（显示详细输出）
 npm run test:e2e       # e2e 测试
 ```
+
+## 测试调试规则
+
+**铁律：调试测试时必须使用 `--silent=false`**
+
+```bash
+# ✅ 正确：第一次就加 --silent=false
+npm run test -- path/to/test.ts --silent=false
+
+# ❌ 错误：不加参数，看不到 console.log 输出
+npm run test -- path/to/test.ts
+```
+
+**为什么：**
+- vitest 默认静默模式会隐藏 `console.log` 输出
+- 调试时需要看到测试内部的日志和数据
+- 忘记加参数会浪费时间尝试其他调试方法
+
+**什么时候用：**
+- 任何需要查看测试输出的场景
+- 添加了 `console.log` 调试语句
+- 测试失败需要查看详细信息
+- 验证测试行为是否符合预期
 
 ## 关键命令
 

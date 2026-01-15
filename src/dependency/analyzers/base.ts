@@ -309,7 +309,10 @@ export abstract class BaseAnalyzer {
     let resolved: string | undefined
 
     // 1. 尝试直接匹配（命名导入：import { foo } from './module'）
-    resolved = this.importMap.get(calleeName)
+    const importPath = this.importMap.get(calleeName)
+    if (importPath) {
+      resolved = this.resolveModulePath(importPath)
+    }
 
     // 2. 尝试解析成员调用（通用处理所有 prefix.member 格式）
     if (!resolved) {
@@ -493,8 +496,99 @@ export abstract class BaseAnalyzer {
   }
 
   /**
+   * 递归提取成员表达式的完整路径
+   * 
+   * @example
+   *   api.client.fetch → "api.client.fetch"
+   *   config.settings.get → "config.settings.get"
+   *   console.log → "console.log"
+   *   (utils.helper).process → "utils.helper.process"
+   * 
+   * @param node - member_expression, identifier, parenthesized_expression, 或 call_expression 节点
+   * @returns 完整的点分隔路径
+   * 
+   * @remarks
+   * **Tree-sitter 版本**: web-tree-sitter@0.23.0, tree-sitter-typescript
+   * 
+   * **关键行为说明**:
+   * 
+   * 1. **括号表达式的 AST 行为**（重要）:
+   *    - 表达式 `(utils.helper).process()` 在 Tree-sitter TypeScript grammar 中：
+   *      - `(utils.helper)` 被解析为 `call_expression`（而非 `parenthesized_expression`）
+   *      - 这是 TypeScript grammar 的设计：任何 `(...)` 形式的表达式如果是"可调用"的，
+   *        会被识别为 `call_expression`，即使括号内没有实际的调用
+   *    - 因此我们处理 `call_expression` 类型时，提取其 `function` 字段（callee）
+   * 
+   * 2. **parenthesized_expression 分支的用途**:
+   *    - 虽然当前 Tree-sitter 版本不触发此分支，但保留它以：
+   *      a) 应对未来 Tree-sitter 版本可能的 AST 结构变化
+   *      b) 支持其他可能使用 `parenthesized_expression` 的语言
+   *      c) 处理多层括号 `((utils.helper)).process()` 的边界情况
+   * 
+   * 3. **API 使用策略**:
+   *    - 使用 `childForFieldName('object')` 而非 `children[0]`
+   *    - 原因：准确获取语义字段，避免获取到非语义节点（如括号、运算符）
+   *    - 这在处理复杂表达式（如带括号的表达式）时更安全
+   * 
+   * **已知限制**:
+   * - 不支持可选链 `api?.client?.fetch()`（需要单独处理 `chaining_expression`）
+   * - 不支持动态属性访问 `obj[key]()`（静态分析限制）
+   * - 不支持链式方法调用返回值 `getApi().client.fetch()`（需要类型推断）
+   */
+  private extractMemberPath(node: Parser.SyntaxNode): string {
+    // 基础情况：直接是 identifier
+    if (node.type === this.nodeTypes.identifierType) {
+      return this.getNodeText(node)
+    }
+    
+    // 处理 this 关键字
+    if (node.type === 'this') {
+      return 'this'
+    }
+    
+    // 处理括号表达式：跳过括号，直接处理内部表达式
+    if (node.type === 'parenthesized_expression') {
+      // 使用 namedChildren 只获取语义上有意义的节点（跳过括号等标点符号）
+      const namedChildren = node.namedChildren
+      if (namedChildren.length > 0) {
+        return this.extractMemberPath(namedChildren[0])
+      }
+      return ''
+    }
+    
+    // 处理调用表达式：提取 callee（被调用的函数表达式）
+    // 例如：(utils.helper).process() 中的 (utils.helper) 被识别为 call_expression
+    // 例如：new TextDecoder().decode() 中的 new TextDecoder() 被识别为 new_expression
+    if (node.type === 'call_expression' || node.type === 'new_expression') {
+      // call_expression 使用 'function' 字段，new_expression 使用 'constructor' 字段
+      const calleeFieldName = node.type === 'new_expression' ? 'constructor' : 'function'
+      const callee = node.childForFieldName(calleeFieldName)
+      if (callee) {
+        return this.extractMemberPath(callee)
+      }
+      return ''
+    }
+    
+    // 递归情况：member_expression
+    if (node.type === 'member_expression') {
+      // 使用 childForFieldName 获取语义字段（更安全）
+      const object = node.childForFieldName('object')
+      const property = node.childForFieldName('property')
+      
+      if (!object) return ''
+      
+      const objectPath = this.extractMemberPath(object)  // 递归提取对象路径
+      const propertyText = property ? this.getNodeText(property) : ''
+      
+      return propertyText ? `${objectPath}.${propertyText}` : objectPath
+    }
+    
+    return ''
+  }
+
+  /**
    * Extract call information from a call node
-   * Supports both global calls (setTimeout) and member calls (console.log)
+   * Supports both global calls (setTimeout) and member calls (console.log, api.client.fetch)
    */
   protected extractCallInfo(node: Parser.SyntaxNode): CallInfo | null {
     if (node.children.length === 0) return null
@@ -511,19 +605,16 @@ export abstract class BaseAnalyzer {
       }
     }
 
-    // 成员调用: console.log(), JSON.parse()
+    // 成员调用（支持嵌套）: console.log(), api.client.fetch()
     if (callee.type === 'member_expression') {
-      const obj = this.findChildByType(callee, 'identifier')
-      const prop = this.findChildByType(callee, 'property_identifier')
-
-      if (prop) {
-        const propName = this.getNodeText(prop)
-        const objName = obj ? this.getNodeText(obj) : propName
-        return {
-          name: propName,
-          fullPath: objName ? `${objName}.${propName}` : propName,
-          isGlobalCall: false,
-        }
+      const fullPath = this.extractMemberPath(callee)  // 递归提取完整路径
+      const parts = fullPath.split('.')
+      const name = parts[parts.length - 1]  // 最后一段是方法名
+      
+      return {
+        name,
+        fullPath,
+        isGlobalCall: false,
       }
     }
 

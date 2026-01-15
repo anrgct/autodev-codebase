@@ -558,20 +558,6 @@ describe('Built-in filtering', () => {
     })
 
     it('should correctly extract full path from nested member access', async () => {
-      // KNOWN LIMITATION: Nested member calls like api.client.fetch()
-      // cannot be fully resolved by the current implementation.
-      //
-      // Current behavior:
-      // - api.client.fetch() → callee: 'fetch.fetch' (incomplete extraction)
-      // - api.client.post() → callee: 'post.post' (incomplete extraction)
-      // - api.init() → callee: 'src/api.init' (single-level works correctly)
-      //
-      // The extractCallInfo() method only handles one level of member_expression.
-      // For nested expressions (member_expression within member_expression),
-      // it falls back to using the property name as both object and property.
-      //
-      // This is a known limitation that requires recursive traversal to fix.
-
       const code = `
         import * as api from './api'
         import * as config from './config'
@@ -596,28 +582,87 @@ describe('Built-in filtering', () => {
       `
       const result = await analyze(code, 'typescript')
 
-      // Nested member calls have incomplete extraction (known limitation)
-      expect(result.edges).toContainCallee('fetch.fetch')
-      expect(result.edges).toContainCallee('post.post')
-      expect(result.edges).toContainCallee('get.get')
-      expect(result.edges).toContainCallee('info.info')
+      // Nested member calls now correctly extract full paths
+      expect(result.edges).toContainCallee('src/api.client.fetch')
+      expect(result.edges).toContainCallee('src/api.client.post')
+      expect(result.edges).toContainCallee('src/config.settings.get')
+      expect(result.edges).toContainCallee('src/config.logger.info')
 
-      // Single-level namespace calls are fully resolved
+      // Single-level namespace calls are still fully resolved
       expect(result.edges).toContainCallee('src/api.init')
 
       // Regular calls work normally
       expect(result.edges).toContainCallee('setup')
     })
 
+    it('should handle edge cases for member expression', async () => {
+      const code = `
+        import * as utils from './utils'
+        
+        export function testDeepNesting() {
+          // Edge case: deep nesting (4 levels)
+          utils.a.b.c.d()
+        }
+        
+        export function testParenthesized() {
+          // Edge case: parenthesized expression
+          (utils.helper).process()
+        }
+        
+        export function testMixed() {
+          // Mixed scenario
+          utils.config.get('key')
+        }
+      `
+      const result = await analyze(code, 'typescript')
+      
+      // Deep nesting should be correctly extracted
+      expect(result.edges).toContainCallee('src/utils.a.b.c.d')
+      
+      // Parenthesized expressions should be handled correctly
+      expect(result.edges).toContainCallee('src/utils.helper.process')
+      
+      // Mixed scenario works normally
+      expect(result.edges).toContainCallee('src/utils.config.get')
+    })
+
+    it('should handle nested parentheses and complex edge cases', async () => {
+      const code = `
+        import * as utils from './utils'
+        
+        export function testNestedParentheses() {
+          // Edge case: multiple levels of parentheses
+          ((utils.helper)).process()
+        }
+      
+        export function testNestedInParens() {
+          // Edge case: nested member access inside parentheses
+          (utils.a.b).c.d()
+        }
+        `
+        const result = await analyze(code, 'typescript')
+      
+        // Multiple parentheses should be handled correctly
+        expect(result.edges).toContainCallee('src/utils.helper.process')
+      
+        // Nested access inside parentheses
+        expect(result.edges).toContainCallee('src/utils.a.b.c.d')
+      
+        // KNOWN LIMITATION: The following pattern is not yet supported:
+        // ((utils.config).get)('key') - parentheses around the entire member expression before call
+        // This is because Tree-sitter parses it differently when the entire expression is wrapped in parentheses
+        // before the function call. This could be addressed in future enhancements if needed.
+      })
+
     it('should document current behavior: direct imports get module prefix', async () => {
-      // Current behavior: Direct named imports are resolved with module path prefix
-      // This happens because importMap stores the module path and uses it during resolution
+      // Current behavior: Direct named imports are resolved with repo-relative module path
+      // This happens because importMap stores the module path and resolveModulePath() normalizes it
       //
       // Actual behavior:
       // - import { directFunction } from './direct'
-      // - directFunction() → callee: './direct.directFunction'
+      // - directFunction() → callee: 'src/direct.directFunction' (repo-relative path)
       //
-      // Note: This is a side effect of the importMap resolution strategy
+      // Note: This ensures consistent path resolution across all import types
 
       const code = `
         import * as utils from './utils'
@@ -641,8 +686,8 @@ describe('Built-in filtering', () => {
       expect(result.edges).toContainCallee('src/utils.helper')
       expect(result.edges).toContainCallee('src/utils.formatDate')
 
-      // Direct named import behavior (from importMap)
-      expect(result.edges).toContainCallee('./direct.directFunction')
+      // Direct named import behavior (resolved to repo-relative path)
+      expect(result.edges).toContainCallee('src/direct.directFunction')
 
       // Unresolved calls preserve simple name
       expect(result.edges).toContainCallee('formatDate')
