@@ -201,6 +201,16 @@ export interface CacheFingerprint {
 }
 
 /**
+ * 序列化后的 DependencyNode（Set -> Array）
+ * 用于 JSON 持久化
+ */
+export interface SerializedDependencyNode extends Omit<DependencyNode, 'dependsOn' | 'sourceCode'> {
+  /** 依赖的节点 ID 列表（Set 序列化为数组）*/
+  dependsOn: string[]
+  // sourceCode 不缓存，减少体积
+}
+
+/**
  * 单个文件的缓存条目
  */
 export interface FileCacheEntry {
@@ -216,8 +226,8 @@ export interface FileCacheEntry {
   /** 最后分析时间 (ISO 8601) */
   lastAnalyzed: string
   
-  /** 提取的节点列表 */
-  nodes: DependencyNode[]
+  /** 提取的节点列表（序列化格式）*/
+  nodes: SerializedDependencyNode[]
   
   /** 提取的依赖边列表 */
   edges: DependencyEdge[]
@@ -283,8 +293,8 @@ export const CACHE_LIMITS = {
   /** 缓存格式版本 */
   VERSION: '1.0',
   
-  /** 单个缓存文件最大大小 (10MB) */
-  MAX_CACHE_SIZE_BYTES: 10 * 1024 * 1024,
+  /** 单个缓存文件最大大小 (50MB，增加以支持大型项目) */
+  MAX_CACHE_SIZE_BYTES: 50 * 1024 * 1024,
   
   /** 每个文件最多缓存的节点数 */
   MAX_NODES_PER_FILE: 1000,
@@ -447,9 +457,9 @@ import * as filesystem from '../../utils/filesystem'
 import type {
   AnalysisCache,
   FileCacheEntry,
+  SerializedDependencyNode,
   CacheFingerprint,
-  CacheStats,
-  CACHE_LIMITS
+  CacheStats
 } from './types'
 import { CACHE_LIMITS as LIMITS } from './types'
 import type { DependencyNode, DependencyEdge } from '../models'
@@ -505,8 +515,9 @@ export class DependencyCacheManager {
   
   /**
    * 获取缓存条目（如果文件哈希匹配）
+   * 返回反序列化后的节点（Set 已恢复）
    */
-  getCacheEntry(filePath: string, fileContent: string): FileCacheEntry | undefined {
+  getCacheEntry(filePath: string, fileContent: string): { nodes: DependencyNode[], edges: DependencyEdge[] } | undefined {
     if (!this.cache) return undefined
     
     const fileHash = this.computeHash(fileContent)
@@ -523,7 +534,13 @@ export class DependencyCacheManager {
     // 更新最后访问时间
     entry.lastAnalyzed = new Date().toISOString()
     
-    return entry
+    // 反序列化：将数组转回 Set
+    const nodes = entry.nodes.map(node => this.deserializeNode(node))
+    
+    return {
+      nodes,
+      edges: entry.edges
+    }
   }
   
   /**
@@ -551,12 +568,15 @@ export class DependencyCacheManager {
       return
     }
     
+    // 序列化节点：Set -> Array，去掉 sourceCode
+    const serializedNodes = nodes.map(node => this.serializeNode(node))
+    
     const entry: FileCacheEntry = {
       fileHash,
       relativePath,
       language,
       lastAnalyzed: new Date().toISOString(),
-      nodes,
+      nodes: serializedNodes,
       edges,
       success,
       error
@@ -630,9 +650,39 @@ export class DependencyCacheManager {
     return this.cachePath
   }
   
+  /**
+   * 立即刷新缓存到磁盘（取消防抖）
+   * 在 analyze() 函数结束时调用，确保缓存持久化
+   */
+  async flush(): Promise<void> {
+    this._debouncedSave.cancel()
+    await this._performSave()
+  }
+  
   // ============================================================================
   // Private Methods
   // ============================================================================
+  
+  /**
+   * 序列化节点：Set -> Array，去掉 sourceCode
+   */
+  private serializeNode(node: DependencyNode): SerializedDependencyNode {
+    const { sourceCode, dependsOn, ...rest } = node
+    return {
+      ...rest,
+      dependsOn: Array.from(dependsOn)
+    }
+  }
+  
+  /**
+   * 反序列化节点：Array -> Set
+   */
+  private deserializeNode(node: SerializedDependencyNode): DependencyNode {
+    return {
+      ...node,
+      dependsOn: new Set(node.dependsOn)
+    }
+  }
   
   /**
    * 创建空缓存对象
@@ -675,7 +725,7 @@ export class DependencyCacheManager {
   }
   
   /**
-   * 执行实际的保存操作
+   * 执行实际的保存操作（原子写入）
    */
   private async _performSave(): Promise<void> {
     if (!this.cache) return
@@ -690,7 +740,14 @@ export class DependencyCacheManager {
         await this.cleanOldEntries()
       }
       
-      await filesystem.writeFile(this.cachePath, json)
+      // 确保目录存在
+      const dir = path.dirname(this.cachePath)
+      await filesystem.mkdir(dir)
+      
+      // 原子写入：temp file → rename
+      const tempPath = `${this.cachePath}.tmp`
+      await filesystem.writeFile(tempPath, json)
+      await filesystem.rename(tempPath, this.cachePath)
     } catch (error) {
       console.error('Failed to save cache:', error)
     }
@@ -912,8 +969,8 @@ export async function analyze(
         parseResult.content
       )
       
-      if (cached && cached.success) {
-        // 使用缓存结果
+      if (cached) {
+        // 使用缓存结果（已反序列化，Set 已恢复）
         for (const node of cached.nodes) {
           nodesMap.set(node.id, node)
         }
@@ -1007,6 +1064,11 @@ export async function analyze(
     totalNodes: nodesMap.size,
     totalRelationships: resolvedEdges.length,
     languages: Array.from(languages),
+  }
+  
+  // 刷新缓存到磁盘（确保持久化）
+  if (cacheManager) {
+    await cacheManager.flush()
   }
   
   return {
@@ -1176,7 +1238,8 @@ git commit -m "feat(cache): add cache cleanup methods"
 ## Task 5: 导出缓存 API 并更新文档
 
 **Files:**
-- Modify: `src/dependency/index.ts:1-20`
+- Modify: `src/dependency/index.ts:1-20` (导出)
+- Modify: `src/dependency/index.ts:363-386` (DependencyAnalysisService)
 - Create: `docs/dependency-cache.md`
 
 **Step 1: 导出缓存相关 API**
@@ -1193,7 +1256,52 @@ export type {
 } from './cache/types'
 ```
 
-**Step 2: 创建使用文档**
+**Step 2: 更新 DependencyAnalysisService 支持缓存**
+
+修改 `src/dependency/index.ts` 中的 `DependencyAnalysisService` 类：
+
+```typescript
+export class DependencyAnalysisService {
+  constructor(private deps: DependencyAnalyzerDeps) {}
+
+  /**
+   * 分析本地仓库
+   */
+  async analyzeLocalRepository(
+    repoPath: string,
+    options: {
+      maxFiles?: number
+      languages?: string[]
+      enableCache?: boolean      // 新增：是否启用缓存
+      cacheBaseDir?: string      // 新增：自定义缓存目录
+    } = {}
+  ): Promise<{
+    nodes: Record<string, DependencyNode>
+    relationships: DependencyEdge[]
+    summary: DependencySummary
+  }> {
+    // 传递完整的 options 包括缓存配置
+    const result = await analyze(repoPath, this.deps, options.maxFiles, {
+      enableCache: options.enableCache,
+      cacheBaseDir: options.cacheBaseDir
+    })
+
+    // 转换为 Record 格式（兼容旧 API）
+    const nodesRecord: Record<string, DependencyNode> = {}
+    for (const [id, node] of Array.from(result.nodes.entries())) {
+      nodesRecord[node.componentId ?? id] = node
+    }
+
+    return {
+      nodes: nodesRecord,
+      relationships: result.relationships,
+      summary: result.summary,
+    }
+  }
+}
+```
+
+**Step 3: 创建使用文档**
 
 创建 `docs/dependency-cache.md`:
 
@@ -1339,7 +1447,7 @@ rm -rf ~/.autodev-cache/dependency-cache-*.json
 - \`cleanOrphanedEntries(fs): Promise<number>\` - 清理孤立条目
 \`\`\`
 
-**Step 3: 提交文档**
+**Step 4: 提交文档**
 
 ```bash
 git add src/dependency/index.ts docs/dependency-cache.md
