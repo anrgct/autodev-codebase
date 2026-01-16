@@ -71,6 +71,7 @@ A vector embedding-based code semantic search tool with MCP server and multi-mod
 - **📊 Real-time Watching**: Automatic index updates
 - **⚡ Batch Processing**: Efficient parallel processing
 - **📝 Code Outline Extraction**: Generate structured code outlines with AI summaries
+- **💨 Dependency Analysis Cache**: Intelligent caching for 10-50x faster re-analysis
 
 ## 📦 Installation
 

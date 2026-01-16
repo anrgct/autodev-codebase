@@ -199,4 +199,8 @@ export interface AnalysisOptions {
   maxDepth?: number
   followSymlinks?: boolean
   fileFilter?: FileFilter
+  /** Enable dependency analysis cache (default: true) */
+  enableCache?: boolean
+  /** Custom cache base directory (default: ~/.autodev-cache/dependency-cache) */
+  cacheBaseDir?: string
 }
