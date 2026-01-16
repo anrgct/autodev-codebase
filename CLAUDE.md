@@ -138,6 +138,19 @@ codebase config --set key=value --global        # 设置全局配置
 - **项目配置**：`./autodev-config.json`
 - **全局配置**：`~/.autodev-cache/autodev-config.json`
 
+## 文档命名规则
+
+**说明文档位置**：`docs/` 目录
+
+**命名规则**：`YYMMDD-<主题>.md`
+
+- **YYMMDD**：6位日期前缀（YY=年，MM=月，DD=日）
+- **主题**：描述性的英文名称，使用连字符分隔多个单词
+
+**示例**：
+- `260116-mcp-integration.md` - 2026年1月16日创建的MCP集成文档
+- `260120-embedder-guide.md` - 2026年1月20日创建的嵌入器指南
+
 
 <skills_system priority="1">
 

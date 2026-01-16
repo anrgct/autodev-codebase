@@ -2,8 +2,6 @@
   "name": "@autodev/codebase",
   "version": "1.0.0",
   "type": "module",
-  "version": "0.0.8",
-  "type": "module",
   "bin": {
     "codebase": "dist/cli.js"
   },
