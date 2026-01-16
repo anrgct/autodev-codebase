@@ -12,11 +12,22 @@ import type {
   DependencyResult,
   DependencySummary,
   FileParseResult,
+  AnalysisOptions,
 } from './models'
 import { parseDirectory, parseFile, loadLanguageParser } from './parse'
 import { buildGraph, moduleDistance, detectCycles, topologicalSort, getLeafNodes } from './graph'
+import { DependencyCacheManager } from './cache-manager'
 
-export type { DependencyNode, DependencyEdge, DependencyResult, DependencySummary }
+export type { DependencyNode, DependencyEdge, DependencyResult, DependencySummary, AnalysisOptions }
+export type { 
+  CacheFingerprint, 
+  SerializedDependencyNode, 
+  FileCacheEntry, 
+  AnalysisCache, 
+  CacheStats 
+} from './cache-types'
+export { CACHE_LIMITS } from './cache-types'
+export { DependencyCacheManager } from './cache-manager'
 
 export { parseDirectory } from './parse'
 export { buildGraph, moduleDistance, detectCycles, topologicalSort, getLeafNodes } from './graph'
@@ -60,13 +71,14 @@ export interface DependencyAnalyzerDeps {
  * @param targetPath 文件或目录路径
  * @param deps 依赖注入
  * @param maxFiles 最大分析文件数
+ * @param options 分析选项（包括缓存配置）
  * @returns 依赖分析结果
  *
  * @example
  * ```typescript
  * const deps = { fileSystem, pathUtils }
- * // 分析目录
- * const dirResult = await analyze('/path/to/project', deps)
+ * // 分析目录（启用缓存）
+ * const dirResult = await analyze('/path/to/project', deps, 100, { enableCache: true })
  * // 分析单个文件
  * const fileResult = await analyze('/path/to/file.ts', deps)
  * console.log(`发现 ${fileResult.summary.totalNodes} 个组件`)
@@ -75,7 +87,8 @@ export interface DependencyAnalyzerDeps {
 export async function analyze(
   targetPath: string,
   deps: DependencyAnalyzerDeps,
-  maxFiles: number = 100
+  maxFiles: number = 100,
+  options?: AnalysisOptions
 ): Promise<DependencyResult> {
   const { fileSystem, pathUtils } = deps
 
@@ -83,15 +96,30 @@ export async function analyze(
   const stat = await fileSystem.stat(targetPath)
   const isTargetFile = stat?.isFile ?? false
 
+  // Initialize cache if enabled (default: enabled for better performance)
+  const enableCache = options?.enableCache ?? true
+  let cacheManager: DependencyCacheManager | undefined
+
+  // Determine repository root
+  let repoPath: string
+  if (isTargetFile) {
+    repoPath = pathUtils.dirname(targetPath)
+  } else {
+    repoPath = targetPath
+  }
+
+  if (enableCache) {
+    cacheManager = new DependencyCacheManager(repoPath, fileSystem, options?.cacheBaseDir)
+    await cacheManager.initialize()
+  }
+
   // Layer 1: PARSE
   let parseResults: FileParseResult[]
-  let repoPath: string
 
   if (isTargetFile) {
     // 单文件模式
     const fileResult = await parseFile(targetPath, fileSystem, pathUtils)
     parseResults = [fileResult]
-    repoPath = pathUtils.dirname(targetPath)
   } else {
     // 目录模式
     parseResults = await parseDirectory(
@@ -100,7 +128,6 @@ export async function analyze(
       pathUtils,
       { includeNodeModules: false, includeTests: false, maxDepth: 10, followSymlinks: true } as any
     )
-    repoPath = targetPath
   }
 
   // 统一的后处理流程
@@ -120,6 +147,21 @@ export async function analyze(
     if (!parseResult.success && parseResult.error) {
       errors.push(`${parseResult.filePath}: ${parseResult.error}`)
       continue
+    }
+
+    // Check cache first
+    if (cacheManager) {
+      const cached = cacheManager.getCacheEntry(parseResult.filePath, parseResult.content)
+      if (cached) {
+        // Cache hit! Use cached results
+        for (const node of cached.nodes) {
+          nodesMap.set(node.id, node)
+        }
+        for (const edge of cached.edges) {
+          edges.push(edge)
+        }
+        continue
+      }
     }
 
     // 获取对应语言的分析器
@@ -172,9 +214,25 @@ export async function analyze(
       for (const edge of analyzeOutput.edges) {
         edges.push(edge)
       }
+
+      // Store in cache if enabled
+      if (cacheManager) {
+        await cacheManager.setCacheEntry(
+          parseResult.filePath,
+          parseResult.content,
+          analyzeOutput.nodes,
+          analyzeOutput.edges,
+          parseResult.language
+        )
+      }
     } catch (error) {
       // 忽略解析失败的文件
     }
+  }
+
+  // Flush cache to disk
+  if (cacheManager) {
+    await cacheManager.flush()
   }
 
   // Layer 2+3: BUILD + ANALYZE
@@ -365,13 +423,18 @@ export class DependencyAnalysisService {
     options: {
       maxFiles?: number
       languages?: string[] // 未来扩展：按语言过滤
+      enableCache?: boolean
+      cacheBaseDir?: string
     } = {}
   ): Promise<{
     nodes: Record<string, DependencyNode>
     relationships: DependencyEdge[]
     summary: DependencySummary
   }> {
-    const result = await analyze(repoPath, this.deps, options.maxFiles)
+    const result = await analyze(repoPath, this.deps, options.maxFiles, {
+      enableCache: options.enableCache,
+      cacheBaseDir: options.cacheBaseDir,
+    })
 
     // 转换为 Record 格式（兼容旧 API）
     const nodesRecord: Record<string, DependencyNode> = {}
