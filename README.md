@@ -10,7 +10,7 @@
 
 ```sh
 ╭─ ~/workspace/autodev-codebase 
-╰─❯ codebase --demo --search="user manage"
+╰─❯ codebase search "user manage" --demo
 Found 3 results in 2 files for: "user manage"
 
 ==================================================
@@ -90,7 +90,7 @@ docker run -d -p 6333:6333 -p 6334:6334 --name qdrant qdrant/qdrant
 ### 3. Install
 ```bash
 npm install -g @autodev/codebase
-codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase config --set embedderProvider=ollama,embedderModelId=nomic-embed-text
 ```
 
 ## 🛠️ Quick Start
@@ -100,11 +100,11 @@ codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
 # Creates a demo directory in current working directory for testing
 
 # Index & search
-codebase --demo --index
-codebase --demo --search="user greet"
+codebase index --demo
+codebase search "user greet" --demo
 
 # MCP server
-codebase --demo --serve
+codebase index --serve --demo
 ```
 
 ## 📋 Commands
@@ -114,7 +114,7 @@ codebase --demo --serve
 Generate intelligent code summaries with one command:
 
 ```bash
-codebase --outline "src/**/*.ts" --summarize
+codebase outline "src/**/*.ts" --summarize
 ```
 
 **Output Example:**
@@ -142,50 +142,50 @@ codebase --outline "src/**/*.ts" --summarize
 **Quick Setup:**
 ```bash
 # Configure Ollama (recommended for free, local AI)
-codebase --set-config summarizerProvider=ollama,summarizerOllamaModelId=qwen3-vl:4b-instruct
+codebase config --set summarizerProvider=ollama,summarizerOllamaModelId=qwen3-vl:4b-instruct
 
 # Or use DeepSeek (cost-effective API)
-codebase --set-config summarizerProvider=openai-compatible,summarizerOpenAiCompatibleBaseUrl=https://api.deepseek.com/v1,summarizerOpenAiCompatibleModelId=deepseek-chat,summarizerOpenAiCompatibleApiKey=sk-your-key
+codebase config --set summarizerProvider=openai-compatible,summarizerOpenAiCompatibleBaseUrl=https://api.deepseek.com/v1,summarizerOpenAiCompatibleModelId=deepseek-chat,summarizerOpenAiCompatibleApiKey=sk-your-key
 ```
 
 
 ### 🔍 Indexing & Search
 ```bash
 # Index the codebase
-codebase --index --path=/my/project --force
+codebase index --path=/my/project --force
 
 # Search with filters
-codebase --search="error handling" --path-filters="src/**/*.ts"
+codebase search "error handling" --path-filters="src/**/*.ts"
 
 # Search with custom limit and minimum score
-codebase --search="authentication" --limit=20 --min-score=0.7
-codebase --search="API" -l 30 -S 0.5
+codebase search "authentication" --limit=20 --min-score=0.7
+codebase search "API" -l 30 -S 0.5
 
 # Search in JSON format
-codebase --search="authentication" --json
+codebase search "authentication" --json
 
 # Clear index data
-codebase --clear --path=/my/project
+codebase index --clear-cache --path=/my/project
 ```
 
 ### 🌐 MCP Server
 ```bash
 # HTTP mode (recommended)
-codebase --serve --port=3001 --path=/my/project
+codebase index --serve --port=3001 --path=/my/project
 
 # Stdio adapter
-codebase --stdio-adapter --server-url=http://localhost:3001/mcp
+codebase stdio --server-url=http://localhost:3001/mcp
 ```
 
 ### ⚙️ Configuration
 ```bash
 # View config
-codebase --get-config
-codebase --get-config embedderProvider --json
+codebase config --get
+codebase config --get embedderProvider --json
 
 # Set config
-codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
-codebase --set-config --global qdrantUrl=http://localhost:6333
+codebase config --set embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase config --set --global qdrantUrl=http://localhost:6333
 ```
 
 ### 🚀 Advanced Features
@@ -195,13 +195,13 @@ Enable LLM reranking to dramatically improve search relevance:
 
 ```bash
 # Enable reranking with Ollama (recommended)
-codebase --set-config rerankerEnabled=true,rerankerProvider=ollama,rerankerOllamaModelId=qwen3-vl:4b-instruct
+codebase config --set rerankerEnabled=true,rerankerProvider=ollama,rerankerOllamaModelId=qwen3-vl:4b-instruct
 
 # Or use OpenAI-compatible providers
-codebase --set-config rerankerEnabled=true,rerankerProvider=openai-compatible,rerankerOpenAiCompatibleModelId=deepseek-chat
+codebase config --set rerankerEnabled=true,rerankerProvider=openai-compatible,rerankerOpenAiCompatibleModelId=deepseek-chat
 
 # Search with automatic reranking
-codebase --search="user authentication"  # Results are automatically reranked by LLM
+codebase search "user authentication"  # Results are automatically reranked by LLM
 ```
 
 **Benefits:**
@@ -213,22 +213,22 @@ codebase --search="user authentication"  # Results are automatically reranked by
 #### Path Filtering & Export
 ```bash
 # Path filtering with brace expansion and exclusions
-codebase --search="API" --path-filters="src/**/*.ts,lib/**/*.js"
-codebase --search="utils" --path-filters="{src,test}/**/*.ts"
+codebase search "API" --path-filters="src/**/*.ts,lib/**/*.js"
+codebase search "utils" --path-filters="{src,test}/**/*.ts"
 
 # Export results in JSON format for scripts
-codebase --search="auth" --json
+codebase search "auth" --json
 ```
 
 #### Path Filtering & Export
 
 ```bash
 # Path filtering with brace expansion and exclusions
-codebase --search="API" --path-filters="src/**/*.ts,lib/**/*.js"
-codebase --search="utils" --path-filters="{src,test}/**/*.ts"
+codebase search "API" --path-filters="src/**/*.ts,lib/**/*.js"
+codebase search "utils" --path-filters="{src,test}/**/*.ts"
 
 # Export results in JSON format for scripts
-codebase --search="auth" --json
+codebase search "auth" --json
 ```
 
 ## ⚙️ Configuration
@@ -239,7 +239,7 @@ codebase --search="auth" --json
 3. **Global Config** - `~/.autodev-cache/autodev-config.json`
 4. **Built-in Defaults** - Fallback values
 
-**Note:** CLI arguments provide runtime override for paths, logging, and operational behavior. For persistent configuration (embedderProvider, API keys, search parameters), use `--set-config` to save to config files.
+**Note:** CLI arguments provide runtime override for paths, logging, and operational behavior. For persistent configuration (embedderProvider, API keys, search parameters), use `config --set` to save to config files.
 
 ### Common Config Examples
 
@@ -284,13 +284,16 @@ codebase --search="auth" --json
 | **Summarizer** | `summarizerProvider`, `summarizerLanguage`, `summarizerBatchSize` | AI summary generation |
 
 **Key CLI Arguments:**
-- `--serve` / `--index` / `--search` - Core operations
-- `--outline <pattern>` - Extract code outlines (supports glob patterns)
+- `index` - Index the codebase
+- `search <query>` - Search the codebase (required positional argument)
+- `outline <pattern>` - Extract code outlines (supports glob patterns)
+- `stdio` - Start stdio adapter for MCP
+- `config` - Manage configuration (use with --get or --set)
+- `--serve` - Start MCP HTTP server (use with `index` command)
 - `--summarize` - Generate AI summaries for code outlines
 - `--dry-run` - Preview operations before execution
 - `--title` - Show only file-level summaries
 - `--clear-summarize-cache` - Clear all summary caches
-- `--get-config` / `--set-config` - Configuration management  
 - `--path`, `--demo`, `--force` - Common options
 - `--limit` / `-l <number>` - Maximum number of search results (default: from config, max 50)
 - `--min-score` / `-S <number>` - Minimum similarity score for search results (0-1, default: from config)
@@ -299,19 +302,19 @@ codebase --search="auth" --json
 **Configuration Commands:**
 ```bash
 # View config
-codebase --get-config
-codebase --get-config --json
+codebase config --get
+codebase config --get --json
 
 # Set config (saves to file)
-codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
-codebase --set-config --global embedderProvider=openai,embedderOpenAiApiKey=sk-xxx
+codebase config --set embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase config --set --global embedderProvider=openai,embedderOpenAiApiKey=sk-xxx
 
 # Use custom config file
-codebase --config=/path/to/config.json --get-config
-codebase --config=/path/to/config.json --set-config embedderProvider=ollama
+codebase --config=/path/to/config.json config --get
+codebase --config=/path/to/config.json config --set embedderProvider=ollama
 
 # Runtime override (paths, logging, etc.)
-codebase --index --path=/my/project --log-level=info --force
+codebase index --path=/my/project --log-level=info --force
 ```
 
 For complete configuration reference, see [CONFIG.md](CONFIG.md).
@@ -320,7 +323,7 @@ For complete configuration reference, see [CONFIG.md](CONFIG.md).
 
 ### HTTP Streamable Mode (Recommended)
 ```bash
-codebase --serve --port=3001
+codebase index --serve --port=3001
 ```
 
 **IDE Config:**
@@ -337,10 +340,10 @@ codebase --serve --port=3001
 ### Stdio Adapter
 ```bash
 # First start the MCP server in one terminal
-codebase --serve --port=3001
+codebase index --serve --port=3001
 
 # Then connect via stdio adapter in another terminal (for IDEs that require stdio)
-codebase --stdio-adapter --server-url=http://localhost:3001/mcp
+codebase stdio --server-url=http://localhost:3001/mcp
 ```
 
 **IDE Config:**
@@ -349,7 +352,7 @@ codebase --stdio-adapter --server-url=http://localhost:3001/mcp
   "mcpServers": {
     "codebase": {
       "command": "codebase",
-      "args": ["--stdio-adapter", "--server-url=http://localhost:3001/mcp"]
+      "args": ["stdio", "--server-url=http://localhost:3001/mcp"]
     }
   }
 }

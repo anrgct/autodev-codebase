@@ -28,23 +28,23 @@ The tool uses a **layered configuration system** with the following priority ord
 
 ```bash
 # View complete configuration hierarchy
-codebase --get-config
+codebase config --get
 
 # View specific configuration items
-codebase --get-config embedderProvider qdrantUrl
+codebase config --get embedderProvider qdrantUrl
 
 # JSON output for scripting
-codebase --get-config --json
+codebase config --get --json
 
 # Set project configuration
-codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase config --set embedderProvider=ollama,embedderModelId=nomic-embed-text
 # Note: also adds `autodev-config.json` to Git global ignore (core.excludesfile) for all repos
 
 # Set global configuration
-codebase --set-config --global qdrantUrl=http://localhost:6333
+codebase config --set --global qdrantUrl=http://localhost:6333
 
 # Use custom config file path
-codebase --config=/path/to/config.json --get-config
+codebase --config=/path/to/config.json config --get
 ```
 
 ## Configuration Sources
@@ -56,19 +56,19 @@ CLI arguments provide runtime override for specific operations:
 **Path and Storage Options:**
 ```bash
 # Custom configuration file
-codebase --config=/path/to/custom-config.json --index
+codebase --config=/path/to/custom-config.json index
 
 # Custom storage and cache paths
-codebase --storage=/custom/storage --cache=/custom/cache --index
+codebase --storage=/custom/storage --cache=/custom/cache index
 
 # Working directory
-codebase --path=/my/project --index
+codebase --path=/my/project index
 
 # Debug logging
-codebase --log-level=debug --index
+codebase --log-level=debug index
 
 # Force reindex
-codebase --force --index
+codebase --force index
 ```
 
 **Available CLI Arguments:**
@@ -79,7 +79,7 @@ codebase --force --index
 - `--path, -p <path>` - Working directory path
 - `--force` - Force reindex all files, ignoring cache
 - `--demo` - Create demo files in workspace for testing
-- `--outline <pattern>` - Extract code outline from file(s) using glob patterns
+- `outline <pattern>` - Extract code outline from file(s) using glob patterns
 - `--summarize` - Generate AI summaries for code outlines
 - `--title` - Show only file-level summary (no function details)
 - `--clear-summarize-cache` - Clear all summary caches for current project
@@ -238,15 +238,15 @@ You can override search parameters at runtime using CLI arguments:
 
 ```bash
 # Override max results (limited to maximum of 50)
-codebase --search="authentication" --limit=20
-codebase --search="API" -l 30
+codebase search "authentication" --limit=20
+codebase search "API" -l 30
 
 # Override minimum score (0.0-1.0)
-codebase --search="user auth" --min-score=0.7
-codebase --search="database" -S 0.5
+codebase search "user auth" --min-score=0.7
+codebase search "database" -S 0.5
 
 # Combine both
-codebase --search="error handling" --limit=10 --min-score=0.8
+codebase search "error handling" --limit=10 --min-score=0.8
 ```
 
 **Note:** CLI arguments `--limit` and `--min-score` provide temporary override for individual searches. For persistent settings, use `vectorSearchMaxResults` and `vectorSearchMinScore` in configuration files.
@@ -305,7 +305,7 @@ Generate AI-powered summaries for code blocks with intelligent caching and batch
 
 ```bash
 # Generate intelligent code outline with AI summaries
-codebase --outline "src/**/*.ts" --summarize
+codebase outline "src/**/*.ts" --summarize
 ```
 
 **Output Example:**
@@ -327,10 +327,10 @@ codebase --outline "src/**/*.ts" --summarize
 **Setup (One-time):**
 ```bash
 # Option 1: Ollama (free, local AI)
-codebase --set-config summarizerProvider=ollama,summarizerOllamaModelId=qwen3-vl:4b-instruct
+codebase config --set summarizerProvider=ollama,summarizerOllamaModelId=qwen3-vl:4b-instruct
 
 # Option 2: DeepSeek (cost-effective API)
-codebase --set-config summarizerProvider=openai-compatible,summarizerOpenAiCompatibleBaseUrl=https://api.deepseek.com/v1,summarizerOpenAiCompatibleModelId=deepseek-chat,summarizerOpenAiCompatibleApiKey=sk-your-key
+codebase config --set summarizerProvider=openai-compatible,summarizerOpenAiCompatibleBaseUrl=https://api.deepseek.com/v1,summarizerOpenAiCompatibleModelId=deepseek-chat,summarizerOpenAiCompatibleApiKey=sk-your-key
 ```
 
 **Key Benefits:**
@@ -441,14 +441,14 @@ Cache is automatically invalidated when:
 
 ```bash
 # View cache statistics (automatic)
-codebase --outline src/index.ts --summarize
+codebase outline src/index.ts --summarize
 # Output: Cache hit rate: 85% (17/20 blocks cached)
 
 # Clear all caches for current project
 codebase --clear-summarize-cache
 
 # Clear and regenerate
-codebase --outline src/index.ts --summarize --clear-summarize-cache
+codebase outline src/index.ts --summarize --clear-summarize-cache
 
 # Clear caches for specific project
 codebase --clear-summarize-cache --path=/my/project
@@ -614,17 +614,17 @@ ollama serve
 ollama pull nomic-embed-text
 
 # Configure
-codebase --set-config embedderProvider=ollama,embedderModelId=nomic-embed-text
-codebase --set-config qdrantUrl=http://localhost:6333
+codebase config --set embedderProvider=ollama,embedderModelId=nomic-embed-text
+codebase config --set qdrantUrl=http://localhost:6333
 
 # Start indexing
-codebase --index --log-level=debug --force
+codebase index --log-level=debug --force
 ```
 
 #### OpenAI Setup
 ```bash
 export OPENAI_API_KEY="sk-your-key"
-codebase --set-config embedderProvider=openai,embedderModelId=text-embedding-3-small
+codebase config --set embedderProvider=openai,embedderModelId=text-embedding-3-small
 ```
 
 ## Validation Rules
@@ -651,15 +651,15 @@ The tool validates configuration automatically. Common validation rules:
 
 ```bash
 # Invalid score range
-codebase --set-config vectorSearchMinScore=1.5
+codebase config --set vectorSearchMinScore=1.5
 # Error: Search minimum score must be between 0 and 1
 
 # Missing required field
-codebase --set-config embedderModelId=nomic-embed-text
+codebase config --set embedderModelId=nomic-embed-text
 # Error: embedderProvider is required
 
 # Invalid batch size
-codebase --set-config embedderOllamaBatchSize=-5
+codebase config --set embedderOllamaBatchSize=-5
 # Error: Embedder Ollama batch size must be positive
 ```
 
@@ -688,7 +688,7 @@ export OPENAI_API_KEY="sk-your-key"
 export QDRANT_API_KEY="your-qdrant-key"
 
 # Configure tool
-codebase --set-config embedderProvider=openai,embedderModelId=text-embedding-3-small
+codebase config --set embedderProvider=openai,embedderModelId=text-embedding-3-small
 
 # The tool will automatically use the environment variables
 ```

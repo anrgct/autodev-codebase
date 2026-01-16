@@ -1,21 +1,23 @@
-# Migration Guide: v1.x → v2.0.0
+# Migration Guide: v0.x → v1.0.0
 
 ## 概述
 
-v2.0.0 引入了新的子命令结构（类似 git/npm 风格），替代了旧的 `--` 选项风格。
+v1.0.0 引入了新的子命令结构（类似 git/npm 风格），替代了旧的 `--` 选项风格。
+
+**⚠️ 重要提示：v1.0.0 不支持旧命令格式，这是一个破坏性更新。**
 
 ## 核心变更
 
 ### CLI 命令结构
 
-**旧版 (v1.x)**：使用 `--` 选项作为命令
+**旧版 (v0.x)**：使用 `--` 选项作为命令
 ```bash
 codebase --search="query"
 codebase --index
 codebase --serve
 ```
 
-**新版 (v2.0.0)**：使用子命令模式
+**新版 (v1.0.0)**：使用子命令模式
 ```bash
 codebase search "query"
 codebase index
@@ -24,7 +26,7 @@ codebase index --serve
 
 ## 完整命令映射
 
-| 旧命令 (v1.x) | 新命令 (v2.0.0) | 说明 |
+| 旧命令 (v0.x) | 新命令 (v1.0.0) | 说明 |
 |---------------|-----------------|------|
 | `--search="query"` | `search "query"` | 语义搜索 |
 | `--index` | `index` | 索引代码库 |
@@ -34,8 +36,8 @@ codebase index --serve
 | `--outline "pattern"` | `outline "pattern"` | 代码大纲 |
 | `--clear-summarize-cache` | `outline --clear-cache` | 清除摘要缓存 |
 | `--stdio-adapter` | `stdio` | stdio 适配器 |
-| `--get-config` | `config get` | 查看配置 |
-| `--set-config` | `config set` | 设置配置 |
+| `--get-config` | `config --get` | 查看配置 |
+| `--set-config` | `config --set` | 设置配置 |
 
 ## 详细迁移示例
 
@@ -121,34 +123,27 @@ codebase --set-config embedderProvider=ollama
 codebase --set-config --global key=value
 
 # 新版
-codebase config get
-codebase config get embedderProvider
-codebase config set embedderProvider=ollama
-codebase config set --global key=value
+codebase config --get
+codebase config --get embedderProvider
+codebase config --set embedderProvider=ollama
+codebase config --set --global key=value
 ```
 
-## 向后兼容性
+## 破坏性变更
 
-### v2.0.0 - v2.x
+### 不支持旧命令
 
-- ✅ 旧命令仍可使用
-- ⚠️ 显示弃用警告
-- 建议立即迁移到新语法
-
-### v3.0.0+
-
-- ❌ 旧命令将被移除
-- 必须使用新的子命令语法
-
-## 弃用警告示例
-
-运行旧命令时会看到：
+v1.0.0 **完全移除**了旧的命令格式支持。运行旧命令会直接报错：
 
 ```bash
 $ codebase --search="user auth"
-⚠️  Warning: '--search="user auth"' is deprecated. Use 'codebase search "user auth"' instead.
-   This syntax will be removed in v3.0.0.
+error: unknown option '--search="user auth"'
+```
 
+**必须使用新语法**：
+
+```bash
+$ codebase search "user auth"
 Found 5 results in 3 files for: "user auth"
 ...
 ```
@@ -220,6 +215,8 @@ codebase search "TODO" --json > results.json
 1. ✅ 查看上述命令映射表
 2. ✅ 更新脚本和 CI/CD 配置
 3. ✅ 测试新命令是否正常工作
-4. ✅ 在 v3.0.0 之前完成迁移
+4. ✅ 升级到 v1.0.0
 
 **关键原则**：大部分情况下，只需将 `--command` 改为 `command` 即可！
+
+**注意**：v1.0.0 不支持旧命令，请在升级前完成所有脚本和配置的更新。
