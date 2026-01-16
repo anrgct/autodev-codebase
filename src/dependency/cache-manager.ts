@@ -109,11 +109,7 @@ export class DependencyCacheManager {
     fileContent: string
   ): { nodes: DependencyNode[]; edges: DependencyEdge[] } | null {
     // Check configuration fingerprint
-    const currentFingerprint = this.createFingerprint()
-    if (
-      this.cache.fingerprint.version !== currentFingerprint.version ||
-      this.cache.fingerprint.parserVersion !== currentFingerprint.parserVersion
-    ) {
+    if (!this.isFingerprintValid()) {
       return null
     }
 
@@ -203,36 +199,21 @@ export class DependencyCacheManager {
    */
   getStats(): CacheStats {
     const totalFiles = Object.keys(this.cache.files).length
-    const cachedFiles = totalFiles
-    const invalidFiles = 0
-    const hitRate = totalFiles > 0 ? cachedFiles / totalFiles : 0
-    const invalidReasons = {
-      fileChanged: 0,
-      configChanged: 0,
-      notCached: 0,
-    }
-
-    // Calculate actual stats by checking fingerprint
-    const currentFingerprint = this.createFingerprint()
-    const totalFiles_ = Object.keys(this.cache.files).length
-    const cachedFiles_ = Object.keys(this.cache.files).filter(relativePath => {
+    const cachedFiles = Object.keys(this.cache.files).filter(relativePath => {
       const entry = this.cache.files[relativePath]
-      return (
-        this.cache.fingerprint.version === currentFingerprint.version &&
-        this.cache.fingerprint.parserVersion === currentFingerprint.parserVersion
-      )
+      return this.isFingerprintValid()
     }).length
 
-    const invalidFiles_ = totalFiles_ - cachedFiles_
-    const hitRate_ = totalFiles_ > 0 ? cachedFiles_ / totalFiles_ : 1.0
+    const invalidFiles = totalFiles - cachedFiles
+    const hitRate = totalFiles > 0 ? cachedFiles / totalFiles : 1.0
 
     return {
-      totalFiles: totalFiles_,
-      cachedFiles: cachedFiles_,
-      invalidFiles: invalidFiles_,
-      hitRate: hitRate_,
+      totalFiles,
+      cachedFiles,
+      invalidFiles,
+      hitRate,
       invalidReasons: {
-        fileChanged: invalidFiles_,
+        fileChanged: invalidFiles,
         configChanged: 0,
         notCached: 0,
       },
@@ -299,11 +280,22 @@ export class DependencyCacheManager {
     // Use web-tree-sitter version from package.json
     // Note: This should match the actual parser version being used
     const TREE_SITTER_VERSION = '0.23.0'
-    
+
     return {
       version: CACHE_LIMITS.VERSION,
       parserVersion: TREE_SITTER_VERSION,
     }
+  }
+
+  /**
+   * Check if current fingerprint matches cached fingerprint
+   */
+  private isFingerprintValid(): boolean {
+    const current = this.createFingerprint()
+    return (
+      this.cache.fingerprint.version === current.version &&
+      this.cache.fingerprint.parserVersion === current.parserVersion
+    )
   }
 
   /**
