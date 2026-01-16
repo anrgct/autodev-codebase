@@ -2,10 +2,10 @@
  * CLI Commands E2E Tests
  *
  * 测试CLI命令的核心功能：
- * 1. --clear --demo 清理 demo 集合成功
- * 2. --clear --demo 后 --search --demo 返回无结果或提示需要索引
- * 3. --clear --demo → --index --demo → --search="greet" --demo 完整流程
- * 4. 重复执行 --clear --demo 幂等性
+ * 1. index --clear-cache --demo 清理 demo 集合成功
+ * 2. index --clear-cache --demo 后 search --demo 返回无结果或提示需要索引
+ * 3. index --clear-cache --demo → index --demo → search "greet" --demo 完整流程
+ * 4. 重复执行 index --clear-cache --demo 幂等性
  * 5. MCP服务器功能测试（搜索、参数验证、边界情况）
  *
  * 技术要点：
@@ -188,7 +188,7 @@ class MCPStdioTestClient {
 
     this.adapterProcess = spawn(
       'npx',
-      ['tsx', cliPath, '--stdio-adapter', `--server-url=${this.serverUrl}`, `--timeout=${this.timeout}`],
+      ['tsx', cliPath, 'stdio', `--server-url=${this.serverUrl}`, `--timeout=${this.timeout}`],
       {
         cwd: process.cwd(),
         stdio: 'pipe',
@@ -424,9 +424,9 @@ describe('CLI Commands E2E Tests', () => {
     vi.restoreAllMocks()
   }, 30000)
 
-  describe('--clear command', () => {
-    it('should clear demo collection successfully with --clear --demo', async () => {
-      const result = await executeCLICommand(['--clear', '--demo', '--log-level=info'])
+  describe('index --clear-cache command', () => {
+    it('should clear demo collection successfully with index --clear-cache --demo', async () => {
+      const result = await executeCLICommand(['index', '--clear-cache', '--demo', '--log-level=info'])
 
       expect(result.exitCode).toBe(0)
 
@@ -435,9 +435,9 @@ describe('CLI Commands E2E Tests', () => {
       expect(result.stdout).toContain('Index data cleared successfully')
     }, 60000)
 
-    it('should be idempotent when running --clear --demo multiple times', async () => {
+    it('should be idempotent when running index --clear-cache --demo multiple times', async () => {
       // 第一次清理
-      const result1 = await executeCLICommand(['--clear', '--demo', '--log-level=info'])
+      const result1 = await executeCLICommand(['index', '--clear-cache', '--demo', '--log-level=info'])
       expect(result1.exitCode).toBe(0)
       expect(result1.stdout).toContain('Index data cleared successfully')
 
@@ -445,20 +445,20 @@ describe('CLI Commands E2E Tests', () => {
       await new Promise(resolve => setTimeout(resolve, 1000))
 
       // 第二次清理应该也成功
-      const result2 = await executeCLICommand(['--clear', '--demo', '--log-level=info'])
+      const result2 = await executeCLICommand(['index', '--clear-cache', '--demo', '--log-level=info'])
       expect(result2.exitCode).toBe(0)
       expect(result2.stdout).toContain('Index data cleared successfully')
     }, 90000)
 
     it('should return no results or prompt for indexing when searching after clear', async () => {
       // 先清理数据
-      await executeCLICommand(['--clear', '--demo', '--log-level=info'])
+      await executeCLICommand(['index', '--clear-cache', '--demo', '--log-level=info'])
 
       // 等待清理完成
       await new Promise(resolve => setTimeout(resolve, 2000))
 
       // 然后搜索，应该能够执行搜索（可能自动触发索引重建）
-      const searchResult = await executeCLICommand(['--search=greet', '--demo', '--log-level=error'])
+      const searchResult = await executeCLICommand(['search', 'greet', '--demo', '--log-level=error'])
 
       // 搜索命令应该成功执行（退出码为0）
       expect(searchResult.exitCode).toBe(0)
@@ -476,10 +476,10 @@ describe('CLI Commands E2E Tests', () => {
   })
 
   describe('Complete workflow test', () => {
-    it('should handle complete workflow: --clear --demo → --index --demo → --search="greet" --demo', async () => {
+    it('should handle complete workflow: index --clear-cache --demo → index --demo → search "greet" --demo', async () => {
       // 步骤1: 清理数据
       console.log('Step 1: Clearing index data...')
-      const clearResult = await executeCLICommand(['--clear', '--demo', '--log-level=info'])
+      const clearResult = await executeCLICommand(['index', '--clear-cache', '--demo', '--log-level=info'])
       expect(clearResult.exitCode).toBe(0)
       expect(clearResult.stdout).toContain('Index data cleared successfully')
 
@@ -488,7 +488,7 @@ describe('CLI Commands E2E Tests', () => {
 
       // 步骤2: 建立索引
       console.log('Step 2: Building index...')
-      const indexResult = await executeCLICommand(['--index', '--demo', '--log-level=error'])
+      const indexResult = await executeCLICommand(['index', '--demo', '--log-level=error'])
       expect(indexResult.exitCode).toBe(0)
 
       // 等待索引完成
@@ -496,7 +496,7 @@ describe('CLI Commands E2E Tests', () => {
 
       // 步骤3: 搜索 "greet"
       console.log('Step 3: Searching for "greet"...')
-      const searchResult = await executeCLICommand(['--search=greet', '--demo', '--log-level=error'])
+      const searchResult = await executeCLICommand(['search', 'greet', '--demo', '--log-level=error'])
       expect(searchResult.exitCode).toBe(0)
 
       // 验证搜索结果
@@ -510,10 +510,10 @@ describe('CLI Commands E2E Tests', () => {
   })
 
   describe('Error handling', () => {
-    it('should handle --clear command gracefully without demo mode', async () => {
+    it('should handle index --clear-cache command gracefully without demo mode', async () => {
       // 测试非demo模式下的清理命令
       // 由于没有 Qdrant 连接，命令会失败，但应该优雅地处理错误
-      const result = await executeCLICommand(['--clear', '--log-level=info'])
+      const result = await executeCLICommand(['index', '--clear-cache', '--log-level=info'])
 
       // 应该包含清理相关的输出，表明命令开始执行
       const output = result.stdout
@@ -529,7 +529,7 @@ describe('CLI Commands E2E Tests', () => {
     }, 60000)
   })
 
-  describe('--serve command and MCP Server', () => {
+  describe('index --serve command and MCP Server', () => {
     let serverProcess: any = null
     const serverPort = 13005
     const serverUrl = `http://localhost:${serverPort}`
@@ -538,7 +538,7 @@ describe('CLI Commands E2E Tests', () => {
       // 启动服务器进程（整个测试组共享）
       const cliPath = path.join(process.cwd(), 'src', 'cli.ts')
 
-      serverProcess = spawn('npx', ['tsx', cliPath, '--serve', '--demo', `--port=${serverPort}`], {
+      serverProcess = spawn('npx', ['tsx', cliPath, 'index', '--serve', '--demo', `--port=${serverPort}`], {
         stdio: 'pipe',
         detached: true,
         shell: true,
@@ -553,7 +553,7 @@ describe('CLI Commands E2E Tests', () => {
       await waitForServer(serverUrl, 60)
 
       // 预先建立索引，避免每个测试重复索引
-      await executeCLICommand(['--index', '--demo', '--log-level=error'])
+      await executeCLICommand(['index', '--demo', '--log-level=error'])
       await new Promise(resolve => setTimeout(resolve, 5000))
     }, 120000)
 

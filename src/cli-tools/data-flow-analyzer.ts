@@ -120,7 +120,7 @@ export class DataFlowAnalyzer {
     const httpFile = this.project.getSourceFile('src/mcp/http-server.ts');
     if (httpFile) {
       const startFunc = httpFile.getFunction('startServer') || 
-                       httpFile.getClasses().find(c => c.getName() === 'MCPServer')?.getMethod('start');
+                       httpFile.getClasses().find((c: any) => c.getName() === 'MCPServer')?.getMethod('start');
       
       if (startFunc) {
         const id = this.addNode({

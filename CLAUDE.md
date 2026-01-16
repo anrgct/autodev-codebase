@@ -86,32 +86,36 @@ npm run test -- path/to/test.ts
 
 ## 关键命令
 
+**⚠️ 注意：从 v1.0.0 开始，CLI 使用子命令模式（类似 git/npm）**
+
 ```bash
-# 索引代码库
-codebase --index --path=. --force
+# 代码搜索
+codebase search "用户认证" --limit=20
+codebase search "数据库" --path-filters="src/**/*.ts" --json
+codebase search "认证" --log-level=info  # 显示详细日志
 
-# 语义搜索
-codebase --search="用户认证" --limit=20
-codebase --search="数据库" --path-filters="src/**/*.ts" --json
-codebase --search="认证" --log-level=info  # 显示详细日志
+# 代码索引
+codebase index                          # 一次性索引
+codebase index --force                  # 强制重建索引
+codebase index --dry-run                # 预览将要索引的文件
+codebase index --watch                  # 监听模式
+codebase index --serve --port=3001      # 启动 MCP HTTP 服务器
+codebase index --clear-cache            # 清除索引缓存
 
-# 提取代码大纲
-codebase --outline "src/**/*.ts"
+# 代码大纲提取
+codebase outline "src/**/*.ts"
+codebase outline "src/**/*.ts" --summarize      # 生成 AI 摘要
+codebase outline "src/**/*.ts" --dry-run        # 预览匹配的文件
+codebase outline --clear-cache                  # 清除摘要缓存
 
-# 生成带 AI 摘要的代码大纲
-codebase --outline "src/**/*.ts" --summarize
+# stdio 适配器
+codebase stdio --server-url=http://localhost:3001/mcp
 
-# 预览 outline 操作
-codebase --outline "src/**/*.ts" --dry-run
-
-# 清除摘要缓存
-codebase --outline "src/**/*.ts" --clear-summarize-cache
-
-# 启动 MCP HTTP 服务器
-codebase --serve --port=3001 --path=.
-
-# 启动 stdio 适配器
-codebase --stdio-adapter --server-url=http://localhost:3001/mcp
+# 配置管理
+codebase config --get                           # 查看所有配置层
+codebase config --get embedderProvider          # 查看特定配置项
+codebase config --set embedderProvider=ollama   # 设置项目配置
+codebase config --set key=value --global        # 设置全局配置
 ```
 
 ## MCP 工具

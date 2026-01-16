@@ -1,0 +1,287 @@
+[
+  {
+    "data": {
+      "id": "config.NodeConfigOptions",
+      "label": "NodeConfigOptions",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "class",
+      "language": "typescript",
+      "startLine": 15,
+      "endLine": 19
+    },
+    "classes": "node-class lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider",
+      "label": "NodeConfigProvider",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "class",
+      "language": "typescript",
+      "startLine": 22,
+      "endLine": 353
+    },
+    "classes": "node-class lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.constructor",
+      "label": "constructor",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 29,
+      "endLine": 42,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.getEmbedderConfig",
+      "label": "getEmbedderConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 44,
+      "endLine": 78,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.getVectorStoreConfig",
+      "label": "getVectorStoreConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 80,
+      "endLine": 86,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.isCodeIndexEnabled",
+      "label": "isCodeIndexEnabled",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 88,
+      "endLine": 90,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.getSearchConfig",
+      "label": "getSearchConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 92,
+      "endLine": 98,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.getConfig",
+      "label": "getConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 100,
+      "endLine": 102,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.onConfigChange",
+      "label": "onConfigChange",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 104,
+      "endLine": 114,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.ensureConfigLoaded",
+      "label": "ensureConfigLoaded",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 119,
+      "endLine": 124,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.reloadConfig",
+      "label": "reloadConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 129,
+      "endLine": 132,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.loadConfig",
+      "label": "loadConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 137,
+      "endLine": 181,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.saveConfig",
+      "label": "saveConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 187,
+      "endLine": 230,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.callback",
+      "label": "callback",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 216,
+      "endLine": 222,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.updateConfig",
+      "label": "updateConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 235,
+      "endLine": 240,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.resetConfig",
+      "label": "resetConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 245,
+      "endLine": 247,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.getCurrentConfig",
+      "label": "getCurrentConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 252,
+      "endLine": 254,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.isConfigured",
+      "label": "isConfigured",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 259,
+      "endLine": 289,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider.validateConfig",
+      "label": "validateConfig",
+      "file": "src/adapters/nodejs/config.ts",
+      "type": "method",
+      "language": "typescript",
+      "startLine": 294,
+      "endLine": 352,
+      "className": "NodeConfigProvider"
+    },
+    "classes": "node-method lang-typescript"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider->config.NodeConfigProvider.ensureConfigLoaded",
+      "source": "config.NodeConfigProvider",
+      "target": "config.NodeConfigProvider.ensureConfigLoaded",
+      "line": 45,
+      "confidence": 1
+    },
+    "classes": "edge-call"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider->config.NodeConfigProvider.loadConfig",
+      "source": "config.NodeConfigProvider",
+      "target": "config.NodeConfigProvider.loadConfig",
+      "line": 121,
+      "confidence": 1
+    },
+    "classes": "edge-call"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider->config.NodeConfigProvider.callback",
+      "source": "config.NodeConfigProvider",
+      "target": "config.NodeConfigProvider.callback",
+      "line": 218,
+      "confidence": 1
+    },
+    "classes": "edge-call"
+  },
+  {
+    "data": {
+      "id": "config.NodeConfigProvider->config.NodeConfigProvider.saveConfig",
+      "source": "config.NodeConfigProvider",
+      "target": "config.NodeConfigProvider.saveConfig",
+      "line": 239,
+      "confidence": 1
+    },
+    "classes": "edge-call"
+  }
+]
