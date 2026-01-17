@@ -422,13 +422,9 @@ export abstract class BaseAnalyzer {
   /** Get relative path from repo root */
   protected getRelativePath(): string {
     if (this.repoPath && this.filePath.startsWith(this.repoPath)) {
-      // Remove repoPath prefix, handling potential trailing separator
-      let result = this.filePath.slice(this.repoPath.length)
-      // Remove leading slash if present
-      if (result.startsWith('/')) {
-        result = result.slice(1)
-      }
-      return result
+      // Remove repoPath prefix and skip the trailing separator
+      const result = this.filePath.slice(this.repoPath.length + 1)
+      return result.length > 0 ? result : this.filePath
     }
     return this.filePath
   }

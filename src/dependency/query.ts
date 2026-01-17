@@ -43,8 +43,10 @@ export interface TreeNode {
   name: string
   /** File path */
   filePath: string
-  /** Line number */
+  /** Start line number */
   line: number
+  /** End line number */
+  endLine: number
   /** Depth level */
   depth: number
   /** Child nodes */
@@ -106,17 +108,29 @@ function globToRegex(glob: string): RegExp {
 }
 
 /**
- * Test if a node name matches a pattern
+ * Test if a node matches a pattern (ID-only matching for simplicity)
+ * 
+ * All patterns match against node.id, which has the format:
+ *   "{relativePath}.{className}.{methodName}"
+ *   Examples:
+ *     - "analyzers/base.BaseAnalyzer.getMemberBuiltins"
+ *     - "parse.parseFile"
+ *     - "parse.ParserCache.get"
+ * 
+ * @param node - Dependency node to match
+ * @param pattern - Pattern string (supports wildcards)
+ * @returns True if node ID matches the pattern
  */
-function matchesPattern(nodeName: string, pattern: string): boolean {
-  // Support wildcards
+function matchesPattern(node: DependencyNode, pattern: string): boolean {
+  // Support wildcards - always match against ID
   if (pattern.includes('*') || pattern.includes('?')) {
     const regex = globToRegex(pattern)
-    return regex.test(nodeName)
+    return regex.test(node.id)
   }
 
-  // Case-insensitive exact match
-  return nodeName.toLowerCase() === pattern.toLowerCase()
+  // Case-insensitive exact match: try ID first, then name as fallback
+  return node.id.toLowerCase() === pattern.toLowerCase() ||
+         node.name.toLowerCase() === pattern.toLowerCase()
 }
 
 /**
@@ -135,14 +149,33 @@ export function findMatchingNodes(
 
   for (const node of nodes.values()) {
     for (const pattern of patterns) {
-      if (matchesPattern(node.name, pattern)) {
+      if (matchesPattern(node, pattern)) {
         matched.add(node)
         break
       }
     }
   }
 
-  return Array.from(matched)
+  const results = Array.from(matched)
+  
+  // Smart hints for common wildcard mistakes
+  if (results.length === 0) {
+    for (const pattern of patterns) {
+      // Check if it's a prefix wildcard (e.g., "get*", "parse*")
+      if (pattern.match(/^\w+\*$/) && !pattern.includes('/') && pattern.split('.').length < 2) {
+        const baseName = pattern.slice(0, -1)
+        console.warn(`\n💡 No results found for "${pattern}"`)
+        console.warn(`   Hint: "${pattern}" matches the START of IDs (e.g., "get" won't match "analyzers/...getUser")`)
+        console.warn(`   Suggestions:`)
+        console.warn(`     - Match method suffix:    "*${baseName}"`)
+        console.warn(`     - Match class methods:   "*.*.${baseName}*"` )
+        console.warn(`     - Match containing text: "*${baseName}*"\n`)
+        break
+      }
+    }
+  }
+
+  return results
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -175,6 +208,7 @@ function buildCalleeTree(
       name: depNode.name,
       filePath: depNode.filePath,
       line: depNode.startLine,
+      endLine: depNode.endLine,
       depth: currentDepth,
       children: buildCalleeTree(nodes, depNode, visited, currentDepth + 1, maxDepth)
     }
@@ -210,6 +244,7 @@ function buildCallerTree(
         name: node.name,
         filePath: node.filePath,
         line: node.startLine,
+        endLine: node.endLine,
         depth: currentDepth,
         children: buildCallerTree(nodes, node.id, visited, currentDepth + 1, maxDepth)
       }
@@ -424,8 +459,10 @@ export function analyzeConnections(
  */
 function formatTreeNode(node: TreeNode, prefix: string, isLast: boolean, output: string[]): void {
   const connector = isLast ? '└──' : '├──'
-  const fileInfo = `${node.filePath}:${node.line}`
-  output.push(`${prefix}${connector} ${node.name} (${fileInfo})`)
+  const lineRange = node.line === node.endLine 
+    ? `L${node.line}` 
+    : `L${node.line}-${node.endLine}`
+  output.push(`${prefix}${connector} ${node.id}:${lineRange}`)
 
   const childPrefix = prefix + (isLast ? '    ' : '│   ')
   const children = node.children
@@ -441,9 +478,11 @@ function formatTreeNode(node: TreeNode, prefix: string, isLast: boolean, output:
 export function formatNodeQueryResult(result: NodeQueryResult): string[] {
   const output: string[] = []
 
-  // Header
-  const fileInfo = `${result.node.filePath}:${result.node.startLine}`
-  output.push(`${result.node.name} (${fileInfo})`)
+  // Header - show ID with line range
+  const lineRange = result.node.startLine === result.node.endLine
+    ? `L${result.node.startLine}`
+    : `L${result.node.startLine}-${result.node.endLine}`
+  output.push(`${result.node.id}:${lineRange}`)
   output.push('')
 
   // Callees
@@ -483,12 +522,14 @@ export function formatConnectionAnalysisResult(result: ConnectionAnalysisResult)
   output.push(`Connections between ${result.queryNames.join(', ')}:`)
   output.push('')
 
-  // Matched nodes
+  // Matched nodes - show ID with line range
   if (result.matchedNodes.length > 0) {
     output.push(`Found ${result.matchedNodes.length} matching node(s):`)
     for (const node of result.matchedNodes) {
-      const fileInfo = `${node.filePath}:${node.startLine}`
-      output.push(`  - ${node.name} (${fileInfo})`)
+      const lineRange = node.startLine === node.endLine
+        ? `L${node.startLine}`
+        : `L${node.startLine}-${node.endLine}`
+      output.push(`  - ${node.id}:${lineRange}`)
     }
     output.push('')
   } else {
@@ -496,14 +537,20 @@ export function formatConnectionAnalysisResult(result: ConnectionAnalysisResult)
     return output
   }
 
-  // Direct connections
+  // Direct connections - use ID with line range
   if (result.directConnections.length > 0) {
     output.push('Direct connections:')
-    const idToName = new Map(result.involvedNodes.map(n => [n.id, n.name]))
+    const nodeMap = new Map(result.involvedNodes.map(n => [n.id, n]))
     for (const conn of result.directConnections) {
-      const fromName = idToName.get(conn.from) || conn.from
-      const toName = idToName.get(conn.to) || conn.to
-      output.push(`  - ${fromName} → ${toName}`)
+      const fromNode = nodeMap.get(conn.from)
+      const toNode = nodeMap.get(conn.to)
+      const fromRange = fromNode 
+        ? (fromNode.startLine === fromNode.endLine ? `L${fromNode.startLine}` : `L${fromNode.startLine}-${fromNode.endLine}`)
+        : 'L0'
+      const toRange = toNode
+        ? (toNode.startLine === toNode.endLine ? `L${toNode.startLine}` : `L${toNode.startLine}-${toNode.endLine}`)
+        : 'L0'
+      output.push(`  - ${conn.from}:${fromRange} → ${conn.to}:${toRange}`)
     }
     output.push('')
   } else {
@@ -512,13 +559,19 @@ export function formatConnectionAnalysisResult(result: ConnectionAnalysisResult)
     output.push('')
   }
 
-  // Chains
+  // Chains - use ID with line range
   if (result.chains.length > 0) {
     output.push('Chains found:')
-    const idToName = new Map(result.involvedNodes.map(n => [n.id, n.name]))
+    const nodeMap = new Map(result.involvedNodes.map(n => [n.id, n]))
     for (const chain of result.chains.slice(0, 10)) { // Limit to 10 chains
-      const pathNames = chain.path.map(id => idToName.get(id) || id)
-      output.push(`  - ${pathNames.join(' → ')}`)
+      const pathWithRanges = chain.path.map(id => {
+        const node = nodeMap.get(id)
+        const range = node
+          ? (node.startLine === node.endLine ? `L${node.startLine}` : `L${node.startLine}-${node.endLine}`)
+          : 'L0'
+        return `${id}:${range}`
+      })
+      output.push(`  - ${pathWithRanges.join(' → ')}`)
     }
     if (result.chains.length > 10) {
       output.push(`  ... and ${result.chains.length - 10} more`)

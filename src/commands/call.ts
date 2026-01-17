@@ -4,7 +4,12 @@
  * Analyze code dependencies and generate visualization data
  */
 import { Command } from 'commander';
-import { CommandOptions } from './shared';
+import {
+  CommandOptions,
+  resolveWorkspacePath,
+  initGlobalLogger,
+  getLogger
+} from './shared';
 import {
   analyze,
   DependencyAnalyzerDeps,
@@ -21,13 +26,17 @@ import {
 import { NodeFileSystem } from '../adapters/nodejs/file-system';
 import { NodePathUtils } from '../adapters/nodejs/workspace';
 import { promises as fs } from 'fs';
-import path from 'path';
 import open from 'open';
+
+/**
+ * Type alias for analysis result to avoid repetition
+ */
+type AnalysisResult = Awaited<ReturnType<typeof analyze>>;
 
 /**
  * Format and display dependency analysis summary
  */
-function displaySummary(result: Awaited<ReturnType<typeof analyze>>): void {
+function displaySummary(result: AnalysisResult): void {
   const { summary, nodes, relationships, cycles } = result;
 
   // Count component types
@@ -93,7 +102,7 @@ function displaySummary(result: Awaited<ReturnType<typeof analyze>>): void {
  * Export dependency data to JSON file
  */
 async function exportData(
-  result: Awaited<ReturnType<typeof analyze>>,
+  result: AnalysisResult,
   outputPath: string,
   openInBrowser: boolean
 ): Promise<void> {
@@ -101,7 +110,7 @@ async function exportData(
   const viz = generateVisualizationData(result.nodes, result.relationships, result.summary);
 
   // Resolve output path (support relative paths)
-  const resolvedPath = path.resolve(process.cwd(), outputPath);
+  const resolvedPath = outputPath.startsWith('/') ? outputPath : `${process.cwd()}/${outputPath}`;
 
   // Write to file
   await fs.writeFile(resolvedPath, JSON.stringify(viz.cytoscape.elements, null, 2), 'utf-8');
@@ -129,7 +138,7 @@ async function exportData(
  * Query mode - single function
  */
 function querySingleFunction(
-  result: Awaited<ReturnType<typeof analyze>>,
+  result: AnalysisResult,
   query: string,
   depth: number,
   asJson: boolean
@@ -168,7 +177,7 @@ function querySingleFunction(
  * Query mode - multiple functions (connection analysis)
  */
 function queryMultipleFunctions(
-  result: Awaited<ReturnType<typeof analyze>>,
+  result: AnalysisResult,
   query: string,
   asJson: boolean
 ): void {
@@ -186,7 +195,7 @@ function queryMultipleFunctions(
  * Query mode handler
  */
 function queryMode(
-  result: Awaited<ReturnType<typeof analyze>>,
+  result: AnalysisResult,
   query: string,
   depthStr: string,
   asJson: boolean
@@ -201,7 +210,9 @@ function queryMode(
 
   // Single pattern or wildcard pattern -> single function query
   // Multiple patterns -> connection analysis
-  if (patterns.length === 1 || patterns.some(p => p.includes('*') || p.includes('?'))) {
+  const hasWildcard = patterns.some(p => p.includes('*') || p.includes('?'));
+
+  if (patterns.length === 1 || hasWildcard) {
     querySingleFunction(result, query, depth, asJson);
   } else {
     queryMultipleFunctions(result, query, asJson);
@@ -217,14 +228,16 @@ function queryMode(
  * - Query mode (--query): Query specific dependencies
  * - Open mode (--open): Open HTML visualization
  */
-async function callHandler(targetPath: string, options: CommandOptions): Promise<void> {
+async function callHandler(targetPath: string | undefined, options: CommandOptions): Promise<void> {
   // Initialize logger
-  const { initGlobalLogger, getLogger, resolveWorkspacePath } = await import('./shared');
   initGlobalLogger(options.logLevel);
   const logger = getLogger();
 
+  // Default to current directory if no path provided
+  const pathToAnalyze = targetPath || '.';
+
   // Resolve target path
-  const resolvedPath = resolveWorkspacePath(targetPath, options.demo);
+  const resolvedPath = resolveWorkspacePath(pathToAnalyze, options.demo);
   logger.debug(`Analyzing path: ${resolvedPath}`);
 
   // Create dependencies
@@ -235,7 +248,7 @@ async function callHandler(targetPath: string, options: CommandOptions): Promise
   // Determine max files (can be configured later)
   const maxFiles = 100;
 
-  // Determine if we should use special modes
+  // Determine output mode
   const hasOutput = !!options.output;
   const hasQuery = !!options.query;
   const hasOpen = !!options.open;
@@ -303,7 +316,7 @@ export function createCallCommand(): Command {
 
   command
     .description('Analyze code dependencies')
-    .argument('<path>', 'Path to analyze (file or directory)')
+    .argument('[path]', 'Path to analyze (file or directory)', '.')
     .option('-p, --path <path>', 'Working directory path', '.')
     .option('-c, --config <path>', 'Configuration file path')
     .option('--demo', 'Use demo workspace')
