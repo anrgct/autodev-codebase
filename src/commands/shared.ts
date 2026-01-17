@@ -32,6 +32,11 @@ export interface CommandOptions {
   watch?: boolean;
   serve?: boolean;
   global?: boolean;
+  // Call command options
+  output?: string;
+  query?: string;
+  open?: boolean;
+  depth?: string;
 }
 
 /**

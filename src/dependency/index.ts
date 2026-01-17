@@ -32,6 +32,7 @@ export { DependencyCacheManager } from './cache-manager'
 export { parseDirectory } from './parse'
 export { buildGraph, moduleDistance, detectCycles, topologicalSort, getLeafNodes } from './graph'
 export * from './analyzers'
+export * from './query'
 
 /**
  * 语言扩展名映射（从文件路径推断语言）
