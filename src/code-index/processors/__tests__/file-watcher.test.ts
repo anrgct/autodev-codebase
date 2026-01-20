@@ -29,11 +29,7 @@ vi.mock("uuid", () => ({
 		return `mocked-uuid-${name}-${namespace}`
 	}),
 }))
-vi.mock("../../../ignore/RooIgnoreController", () => ({
-	RooIgnoreController: vi.fn().mockImplementation(() => ({
-		validateAccess: vi.fn().mockReturnValue(true),
-	})),
-}))
+// RooIgnoreController removed - now using IgnoreService from workspace
 vi.mock("../../cache-manager")
 vi.mock("../parser")
 
@@ -43,7 +39,7 @@ describe("FileWatcher", () => {
 	let mockVectorStore: IVectorStore
 	let mockCacheManager: any
 	let mockContext: any
-	let mockRooIgnoreController: any
+
 	let mockEventBus: IEventBus
 	let mockFileSystem: IFileSystem
 	let mockWorkspace: IWorkspace
@@ -182,8 +178,7 @@ describe("FileWatcher", () => {
 			watchDirectory: vi.fn().mockReturnValue(vi.fn()),
 		} as any
 
-		const { RooIgnoreController } = await import("../../../ignore/RooIgnoreController")
-		mockRooIgnoreController = new RooIgnoreController(mockFileSystem, mockWorkspace, mockPathUtils, mockFileWatcher)
+		// RooIgnoreController removed - workspace already has IgnoreService
 
 		fileWatcher = new FileWatcher(
 			testWorkspacePath,
@@ -194,8 +189,6 @@ describe("FileWatcher", () => {
 			mockCacheManager,
 			mockEmbedder,
 			mockVectorStore,
-			undefined,
-			mockRooIgnoreController,
 		)
 	})
 
@@ -414,15 +407,15 @@ describe("FileWatcher", () => {
 
 	describe("processFile", () => {
 		it("should skip ignored files", async () => {
-			mockRooIgnoreController.validateAccess = vi.fn((path: string) => {
-				if (path === `${testWorkspacePath}/ignored.js`) return false
-				return true
+			// Mock workspace.shouldIgnore to return true for ignored files
+			mockWorkspace.shouldIgnore = vi.fn().mockImplementation((path: string) => {
+				return Promise.resolve(path === `${testWorkspacePath}/ignored.js`)
 			})
 			const filePath = `${testWorkspacePath}/ignored.js`
 			const result = await fileWatcher.processFile(filePath)
 
 			expect(result.status).toBe("skipped")
-			expect(result.reason).toBe("File is ignored by .rooignore or .gitignore")
+			expect(result.reason).toBe("File is ignored")
 			expect(mockCacheManager.updateHash).not.toHaveBeenCalled()
 			expect(mockFileSystem.stat).not.toHaveBeenCalled()
 			expect(mockFileSystem.readFile).not.toHaveBeenCalled()
@@ -430,7 +423,6 @@ describe("FileWatcher", () => {
 
 		it("should skip files larger than MAX_FILE_SIZE_BYTES", async () => {
 			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 2 * 1024 * 1024 } as any)
-			mockRooIgnoreController.validateAccess.mockReturnValue(true)
 			const result = await fileWatcher.processFile(`${testWorkspacePath}/large.js`)
 
 			expect(result.status).toBe("skipped")
@@ -449,7 +441,6 @@ describe("FileWatcher", () => {
 			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 1024, mtime: Date.now() } as any)
 			vi.spyOn(mockFileSystem, 'readFile').mockResolvedValue(new TextEncoder().encode("test content"))
 			mockCacheManager.getHash.mockReturnValue("hash")
-			mockRooIgnoreController.validateAccess.mockReturnValue(true)
 
 			const result = await fileWatcher.processFile(`${testWorkspacePath}/unchanged.js`)
 
@@ -469,7 +460,6 @@ describe("FileWatcher", () => {
 			vi.spyOn(mockFileSystem, 'stat').mockResolvedValue({ size: 1024, mtime: Date.now() } as any)
 			vi.spyOn(mockFileSystem, 'readFile').mockResolvedValue(new TextEncoder().encode("test content"))
 			mockCacheManager.getHash.mockReturnValue("old-hash")
-			mockRooIgnoreController.validateAccess.mockReturnValue(true)
 			vi.spyOn(mockWorkspace, 'getRelativePath').mockReturnValue("test.js")
 
 			const mockCodeParser = vi.mocked(codeParser)

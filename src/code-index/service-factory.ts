@@ -15,42 +15,13 @@ import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
 import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker, ISummarizer } from "./interfaces"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CacheManager } from "./cache-manager"
-import { Ignore } from "ignore"
 import { IEventBus, IFileSystem } from "../abstractions/core"
 import { IWorkspace, IPathUtils } from "../abstractions/workspace"
 import { Logger } from "../utils/logger"
+import { t } from "./i18n"
 
 // Type-compatible logger interface using Pick to extract only required methods from Logger
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
-
-// Hardcoded internationalization functions (replacing t() calls)
-const t = (key: string, params?: Record<string, string>): string => {
-	const translations: Record<string, string> = {
-		"embeddings:serviceFactory.openAiConfigMissing": "OpenAI API key missing for embedder creation",
-		"embeddings:serviceFactory.ollamaConfigMissing": "Ollama base URL missing for embedder creation",
-		"embeddings:serviceFactory.openAiCompatibleConfigMissing": "OpenAI Compatible base URL and API key missing for embedder creation",
-		"embeddings:serviceFactory.geminiConfigMissing": "Gemini API key missing for embedder creation",
-		"embeddings:serviceFactory.mistralConfigMissing": "Mistral API key missing for embedder creation",
-		"embeddings:serviceFactory.vercelAiGatewayConfigMissing": "Vercel AI Gateway API key missing for embedder creation",
-		"embeddings:serviceFactory.openRouterConfigMissing": "OpenRouter API key missing for embedder creation",
-		"embeddings:serviceFactory.invalidEmbedderType": "Invalid embedder type configured: {embedderProvider}",
-		"embeddings:serviceFactory.vectorDimensionNotDetermined": "Could not determine vector dimension for model '{modelId}' with provider '{provider}'. Check model profiles or configuration.",
-		"embeddings:serviceFactory.vectorDimensionNotDeterminedOpenAiCompatible": "Could not determine vector dimension for model '{modelId}' with provider '{provider}'. Please ensure the 'Embedding Dimension' is correctly set in the OpenAI-Compatible provider settings.",
-		"embeddings:serviceFactory.qdrantUrlMissing": "Qdrant URL missing for vector store creation",
-		"embeddings:serviceFactory.codeIndexingNotConfigured": "Cannot create services: Code indexing is not properly configured",
-		"embeddings:validation.configurationError": "Embedder configuration validation failed",
-		"embeddings:serviceFactory.invalidRerankerType": "Invalid reranker provider configured: {provider}",
-		"embeddings:serviceFactory.rerankerValidationError": "Reranker configuration validation failed",
-	}
-
-	let message = translations[key] || key
-	if (params) {
-		for (const [param, value] of Object.entries(params)) {
-			message = message.replace(`{${param}}`, value)
-		}
-	}
-	return message
-}
 
 /**
  * Factory class responsible for creating and configuring code indexing service dependencies.
@@ -208,7 +179,6 @@ export class CodeIndexServiceFactory {
 		embedder: IEmbedder,
 		vectorStore: IVectorStore,
 		parser: ICodeParser,
-		ignoreInstance: Ignore,
 		fileSystem: IFileSystem,
 		workspace: IWorkspace,
 		pathUtils: IPathUtils
@@ -218,7 +188,6 @@ export class CodeIndexServiceFactory {
 			qdrantClient: vectorStore,
 			codeParser: parser,
 			cacheManager: this.cacheManager,
-			ignoreInstance,
 			fileSystem,
 			workspace,
 			pathUtils,
@@ -237,9 +206,8 @@ export class CodeIndexServiceFactory {
 		embedder: IEmbedder,
 		vectorStore: IVectorStore,
 		cacheManager: CacheManager,
-		ignoreInstance: Ignore,
 	): ICodeFileWatcher {
-		return new FileWatcher(this.workspacePath, fileSystem, eventBus, workspace, pathUtils, cacheManager, embedder, vectorStore, ignoreInstance)
+		return new FileWatcher(this.workspacePath, fileSystem, eventBus, workspace, pathUtils, cacheManager, embedder, vectorStore)
 	}
 
 	/**
@@ -250,7 +218,6 @@ export class CodeIndexServiceFactory {
 		fileSystem: IFileSystem,
 		eventBus: IEventBus,
 		cacheManager: CacheManager,
-		ignoreInstance: Ignore,
 		workspace: IWorkspace,
 		pathUtils: IPathUtils
 	): Promise<{
@@ -267,8 +234,8 @@ export class CodeIndexServiceFactory {
 		const embedder = this.createEmbedder()
 		const vectorStore = this.createVectorStore()
 		const parser = codeParser
-		const scanner = this.createDirectoryScanner(embedder, vectorStore, parser, ignoreInstance, fileSystem, workspace, pathUtils)
-		const fileWatcher = this.createFileWatcher(fileSystem, eventBus, workspace, pathUtils, embedder, vectorStore, cacheManager, ignoreInstance)
+		const scanner = this.createDirectoryScanner(embedder, vectorStore, parser, fileSystem, workspace, pathUtils)
+		const fileWatcher = this.createFileWatcher(fileSystem, eventBus, workspace, pathUtils, embedder, vectorStore, cacheManager)
 
 		return {
 			embedder,

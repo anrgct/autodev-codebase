@@ -24,6 +24,7 @@ const mockWorkspace: IWorkspace = {
   shouldIgnore: vi.fn().mockResolvedValue(false),
   getName: vi.fn().mockReturnValue('test'),
   getGlobIgnorePatterns: vi.fn().mockResolvedValue([]),
+  getIgnoreService: vi.fn().mockReturnValue({} as any),
 } as IWorkspace
 
 const mockPathUtils: IPathUtils = {

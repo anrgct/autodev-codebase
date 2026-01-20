@@ -12,7 +12,6 @@ import { CodeIndexStateManager } from '../code-index/state-manager'
 import { CodeIndexConfigManager } from '../code-index/config-manager'
 import { DirectoryScanner } from '../code-index/processors/scanner'
 import { EmbedderProvider } from '../code-index/interfaces/manager'
-import ignore from 'ignore'
 import type { ICodeParser } from '../code-index/interfaces'
 
 describe('Core Library Integration', () => {
@@ -193,7 +192,6 @@ describe('Core Library Integration', () => {
       }
 
       // Initialize scanner with dependencies
-      const ignoreInstance = ignore()
       scanner = new DirectoryScanner({
         fileSystem: dependencies.fileSystem,
         workspace: dependencies.workspace,
@@ -203,7 +201,6 @@ describe('Core Library Integration', () => {
         qdrantClient: null as any, // Mock qdrant client for testing
         codeParser: null as any, // Mock code parser for testing
         cacheManager: new CacheManager(workspacePath),
-        ignoreInstance // ignore() creates a proper instance with .ignores method
       })
     })
 

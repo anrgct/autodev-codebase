@@ -1,5 +1,4 @@
 import { listFiles } from "../../glob/list-files"
-import { Ignore } from "ignore"
 import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
 import { generateBlockEmbeddingText } from "../shared/block-text-generator"
 import { scannerExtensions } from "../shared/supported-extensions"
@@ -33,7 +32,6 @@ export interface DirectoryScannerDependencies {
 	qdrantClient: IVectorStore
 	codeParser: ICodeParser
 	cacheManager: CacheManager
-	ignoreInstance: Ignore
 	fileSystem: IFileSystem
 	workspace: IWorkspace
 	pathUtils: IPathUtils
@@ -65,28 +63,20 @@ export class DirectoryScanner implements IDirectoryScanner {
 	}
 
 	/**
-	 * Recursively scans a directory for code blocks in supported files.
+	 * Filters files from a directory based on:
+	 * 1. Removing directories (paths ending with "/")
+	 * 2. Applying workspace ignore rules
+	 * 3. Filtering by supported file extensions
 	 * @param directoryPath The directory to scan
-	 * @param rooIgnoreController Optional RooIgnoreController instance for filtering
-	 * @param context VS Code ExtensionContext for cache storage
-	 * @param onError Optional error handler callback
-	 * @returns Promise<{codeBlocks: CodeBlock[], stats: {processed: number, skipped: number}}> Array of parsed code blocks and processing stats
+	 * @returns Promise<string[]> Array of filtered, supported file paths
 	 */
-	public async scanDirectory(
-		directory: string,
-		onError?: (error: Error) => void,
-		onBlocksIndexed?: (indexedCount: number) => void,
-		onFileParsed?: (fileBlockCount: number) => void,
-	): Promise<{ codeBlocks: CodeBlock[]; stats: { processed: number; skipped: number }; totalBlockCount: number }> {
-		const directoryPath = directory
-		// Capture workspace context at scan start
-		const scanWorkspace = this.deps.workspace.getRootPath()
-		if (!scanWorkspace) {
-			throw new Error("Workspace root path is required for scanning")
-		}
-		this.debug(`[Scanner] Scanning directory: ${directoryPath}, workspace: ${scanWorkspace}`)
-		// Get all files recursively (handles .gitignore automatically)
-		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT_CODE_INDEX, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })
+	private async filterSupportedFiles(directoryPath: string): Promise<string[]> {
+		// Get all files recursively (uses fast-glob + IgnoreService)
+		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT_CODE_INDEX, {
+			pathUtils: this.deps.pathUtils,
+			fileSystem: this.deps.fileSystem,
+			workspace: this.deps.workspace
+		})
 		this.debug(`[Scanner] Found ${allPaths.length} paths from listFiles:`, allPaths.slice(0, 10))
 
 		// Filter out directories (marked with trailing '/')
@@ -104,18 +94,43 @@ export class DirectoryScanner implements IDirectoryScanner {
 		}
 		this.debug(`[Scanner] After workspace ignore rules: ${allowedPaths.length} files:`, allowedPaths)
 
-		// Filter by supported extensions and ignore patterns
+		// Filter by supported extensions only
 		const supportedPaths = allowedPaths.filter((filePath) => {
 			const ext = this.deps.pathUtils.extname(filePath).toLowerCase()
-			const relativeFilePath = this.deps.workspace.getRelativePath(filePath)
 			const extSupported = scannerExtensions.includes(ext)
-			const ignoreInstanceIgnores = this.deps.ignoreInstance.ignores(relativeFilePath)
 
-			this.debug(`[Scanner] File: ${filePath}, ext: ${ext}, extSupported: ${extSupported}, ignoreInstanceIgnores: ${ignoreInstanceIgnores}`)
+			this.debug(`[Scanner] File: ${filePath}, ext: ${ext}, extSupported: ${extSupported}`)
 
-			return extSupported && !ignoreInstanceIgnores
+			return extSupported
 		})
-		this.debug(`[Scanner] After extension and ignore filtering: ${supportedPaths.length} files:`, supportedPaths)
+		this.debug(`[Scanner] After extension filtering: ${supportedPaths.length} files:`, supportedPaths)
+
+		return supportedPaths
+	}
+
+	/**
+	 * Recursively scans a directory for code blocks in supported files.
+	 * @param directoryPath The directory to scan
+	 * @param rooIgnoreController Optional RooIgnoreController instance for filtering
+	 * @param context VS Code ExtensionContext for cache storage
+	 * @param onError Optional error handler callback
+	 * @returns Promise<{codeBlocks: CodeBlock[], stats: {processed: number, skipped: number}}> Array of parsed code blocks and processing stats
+	 */
+	public async scanDirectory(
+		directory: string,
+		onError?: (error: Error) => void,
+		onBlocksIndexed?: (indexedCount: number) => void,
+		onFileParsed?: (fileBlockCount: number) => void,
+	): Promise<{ codeBlocks: CodeBlock[]; stats: { processed: number; skipped: number }; totalBlockCount: number }> {
+		// Capture workspace context at scan start
+		const scanWorkspace = this.deps.workspace.getRootPath()
+		if (!scanWorkspace) {
+			throw new Error("Workspace root path is required for scanning")
+		}
+		this.debug(`[Scanner] Scanning directory: ${directory}, workspace: ${scanWorkspace}`)
+
+		// Get all supported files (filtered by extension, ignore rules, etc.)
+		const supportedPaths = await this.filterSupportedFiles(directory)
 
 		// Initialize tracking variables
 		const processedFiles = new Set<string>()
@@ -435,37 +450,9 @@ export class DirectoryScanner implements IDirectoryScanner {
 	}
 
 	public async getAllFilePaths(directory: string): Promise<string[]> {
-		const directoryPath = directory
-		this.debug(`[Scanner] Getting all file paths for: ${directoryPath}`)
-		// Get all files recursively (handles .gitignore automatically)
-		const [allPaths, _] = await listFiles(directoryPath, true, MAX_LIST_FILES_LIMIT_CODE_INDEX, { pathUtils: this.deps.pathUtils, ripgrepPath: 'rg' })
-		this.debug(`[Scanner] Found ${allPaths.length} paths from listFiles:`)
+		this.debug(`[Scanner] Getting all file paths for: ${directory}`)
 
-		// Filter out directories (marked with trailing '/')
-		const filePaths = allPaths.filter((p) => !p.endsWith("/"))
-		this.debug(`[Scanner] After filtering directories: ${filePaths.length} files:`)
-
-		// Filter paths using workspace ignore rules
-		const allowedPaths: string[] = []
-		for (const filePath of filePaths) {
-			const shouldIgnore = await this.deps.workspace.shouldIgnore(filePath)
-			if (!shouldIgnore) {
-				allowedPaths.push(filePath)
-			}
-		}
-		this.debug(`[Scanner] After workspace ignore rules: ${allowedPaths.length} files:`)
-
-		// Filter by supported extensions and ignore patterns
-		const supportedPaths = allowedPaths.filter((filePath) => {
-			const ext = this.deps.pathUtils.extname(filePath).toLowerCase()
-			const relativeFilePath = this.deps.workspace.getRelativePath(filePath)
-			const extSupported = scannerExtensions.includes(ext)
-			const ignoreInstanceIgnores = this.deps.ignoreInstance.ignores(relativeFilePath)
-
-			return extSupported && !ignoreInstanceIgnores
-		})
-		this.debug(`[Scanner] After extension and ignore filtering: ${supportedPaths.length} files:`)
-
-		return supportedPaths
+		// Get all supported files (filtered by extension, ignore rules, etc.)
+		return await this.filterSupportedFiles(directory)
 	}
 }

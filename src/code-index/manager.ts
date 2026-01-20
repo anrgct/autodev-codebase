@@ -10,8 +10,6 @@ import { CacheManager } from "./cache-manager"
 import { IFileSystem, IStorage, IEventBus } from "../abstractions/core"
 import { IWorkspace, IPathUtils } from "../abstractions/workspace"
 import { Logger } from "../utils/logger"
-import fs from "fs/promises"
-import ignore from "ignore"
 import path from "path"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
@@ -397,7 +395,6 @@ export class CodeIndexManager implements ICodeIndexManager {
 			this.dependencies.logger,
 		)
 
-		const ignoreInstance = ignore()
 		const workspacePath = this.workspacePath
 
 		if (!workspacePath) {
@@ -405,20 +402,16 @@ export class CodeIndexManager implements ICodeIndexManager {
 			return
 		}
 
-		// Create .gitignore instance
-		// First ensure ignore rules are loaded by calling shouldIgnore on a dummy path
+		// Ensure ignore rules are loaded by calling shouldIgnore on a dummy path
 		// Use a dummy file path to trigger loading without causing empty path errors
 		const dummyPath = path.join(workspacePath, "dummy.txt")
 		await this.dependencies.workspace.shouldIgnore(dummyPath)
-		const ignoreRules = this.dependencies.workspace.getIgnoreRules()
-		ignoreInstance.add(ignoreRules)
 
 		// (Re)Create shared service instances
 		const { embedder, vectorStore, scanner, fileWatcher } = await this._serviceFactory.createServices(
 			this.dependencies.fileSystem,
 			this.dependencies.eventBus,
 			this._cacheManager!,
-			ignoreInstance,
 			this.dependencies.workspace,
 			this.dependencies.pathUtils
 		)

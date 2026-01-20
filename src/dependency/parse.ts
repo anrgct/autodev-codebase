@@ -8,34 +8,11 @@ import Parser from 'web-tree-sitter'
 import { IFileSystem } from '../abstractions/core'
 import { IPathUtils } from '../abstractions/workspace'
 import { ParseOutput, FileParseResult, LanguageConfig, ParserCacheEntry, AnalysisOptions } from './models'
+import { IGNORE_DIRS as CORE_IGNORE_DIRS, type IgnoreDir } from '../ignore/default-dirs'
+import { IgnoreService } from '../ignore/IgnoreService'
 
-// Default directories to ignore
-export const IGNORE_DIRS = [
-  'node_modules',
-  '.git',
-  '.svn',
-  '.hg',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  '.nyc_output',
-  '.cache',
-  '.DS_Store'
-]
-
-// Default patterns to ignore
-export const IGNORE_PATTERNS = [
-  '*.test.*',
-  '*.spec.*',
-  '*.d.ts',
-  '*.min.js',
-  '*.min.css',
-  '*.map',
-  'package-lock.json',
-  'yarn.lock',
-  'pnpm-lock.yaml'
-]
+// Default directories to ignore - now using centralized configuration
+export const IGNORE_DIRS = CORE_IGNORE_DIRS
 
 // Supported languages and their Tree-sitter configurations
 const LANGUAGE_CONFIGS: Record<string, LanguageConfig> = {
@@ -320,15 +297,26 @@ export async function loadLanguageParser(
 
 /**
  * Walk through directory and collect files
+ *
+ * @param directory - Directory to walk
+ * @param fileSystem - File system abstraction
+ * @param pathUtils - Path utilities abstraction
+ * @param ignoreService - Unified ignore service for filtering
+ * @param options - Analysis options
+ * @returns Promise<string[]> Array of file paths
  */
 export async function walkFiles(
   directory: string,
   fileSystem: IFileSystem,
   pathUtils: IPathUtils,
+  ignoreService: IgnoreService,  // New parameter
   options: AnalysisOptions = {}
 ): Promise<string[]> {
   const files: string[] = []
   const maxSize = options.fileFilter?.maxFileSize || 10 * 1024 * 1024 // 10MB default
+
+  // Ensure ignore service is initialized
+  await ignoreService.initialize()
 
   async function walk(currentDir: string): Promise<void> {
     try {
@@ -339,26 +327,24 @@ export async function walkFiles(
         const stat = await fileSystem.stat(fullPath)
 
         if (stat.isDirectory) {
-          const basename = pathUtils.basename(fullPath)
-          if (IGNORE_DIRS.includes(basename)) {
-            continue
+          // 🔥 Use unified directory pruning logic
+          if (ignoreService.shouldSkipDirectory(fullPath)) {
+            continue  // Skip entire directory early
           }
-          if (!options.includeNodeModules && basename === 'node_modules') {
-            continue
-          }
+
           await walk(fullPath)
         } else if (stat.isFile) {
           if (stat.size > maxSize) {
             continue
           }
 
-          const ext = pathUtils.extname(fullPath).toLowerCase()
-          const basename = pathUtils.basename(fullPath)
-
-          // Check ignore patterns
-          if (IGNORE_PATTERNS.some(pattern => matchesPattern(basename, pattern))) {
+          // 🔥 Use unified file filtering logic
+          if (ignoreService.shouldIgnore(fullPath)) {
             continue
           }
+
+          const ext = pathUtils.extname(fullPath).toLowerCase()
+          const basename = pathUtils.basename(fullPath)
 
           // Skip test files if not included
           if (!options.includeTests && (basename.includes('.test.') || basename.includes('.spec.'))) {
@@ -382,21 +368,6 @@ export async function walkFiles(
 
   await walk(directory)
   return files
-}
-
-/**
- * Check if a string matches a glob pattern
- */
-function matchesPattern(str: string, pattern: string): boolean {
-  const regex = new RegExp(
-    '^' +
-      pattern
-        .replace(/\*/g, '.*')
-        .replace(/\?/g, '.')
-        .replace(/\./g, '\\.') +
-      '$'
-  )
-  return regex.test(str)
 }
 
 /**
@@ -454,11 +425,12 @@ export async function parseDirectory(
   directory: string,
   fileSystem: IFileSystem,
   pathUtils: IPathUtils,
+  ignoreService: IgnoreService,  // New parameter
   options: AnalysisOptions = {},
   wasmBasePath?: string,
   onProgress?: (filePath: string, index: number, total: number) => void
 ): Promise<FileParseResult[]> {
-  const files = await walkFiles(directory, fileSystem, pathUtils, options)
+  const files = await walkFiles(directory, fileSystem, pathUtils, ignoreService, options)
   const results: FileParseResult[] = []
 
   for (let i = 0; i < files.length; i++) {

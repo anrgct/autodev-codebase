@@ -33,6 +33,7 @@ const createMockDependencies = (): TreeSitterDependencies => ({
 		getName: () => "test-workspace",
 		getWorkspaceFolders: () => [],
 		findFiles: vi.fn().mockResolvedValue([]),
+		getIgnoreService: () => ({ getRules: () => [] } as any),
 	} as IWorkspace,
 	pathUtils: {
 		join: (...paths: string[]) => paths.join("/"),

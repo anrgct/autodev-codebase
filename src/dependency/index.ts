@@ -5,7 +5,7 @@
  * 独立管理 tree-sitter Parser，复用现有 WASM 文件
  */
 import type { IFileSystem } from '../abstractions/core'
-import type { IPathUtils } from '../abstractions/workspace'
+import type { IPathUtils, IWorkspace } from '../abstractions/workspace'
 import type {
   DependencyNode,
   DependencyEdge,
@@ -62,6 +62,7 @@ export const LANGUAGE_EXTENSIONS: Record<string, string> = {
 export interface DependencyAnalyzerDeps {
   fileSystem: IFileSystem
   pathUtils: IPathUtils
+  workspace?: IWorkspace  // Optional workspace for unified ignore service
 }
 
 /**
@@ -91,7 +92,7 @@ export async function analyze(
   maxFiles: number = 100,
   options?: AnalysisOptions
 ): Promise<DependencyResult> {
-  const { fileSystem, pathUtils } = deps
+  const { fileSystem, pathUtils, workspace } = deps
 
   // 判断是文件还是目录
   const stat = await fileSystem.stat(targetPath)
@@ -123,12 +124,33 @@ export async function analyze(
     parseResults = [fileResult]
   } else {
     // 目录模式
-    parseResults = await parseDirectory(
-      targetPath,
-      fileSystem,
-      pathUtils,
-      { includeNodeModules: false, includeTests: false, maxDepth: 10, followSymlinks: true } as any
-    )
+    // Get ignore service from workspace if available
+    const ignoreService = workspace?.getIgnoreService()
+
+    if (!ignoreService) {
+      // Fallback: create a temporary IgnoreService
+      const { IgnoreService } = await import('../ignore/IgnoreService')
+      const tempIgnoreService = new IgnoreService(fileSystem, pathUtils, {
+        rootPath: repoPath,
+      })
+      await tempIgnoreService.initialize()
+
+      parseResults = await parseDirectory(
+        targetPath,
+        fileSystem,
+        pathUtils,
+        tempIgnoreService,
+        { includeTests: false, maxDepth: 10, followSymlinks: true } as any
+      )
+    } else {
+      parseResults = await parseDirectory(
+        targetPath,
+        fileSystem,
+        pathUtils,
+        ignoreService,
+        { includeTests: false, maxDepth: 10, followSymlinks: true } as any
+      )
+    }
   }
 
   // 统一的后处理流程

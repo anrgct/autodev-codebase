@@ -1,3 +1,5 @@
+import type { IgnoreService } from '../ignore/IgnoreService'
+
 /**
  * Workspace abstractions for platform-agnostic workspace operations
  */
@@ -6,12 +8,12 @@ export interface IWorkspace {
    * Get the root path of the workspace
    */
   getRootPath(): string | undefined
-  
+
   /**
    * Get relative path from workspace root
    */
   getRelativePath(fullPath: string): string
-  
+
   /**
    * Get ignore rules for the workspace (from .gitignore, .rooignore, etc.)
    */
@@ -22,22 +24,29 @@ export interface IWorkspace {
    * Returns patterns with proper glob syntax (/** suffix for directories)
    */
   getGlobIgnorePatterns(): Promise<string[]>
-  
+
   /**
    * Check if a path should be ignored
    */
   shouldIgnore(path: string): Promise<boolean>
-  
+
+  /**
+   * Get the ignore service instance
+   * Provides access to unified ignore functionality for advanced use cases
+   * like directory pruning and batch filtering
+   */
+  getIgnoreService(): IgnoreService
+
   /**
    * Get workspace name
    */
   getName(): string
-  
+
   /**
    * Get all workspace folders (for multi-root workspaces)
    */
   getWorkspaceFolders(): WorkspaceFolder[]
-  
+
   /**
    * Find files matching a pattern
    */

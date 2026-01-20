@@ -141,6 +141,9 @@ function createFallbackWorkspace(workspaceRootPath: string, pathUtils: IPathUtil
 		getIgnoreRules: () => [],
 		getGlobIgnorePatterns: async () => [],
 		shouldIgnore: async () => false,
+		getIgnoreService: () => {
+			throw new Error('getIgnoreService not implemented in fallback workspace')
+		},
 		getName: () => 'outline-workspace',
 		getWorkspaceFolders: () => [],
 		findFiles: async () => []

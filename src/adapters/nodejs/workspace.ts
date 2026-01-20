@@ -3,10 +3,10 @@
  * Implements IWorkspace using Node.js file system operations
  */
 import * as path from 'path'
-import { promises as fs } from 'fs'
-import ignore from 'ignore'
 import { IWorkspace, WorkspaceFolder, IPathUtils } from '../../abstractions/workspace'
 import { IFileSystem } from '../../abstractions/core'
+import { IgnoreService } from '../../ignore/IgnoreService'
+import { IGNORE_DIRS } from '../../ignore/default-dirs'
 
 export interface NodeWorkspaceOptions {
   rootPath: string
@@ -14,52 +14,37 @@ export interface NodeWorkspaceOptions {
 }
 
 export class NodeWorkspace implements IWorkspace {
-  private rootPath: string
-  private ignoreFiles: string[]
-  private ignoreRules: string[] = []
-  private ignoreRulesLoaded = false
-  private ignoreInstance: ReturnType<typeof ignore>
+  private ignoreService: IgnoreService
+  private pathUtils: IPathUtils
 
-  // Default ignore patterns (common across all projects)
-  private static readonly DEFAULT_IGNORES = [
-    'node_modules',
-    '.git',
-    '.svn',
-    '.hg',
-    'dist',
-    'build',
-    'coverage',
-    '*.log',
-    '.env',
-    '.env.local',
-    '.DS_Store',
-    'Thumbs.db'
-  ]
+  // Default ignore patterns - using unified configuration from ignore-config
+  private static readonly DEFAULT_IGNORES = IGNORE_DIRS
 
-  constructor(private fileSystem: IFileSystem, options: NodeWorkspaceOptions) {
-    this.rootPath = options.rootPath
-    this.ignoreFiles = options.ignoreFiles || ['.gitignore', '.rooignore', '.codebaseignore']
-    this.ignoreInstance = ignore()
+  constructor(
+    private fileSystem: IFileSystem,
+    options: NodeWorkspaceOptions
+  ) {
+    this.pathUtils = new NodePathUtils()
+
+    // Create IgnoreService instance
+    this.ignoreService = new IgnoreService(fileSystem, this.pathUtils, {
+      rootPath: options.rootPath,
+      ignoreFiles: options.ignoreFiles || ['.gitignore', '.rooignore', '.codebaseignore'],
+    })
   }
 
   getRootPath(): string | undefined {
-    return this.rootPath
+    return this.ignoreService['rootPath']
   }
 
   getRelativePath(fullPath: string): string {
-    if (!this.rootPath) return fullPath
-    return path.relative(this.rootPath, fullPath)
+    const rootPath = this.getRootPath()
+    if (!rootPath) return fullPath
+    return path.relative(rootPath, fullPath)
   }
 
   getIgnoreRules(): string[] {
-    // Ensure rules are loaded before returning
-    if (!this.ignoreRulesLoaded) {
-      // Note: This is a sync method, but loadIgnoreRules is async
-      // In practice, rules should be loaded by shouldIgnore() before this is called
-      // We'll return the current rules (may be empty if not loaded yet)
-      console.warn('getIgnoreRules() called before loadIgnoreRules() - rules may be empty')
-    }
-    return this.ignoreRules
+    return this.ignoreService.getRules()
   }
 
   /**
@@ -67,9 +52,10 @@ export class NodeWorkspace implements IWorkspace {
    * Converts simple directory names to glob patterns with /** suffix
    */
   async getGlobIgnorePatterns(): Promise<string[]> {
-    await this.loadIgnoreRules()
+    await this.ignoreService.initialize()
 
-    const allIgnores = [...NodeWorkspace.DEFAULT_IGNORES, ...this.ignoreRules]
+    // Get default ignores
+    const allIgnores = [...NodeWorkspace.DEFAULT_IGNORES]
 
     // Convert to fast-glob format
     return allIgnores.map(pattern => {
@@ -87,42 +73,43 @@ export class NodeWorkspace implements IWorkspace {
   }
 
   async shouldIgnore(filePath: string): Promise<boolean> {
-    await this.loadIgnoreRules()
+    await this.ignoreService.initialize()
+    return this.ignoreService.shouldIgnore(filePath)
+  }
 
-    const relativePath = this.getRelativePath(filePath)
-
-    // Handle empty relative path (when filePath equals rootPath)
-    if (relativePath === '') {
-      return false // Root directory itself is not ignored
-    }
-
-    // Use ignore instance for proper gitignore semantics
-    this.ignoreInstance = ignore().add(NodeWorkspace.DEFAULT_IGNORES).add(this.ignoreRules)
-
-    // ignore expects paths to use forward slashes
-    const normalizedPath = relativePath.split(path.sep).join('/')
-
-    return this.ignoreInstance.ignores(normalizedPath)
+  /**
+   * Get the ignore service instance
+   * Provides access to unified ignore functionality for advanced use cases
+   */
+  getIgnoreService(): IgnoreService {
+    return this.ignoreService
   }
 
   getName(): string {
-    return path.basename(this.rootPath) || 'workspace'
+    const rootPath = this.getRootPath()
+    return rootPath ? path.basename(rootPath) || 'workspace' : 'workspace'
   }
 
   getWorkspaceFolders(): WorkspaceFolder[] {
+    const rootPath = this.getRootPath()
     return [{
       name: this.getName(),
-      uri: this.rootPath,
+      uri: rootPath || '',
       index: 0
     }]
   }
 
   async findFiles(pattern: string, exclude?: string): Promise<string[]> {
     const files: string[] = []
-    
-    await this.walkDirectory(this.rootPath, async (filePath) => {
+    const rootPath = this.getRootPath()
+
+    if (!rootPath) {
+      return files
+    }
+
+    await this.walkDirectory(rootPath, async (filePath) => {
       const relativePath = this.getRelativePath(filePath)
-      
+
       if (this.matchPattern(relativePath, pattern)) {
         if (!exclude || !this.matchPattern(relativePath, exclude)) {
           if (!(await this.shouldIgnore(filePath))) {
@@ -131,36 +118,8 @@ export class NodeWorkspace implements IWorkspace {
         }
       }
     })
-    
+
     return files
-  }
-
-  private async loadIgnoreRules(): Promise<void> {
-    if (this.ignoreRulesLoaded) return
-
-    this.ignoreRules = []
-    
-    for (const ignoreFile of this.ignoreFiles) {
-      const ignoreFilePath = path.join(this.rootPath, ignoreFile)
-      
-      try {
-        if (await this.fileSystem.exists(ignoreFilePath)) {
-          const content = await this.fileSystem.readFile(ignoreFilePath)
-          const text = new TextDecoder().decode(content)
-          const rules = text
-            .split('\n')
-            .map(line => line.trim())
-            .filter(line => line && !line.startsWith('#'))
-          
-          this.ignoreRules.push(...rules)
-        }
-      } catch (error) {
-        // Ignore errors when reading ignore files
-        console.warn(`Failed to read ignore file ${ignoreFilePath}:`, error)
-      }
-    }
-    
-    this.ignoreRulesLoaded = true
   }
 
   /**
@@ -180,11 +139,11 @@ export class NodeWorkspace implements IWorkspace {
   private async walkDirectory(dir: string, callback: (filePath: string) => Promise<void>): Promise<void> {
     try {
       const entries = await this.fileSystem.readdir(dir)
-      
+
       for (const entry of entries) {
         const fullPath = path.join(dir, entry)
         const stat = await this.fileSystem.stat(fullPath)
-        
+
         if (stat.isDirectory) {
           await this.walkDirectory(fullPath, callback)
         } else if (stat.isFile) {

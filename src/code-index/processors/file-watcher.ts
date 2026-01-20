@@ -8,9 +8,8 @@ import {
 	INITIAL_RETRY_DELAY_MS,
 } from "../constants"
 import { createHash } from "crypto"
-import { RooIgnoreController } from "../../ignore/RooIgnoreController"
+// RooIgnoreController removed - now using IgnoreService from workspace
 import { v5 as uuidv5 } from "uuid"
-import { Ignore } from "ignore"
 import { scannerExtensions } from "../shared/supported-extensions"
 import {
 	ICodeFileWatcher,
@@ -33,9 +32,7 @@ import { IWorkspace, IPathUtils } from "../../abstractions/workspace"
  * Implementation of the file watcher interface
  */
 export class FileWatcher implements ICodeFileWatcher {
-	private ignoreInstance?: Ignore
 	private fileWatcher?: fs.FSWatcher
-	private ignoreController: RooIgnoreController
 	private accumulatedEvents: Map<string, { filePath: string; type: "create" | "change" | "delete" }> = new Map()
 	private batchProcessDebounceTimer?: NodeJS.Timeout
 	private readonly BATCH_DEBOUNCE_DELAY_MS = 500
@@ -93,19 +90,13 @@ export class FileWatcher implements ICodeFileWatcher {
 		private readonly cacheManager: CacheManager,
 		private embedder?: IEmbedder,
 		private vectorStore?: IVectorStore,
-		ignoreInstance?: Ignore,
-		ignoreController?: RooIgnoreController,
 		batchSegmentThreshold?: number,
 	) {
 		this.eventBus = eventBus
 		this.fileSystem = fileSystem
 		this.workspace = workspace
 		this.pathUtils = pathUtils
-		this.ignoreController = ignoreController || new RooIgnoreController(fileSystem, workspace, pathUtils)
 		this.batchProcessor = new BatchProcessor()
-		if (ignoreInstance) {
-			this.ignoreInstance = ignoreInstance
-		}
 
 		// Get the configurable batch size from VSCode settings, fallback to default
 		// If not provided in constructor, use default value
@@ -233,7 +224,7 @@ export class FileWatcher implements ICodeFileWatcher {
 		console.log(`[FileWatcher] Processing batch of ${events.length} events`, JSON.stringify(events))
 		const batchResults: FileProcessingResult[] = []
 		let totalBlocksInBatch = 0
-		let processedBlocksInBatch = 0
+		const processedBlocksInBatch = { value: 0 }
 
 		// Prepare events with content for non-delete operations
 		const eventsWithContent: Array<{ filePath: string; type: "create" | "change" | "delete"; content?: string; newHash?: string }> = []
@@ -318,42 +309,15 @@ export class FileWatcher implements ICodeFileWatcher {
 		// Process blocks using BatchProcessor with block-level progress tracking
 		if (this.embedder && this.vectorStore && (blocksToUpsert.length > 0 || filesToDelete.length > 0)) {
 			console.log(`[FileWatcher] Processing batch of ${blocksToUpsert.length} blocks and ${filesToDelete.length} deletions`)
-			
+
 			// Process deletions first (count each deleted file as 1 block)
 			if (filesToDelete.length > 0) {
-				const relativeDeletePaths = filesToDelete.map(path => this.workspace.getRelativePath(path))
-				let overallBatchError: Error | undefined = undefined
-
-				try {
-					await this.vectorStore.deletePointsByMultipleFilePaths(relativeDeletePaths)
-					for (const filePath of filesToDelete) {
-						this.cacheManager.deleteHash(filePath)
-						batchResults.push({ path: filePath, status: "success" })
-						processedBlocksInBatch++
-
-						// Report progress after each deleted file (counted as 1 block)
-						this.eventBus.emit('batch-progress-blocks', {
-							processedBlocks: processedBlocksInBatch,
-							totalBlocks: totalBlocksInBatch,
-						})
-					}
-				} catch (error: any) {
-					const errorStatus = error?.status || error?.response?.status || error?.statusCode
-					const errorMessage = error instanceof Error ? error.message : String(error)
-
-					// Mark all paths as error
-					overallBatchError = error instanceof Error ? error : new Error(errorMessage)
-					for (const path of filesToDelete) {
-						batchResults.push({ path, status: "error", error: overallBatchError })
-						processedBlocksInBatch++
-
-						// Report progress even for failed files
-						this.eventBus.emit('batch-progress-blocks', {
-							processedBlocks: processedBlocksInBatch,
-							totalBlocks: totalBlocksInBatch,
-						})
-					}
-				}
+				await this.handleFileDeletions(
+					filesToDelete,
+					batchResults,
+					processedBlocksInBatch,
+					totalBlocksInBatch
+				)
 			}
 
 			// Process blocks to upsert
@@ -417,7 +381,7 @@ export class FileWatcher implements ICodeFileWatcher {
 					// Use BatchProcessor progress callback for block-level progress
 					onProgress: (processed, total) => {
 						this.eventBus.emit('batch-progress-blocks', {
-							processedBlocks: processedBlocksInBatch + processed,
+							processedBlocks: processedBlocksInBatch.value + processed,
 							totalBlocks: totalBlocksInBatch,
 						})
 					},
@@ -429,38 +393,16 @@ export class FileWatcher implements ICodeFileWatcher {
 
 				const result = await this.batchProcessor.processBatch(blocksToUpsert, options)
 				batchResults.push(...result.processedFiles)
-				processedBlocksInBatch += blocksToUpsert.length
+				processedBlocksInBatch.value += blocksToUpsert.length
 			}
 		} else if (this.vectorStore && filesToDelete.length > 0) {
-			console.log(`[FileWatcher] Processing batch of ${filesToDelete.length} deletions without embedder`)
-			// Handle deletions even without embedder - convert to relative paths
-			const relativeDeletePaths = filesToDelete.map(path => this.workspace.getRelativePath(path))
-			try {
-				await this.vectorStore.deletePointsByMultipleFilePaths(relativeDeletePaths)
-				for (const filePath of filesToDelete) {
-					this.cacheManager.deleteHash(filePath)
-					batchResults.push({ path: filePath, status: "success" })
-					processedBlocksInBatch++
-					
-					// Report progress after each deleted file
-					this.eventBus.emit('batch-progress-blocks', {
-						processedBlocks: processedBlocksInBatch,
-						totalBlocks: totalBlocksInBatch,
-					})
-				}
-			} catch (error) {
-				console.error("[FileWatcher] Error deleting points for files:", filesToDelete, error)
-				for (const filePath of filesToDelete) {
-					batchResults.push({ path: filePath, status: "error", error: error as Error })
-					processedBlocksInBatch++
-					
-					// Report progress even for failed files
-					this.eventBus.emit('batch-progress-blocks', {
-						processedBlocks: processedBlocksInBatch,
-						totalBlocks: totalBlocksInBatch,
-					})
-				}
-			}
+			await this.handleFileDeletions(
+				filesToDelete,
+				batchResults,
+				processedBlocksInBatch,
+				totalBlocksInBatch,
+				`[FileWatcher] Processing batch of ${filesToDelete.length} deletions without embedder`
+			)
 		}
 
 		// Finalize
@@ -472,7 +414,7 @@ export class FileWatcher implements ICodeFileWatcher {
 
 		// Final progress update
 		this.eventBus.emit('batch-progress-blocks', {
-			processedBlocks: processedBlocksInBatch,
+			processedBlocks: processedBlocksInBatch.value,
 			totalBlocks: totalBlocksInBatch,
 		})
 
@@ -485,22 +427,72 @@ export class FileWatcher implements ICodeFileWatcher {
 	}
 
 	/**
+	 * Handles deletion of multiple files from the vector store and cache
+	 * @param filesToDelete Array of absolute file paths to delete
+	 * @param batchResults Array to append processing results to
+	 * @param processedBlocksInBatch Reference to the counter of processed blocks
+	 * @param totalBlocksInBatch Total number of blocks in the batch for progress reporting
+	 * @param logMessage Optional message to log before processing
+	 */
+	private async handleFileDeletions(
+		filesToDelete: string[],
+		batchResults: FileProcessingResult[],
+		processedBlocksInBatch: { value: number },
+		totalBlocksInBatch: number,
+		logMessage?: string
+	): Promise<void> {
+		if (logMessage) {
+			console.log(logMessage)
+		}
+
+		const relativeDeletePaths = filesToDelete.map(path => this.workspace.getRelativePath(path))
+
+		try {
+			await this.vectorStore!.deletePointsByMultipleFilePaths(relativeDeletePaths)
+			for (const filePath of filesToDelete) {
+				this.cacheManager.deleteHash(filePath)
+				batchResults.push({ path: filePath, status: "success" })
+				processedBlocksInBatch.value++
+
+				// Report progress after each deleted file
+				this.eventBus.emit('batch-progress-blocks', {
+					processedBlocks: processedBlocksInBatch.value,
+					totalBlocks: totalBlocksInBatch,
+				})
+			}
+		} catch (error: any) {
+			const errorStatus = error?.status || error?.response?.status || error?.statusCode
+			const errorMessage = error instanceof Error ? error.message : String(error)
+
+			console.error("[FileWatcher] Error deleting points for files:", filesToDelete, error)
+			const processedError = error instanceof Error ? error : new Error(errorMessage)
+
+			for (const filePath of filesToDelete) {
+				batchResults.push({ path: filePath, status: "error", error: processedError })
+				processedBlocksInBatch.value++
+
+				// Report progress even for failed files
+				this.eventBus.emit('batch-progress-blocks', {
+					processedBlocks: processedBlocksInBatch.value,
+					totalBlocks: totalBlocksInBatch,
+				})
+			}
+		}
+	}
+
+	/**
 	 * Processes a file
 	 * @param filePath Path to the file to process
 	 * @returns Promise resolving to processing result
 	 */
 	async processFile(filePath: string): Promise<FileProcessingResult> {
 		try {
-			// Check if file should be ignored
-			const relativeFilePath = generateRelativeFilePath(filePath, this.workspacePath)
-			if (
-				!this.ignoreController.validateAccess(filePath) ||
-				(this.ignoreInstance && this.ignoreInstance.ignores(relativeFilePath))
-			) {
+			// Check if file should be ignored using unified IgnoreService
+			if (await this.workspace.shouldIgnore(filePath)) {
 				return {
 					path: filePath,
 					status: "skipped" as const,
-					reason: "File is ignored by .rooignore or .gitignore",
+					reason: "File is ignored",
 				}
 			}
 

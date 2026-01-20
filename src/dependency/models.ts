@@ -194,8 +194,8 @@ export interface FileFilter {
  * Analysis options
  */
 export interface AnalysisOptions {
-  includeNodeModules?: boolean
   includeTests?: boolean
+  includeNodeModules?: boolean
   maxDepth?: number
   followSymlinks?: boolean
   fileFilter?: FileFilter

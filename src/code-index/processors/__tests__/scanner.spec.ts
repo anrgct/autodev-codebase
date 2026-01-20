@@ -53,7 +53,7 @@ vi.mock("fs/promises", () => ({
 
 // VSCode mock removed - no longer needed
 
-vi.mock("../../../../core/ignore/RooIgnoreController")
+// RooIgnoreController removed - now using IgnoreService from workspace
 vi.mock("ignore")
 
 // Override the Jest-based mock with a vitest-compatible version
@@ -100,7 +100,6 @@ describe("DirectoryScanner", () => {
 	let mockVectorStore: any
 	let mockCodeParser: any
 	let mockCacheManager: any
-	let mockIgnoreInstance: any
 	let mockStats: any
 	let mockFileSystem: any
 	let mockWorkspace: any
@@ -136,9 +135,6 @@ describe("DirectoryScanner", () => {
 			initialize: vi.fn().mockResolvedValue(undefined),
 			clearCacheFile: vi.fn().mockResolvedValue(undefined),
 		}
-		mockIgnoreInstance = {
-			ignores: vi.fn().mockReturnValue(false),
-		}
 		mockFileSystem = {
 			readFile: vi.fn().mockResolvedValue(Buffer.from("test content")),
 			writeFile: vi.fn().mockResolvedValue(undefined),
@@ -170,7 +166,6 @@ describe("DirectoryScanner", () => {
 			qdrantClient: mockVectorStore,
 			codeParser: mockCodeParser,
 			cacheManager: mockCacheManager,
-			ignoreInstance: mockIgnoreInstance,
 			fileSystem: mockFileSystem,
 			workspace: mockWorkspace,
 			pathUtils: mockPathUtils,
@@ -283,9 +278,6 @@ describe("DirectoryScanner", () => {
 			// Mock workspace methods to ensure file passes all filters
 			vi.mocked(mockWorkspace.shouldIgnore).mockResolvedValue(false)
 			vi.mocked(mockWorkspace.getRelativePath).mockReturnValue("test/file1.js")
-
-			// Ensure ignore instance doesn't filter out the file
-			vi.mocked(mockIgnoreInstance.ignores).mockReturnValue(false)
 
 			// Create code blocks with content
 			const mockBlocks: any[] = [
