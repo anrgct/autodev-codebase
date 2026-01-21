@@ -73,7 +73,13 @@ export interface DependencyAnalyzerDeps {
  * @param fileSystem File system abstraction
  * @returns Git root path or null if not found
  */
-async function findGitRoot(startPath: string, fileSystem: IFileSystem): Promise<string | null> {
+/**
+ * Find git repository root by traversing up from the given path
+ * @param startPath Starting directory path
+ * @param fileSystem File system interface
+ * @returns Git root path or null if not found
+ */
+export async function findGitRoot(startPath: string, fileSystem: IFileSystem): Promise<string | null> {
   let currentPath = startPath
   const root = path.parse(currentPath).root
   

@@ -139,6 +139,9 @@ export abstract class BaseAnalyzer {
 
   async analyze(): Promise<ParseOutput> {
     try {
+      // 0. Create module node for tracking top-level calls
+      this.createModuleNode()
+
       const tree = this.parser.parse(this.content)
       const root = tree.rootNode
 
@@ -216,19 +219,22 @@ export abstract class BaseAnalyzer {
       }
     }
 
-    // Extract calls
-    if (nt.callTypes.has(node.type) && currentFunc) {
+    // Extract calls - support top-level calls by using module node as caller
+    if (nt.callTypes.has(node.type)) {
       const calleeInfo = this.extractCallInfo(node)
       if (calleeInfo) {
         // 使用 CallInfo 进行过滤判断
         if (!this.shouldFilterCall(node, calleeInfo)) {
+          // Use currentFunc if inside a function, otherwise use module node ID
+          const caller = currentFunc || this.getModuleNodeId()
+          
           // 根据调用类型决定如何传递 callee 参数
           if (calleeInfo.isGlobalCall) {
             // 全局直接调用（如 setTimeout）：尝试用 importMap 解析
-            this.addEdge(currentFunc, calleeInfo.name, node.startPosition.row + 1)
+            this.addEdge(caller, calleeInfo.name, node.startPosition.row + 1)
           } else {
             // 成员调用（如 console.log, myModule.doSomething）：直接使用完整路径
-            this.addEdge(currentFunc, calleeInfo.fullPath, node.startPosition.row + 1)
+            this.addEdge(caller, calleeInfo.fullPath, node.startPosition.row + 1)
           }
         }
       }
@@ -303,6 +309,48 @@ export abstract class BaseAnalyzer {
     }
     this.nodes.set(nodeId, nodeObj)
     this.topLevelNodes.set(nodeId, nodeObj)
+  }
+
+  /**
+   * Create a module node representing the file itself.
+   * Used for tracking top-level calls that are not inside any function/class/method.
+   */
+  protected createModuleNode(): void {
+    const moduleId = this.getModuleNodeId()
+    
+    // Get the file name without path
+    const fileName = this.filePath.split('/').pop() || this.filePath
+    
+    // Remove file extension from name for consistency with other node types
+    // (function/class/method names don't include extensions either)
+    let moduleName = fileName
+    for (const ext of this.getFileExtensions()) {
+      if (fileName.endsWith(ext)) {
+        moduleName = fileName.slice(0, -ext.length)
+        break
+      }
+    }
+    
+    const moduleNode: DependencyNode = {
+      id: moduleId,
+      name: moduleName,
+      componentType: 'module',
+      filePath: this.filePath,
+      relativePath: this.getRelativePath(),
+      startLine: 1,
+      endLine: this.lines.length,
+      dependsOn: new Set(),
+      language: this.getLanguageName(),
+    }
+    this.nodes.set(moduleId, moduleNode)
+  }
+
+  /**
+   * Get the module node ID for this file.
+   * Used when tracking top-level calls (where currentFunc is null).
+   */
+  protected getModuleNodeId(): string {
+    return this.getModulePath()
   }
 
   protected addEdge(caller: string, calleeName: string, line: number): void {
@@ -591,13 +639,24 @@ export abstract class BaseAnalyzer {
   /**
    * Extract call information from a call node
    * Supports both global calls (setTimeout) and member calls (console.log, api.client.fetch)
+   * Also supports new expressions (new UserManager())
    */
   protected extractCallInfo(node: Parser.SyntaxNode): CallInfo | null {
     if (node.children.length === 0) return null
 
-    const callee = node.children[0]
+    // Handle new_expression: new UserManager()
+    // In new_expression, the constructor is in the 'constructor' field
+    let callee: Parser.SyntaxNode
+    if (node.type === 'new_expression') {
+      const constructorNode = node.childForFieldName('constructor')
+      if (!constructorNode) return null
+      callee = constructorNode
+    } else {
+      // For call_expression, the callee is the first child
+      callee = node.children[0]
+    }
 
-    // 全局直接调用: setTimeout()
+    // 全局直接调用: setTimeout(), new UserManager()
     if (callee.type === this.nodeTypes.identifierType) {
       const name = this.getNodeText(callee)
       return {

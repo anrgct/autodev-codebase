@@ -456,9 +456,155 @@ console.log('Ready');               // ❌ 自动过滤（内置函数）
 
 **下一步：** 实施核心代码修改和测试验证
 
+### 2026-01-21：核心实现完成
+
+**阶段：** 代码实施与测试验证
+
+**活动：**
+
+1. **核心代码修改**（已完成）
+   - 在 `base.ts:141` 添加 `createModuleNode()` 调用
+   - 实现 `createModuleNode()` 方法（`base.ts:310-333`）
+   - 实现 `getModuleNodeId()` 辅助方法（`base.ts:335-341`）
+   - 修改 `traverseForCalls()` 支持顶层调用（`base.ts:221-241`）
+   - 修复 `extractCallInfo()` 支持 `new_expression`（`base.ts:633-673`）
+
+2. **测试验证**（已完成）
+   - 创建单元测试文件 `src/dependency/__tests__/top-level-calls.test.ts`
+   - 编写 12 个测试用例，覆盖：
+     - Module 节点创建
+     - 顶层函数调用追踪
+     - 构造器调用（`new` 表达式）
+     - 内置函数过滤
+     - TypeScript 支持
+     - 边界情况处理
+   - **测试结果**：12/12 通过 ✅
+
+3. **集成测试验证**（已完成）
+   - 测试 `demo/app.js`（main 函数已注释）
+   - **结果**：
+     - 创建 1 个 module 节点：`demo/app`
+     - 追踪 7 条边：
+       - `UserManager` (构造器)
+       - `greetUser`
+       - `userManager.addUser` (×3)
+       - `userManager.getUsers`
+       - `allUsers.forEach`
+   - **验证通过** ✅
+
+**关键修复：**
+
+在实施过程中发现 `new_expression` 未被追踪，原因是 `extractCallInfo()` 方法只处理 `call_expression`。通过以下修改修复：
+
+```typescript
+// 修复前：只获取 children[0]
+const callee = node.children[0]
+
+// 修复后：处理 new_expression
+if (node.type === 'new_expression') {
+  const constructorNode = node.childForFieldName('constructor')
+  if (!constructorNode) return null
+  callee = constructorNode
+} else {
+  callee = node.children[0]
+}
+```
+
+**测试覆盖率：**
+- ✅ Module 节点创建
+- ✅ 顶层函数调用
+- ✅ 顶层构造器调用（`new` 表达式）
+- ✅ 顶层成员方法调用
+- ✅ 内置函数过滤（`console.log`、`setTimeout` 等）
+- ✅ 函数内调用与顶层调用的区分
+- ✅ 空文件和无调用文件的处理
+
+**下一步：** 更新文档，记录 module 节点类型和顶层调用支持
+
 ## 修订记录
 
-无
+### 2026-01-21：改进 `--clear-cache` 的用户反馈
+
+**问题：**
+- `--clear-cache` 选项在默认日志级别（`error`）下没有任何输出
+- 用户不知道缓存是否真的被清除了
+
+**修改：**
+1. 使用 `console.log()` 替代 `logger.info()` 确保消息始终显示
+2. 获取清除前的缓存统计信息并显示
+3. 提供友好的格式化输出
+
+**输出示例：**
+```bash
+# 有缓存时
+✓ Dependency cache cleared successfully
+  Repository: /Users/user/project
+  Cached files cleared: 4/4
+
+# 空缓存时
+✓ Dependency cache cleared successfully
+  Repository: /Users/user/project
+  (Cache was empty)
+```
+
+**影响：**
+- ✅ 用户操作有明确反馈
+- ✅ 显示清除的缓存文件数量
+- ✅ 显示仓库路径，便于确认操作的项目
+
+### 2026-01-21：统一 module 节点的 name 字段格式
+
+**问题：** 
+- module 节点的 `name` 字段包含文件扩展名（如 `app.js`）
+- 其他节点类型（function/class/method）的 `name` 都不包含扩展名
+- 导致查询时不一致：`--query="app"` 无法匹配 `app.js` 模块
+
+**修改：**
+1. 修改 `createModuleNode()` 方法（`src/dependency/analyzers/base.ts:320-336`）
+   - 在设置 `name` 字段前移除文件扩展名
+   - 保持与其他节点类型的一致性
+   
+2. 更新测试用例（`src/dependency/__tests__/top-level-calls.test.ts`）
+   - 修改断言：`expect(moduleNode?.name).toBe('app')` 而非 `'app.js'`
+   - 添加注释说明一致性原则
+
+**理由：**
+- **统一性优先**：所有节点的 `name` 字段都应该是"简短标识符"，不包含路径或扩展名
+- **查询体验更好**：用户输入 `--query="app"` 就能匹配 `app.js` 模块
+- **完整信息不丢失**：`filePath` 和 `relativePath` 字段保留完整路径信息
+
+**影响：**
+- ✅ 查询体验提升：`--query="app"` 可以匹配 `demo/app` 模块
+- ✅ 数据模型更一致：所有节点 `name` 字段格式统一
+- ✅ 测试全部通过：12/12 测试用例通过
+
+### 2026-01-21：添加 `--clear-cache` 选项
+
+**问题：** 在开发过程中发现缓存了旧的分析结果（没有 module 节点），导致新功能无法生效。
+
+**修改：**
+1. 导出 `findGitRoot()` 函数（`src/dependency/index.ts:76`）
+   - 从私有函数改为公开导出
+   - 添加 JSDoc 文档说明
+   
+2. 为 `call` 命令添加 `--clear-cache` 选项（`src/commands/call.ts`）
+   - 添加选项定义：`.option('--clear-cache', 'Clear dependency analysis cache')`
+   - 实现清除逻辑：复用 `analyze()` 函数的 repo path 确定策略
+   - 优先级：Git root → Workspace root → Start path
+
+**使用方法：**
+```bash
+# 清除依赖分析缓存
+npx tsx src/cli.ts call --clear-cache
+
+# 查看详细日志
+npx tsx src/cli.ts call --clear-cache --log-level=info
+```
+
+**影响：**
+- ✅ 用户可以方便地清除缓存
+- ✅ 调试依赖分析器时更方便
+- ✅ 与 `index`/`outline` 命令的 `--clear-cache` 保持一致
 
 ## 总结
 

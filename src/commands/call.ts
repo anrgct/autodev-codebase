@@ -272,6 +272,78 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
   // Resolve workspace path (working directory)
   const workspacePath = resolveWorkspacePath(options.path, options.demo);
 
+  // Handle --clear-cache
+  if (options.clearCache) {
+    logger.info('Clearing dependency analysis cache...');
+    
+    // Determine repository root (same logic as analyze function)
+    const { createNodeDependencies } = await import('../adapters/nodejs');
+    const fullDeps = createNodeDependencies({
+      workspacePath: workspacePath,
+      storageOptions: {
+        globalStoragePath: options.storage || process.cwd(),
+      },
+      loggerOptions: {
+        name: 'Call-CLI',
+        level: options.logLevel,
+        timestamps: true,
+      },
+    });
+    
+    // Determine path to check (same logic as analyze)
+    const pathToCheck = targetPath 
+      ? (path.isAbsolute(targetPath) ? targetPath : path.join(workspacePath, targetPath))
+      : workspacePath;
+    
+    const stat = await fullDeps.fileSystem.stat(pathToCheck);
+    const isFile = stat?.isFile ?? false;
+    const startPath = isFile ? fullDeps.pathUtils.dirname(pathToCheck) : pathToCheck;
+    
+    // Priority 1: Use Git repository root
+    const { findGitRoot } = await import('../dependency/index');
+    const gitRoot = await findGitRoot(startPath, fullDeps.fileSystem);
+    
+    let repoPath: string;
+    if (gitRoot) {
+      repoPath = gitRoot;
+    } else {
+      // Priority 2: Use workspace root if available
+      const workspaceRoot = fullDeps.workspace?.getRootPath();
+      if (workspaceRoot) {
+        repoPath = workspaceRoot;
+      } else {
+        // Priority 3: Fall back to start path
+        repoPath = startPath;
+      }
+    }
+    
+    // Create cache manager and clear
+    const { DependencyCacheManager } = await import('../dependency/cache-manager');
+    const cacheManager = new DependencyCacheManager(
+      repoPath, 
+      fullDeps.fileSystem, 
+      options.cache
+    );
+    await cacheManager.initialize();
+    
+    // Get cache stats before clearing
+    const statsBefore = cacheManager.getStats();
+    
+    await cacheManager.clearCache();
+    
+    // Always show success message (not just in info mode)
+    console.log('\n✓ Dependency cache cleared successfully');
+    console.log(`  Repository: ${repoPath}`);
+    if (statsBefore.totalFiles > 0) {
+      console.log(`  Cached files cleared: ${statsBefore.cachedFiles}/${statsBefore.totalFiles}`);
+    } else {
+      console.log('  (Cache was empty)');
+    }
+    console.log('');
+    
+    return;
+  }
+
   // Determine the path to analyze (relative to workspace or absolute)
   let pathToAnalyze: string;
   if (targetPath) {
@@ -394,6 +466,7 @@ export function createCallCommand(): Command {
     .option('--query <names>', 'Query dependencies for specific names (comma-separated)')
     .option('--depth <number>', 'Query depth for dependency traversal', '10')
     .option('--json', 'Output query results in JSON format')
+    .option('--clear-cache', 'Clear dependency analysis cache')
     .option('--log-level <level>', 'Log level: debug|info|warn|error', 'error')
     .option('--storage <path>', 'Custom storage path')
     .option('--cache <path>', 'Custom cache path')
