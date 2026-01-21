@@ -49,7 +49,7 @@ describe('Cache E2E Performance Test', () => {
 
     // First analysis (cache miss)
     const start1 = Date.now()
-    const result1 = await analyze(tempProjectDir, deps, 100, {
+    const result1 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })
@@ -62,7 +62,7 @@ describe('Cache E2E Performance Test', () => {
 
     // Second analysis (cache hit)
     const start2 = Date.now()
-    const result2 = await analyze(tempProjectDir, deps, 100, {
+    const result2 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })
@@ -87,7 +87,7 @@ describe('Cache E2E Performance Test', () => {
     }
 
     // First analysis
-    const result1 = await analyze(tempProjectDir, deps, 100, {
+    const result1 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })
@@ -104,7 +104,7 @@ describe('Cache E2E Performance Test', () => {
     await fs.writeFile(testFile, newContent)
 
     // Second analysis (cache should be invalidated for modified file)
-    const result2 = await analyze(tempProjectDir, deps, 100, {
+    const result2 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })

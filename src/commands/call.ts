@@ -4,11 +4,13 @@
  * Analyze code dependencies and generate visualization data
  */
 import { Command } from 'commander';
+import * as path from 'path';
 import {
   CommandOptions,
   resolveWorkspacePath,
   initGlobalLogger,
-  getLogger
+  getLogger,
+  ensureDemoFiles
 } from './shared';
 import {
   analyze,
@@ -23,8 +25,6 @@ import {
   type ConnectionAnalysisResult,
   type QueryOptions
 } from '../dependency';
-import { NodeFileSystem } from '../adapters/nodejs/file-system';
-import { NodePathUtils } from '../adapters/nodejs/workspace';
 import { promises as fs } from 'fs';
 import open from 'open';
 
@@ -38,6 +38,9 @@ type AnalysisResult = Awaited<ReturnType<typeof analyze>>;
  */
 function displaySummary(result: AnalysisResult): void {
   const { summary, nodes, relationships, cycles } = result;
+
+  // Maximum number of examples to display for each category
+  const MAX_EXAMPLES = 20;
 
   // Count component types
   const componentTypes = new Map<string, number>();
@@ -64,10 +67,14 @@ function displaySummary(result: AnalysisResult): void {
     moduleDeps.set(displayPath, count + node.dependsOn.size);
   }
 
+  // Classify edges by resolution status
+  const resolvedEdges = relationships.filter(edge => edge.isResolved);
+  const unresolvedEdges = relationships.filter(edge => !edge.isResolved);
+
   // Get top modules by dependencies
   const topModules = Array.from(moduleDeps.entries())
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
+    .slice(0, MAX_EXAMPLES)
     .filter(([_, count]) => count > 0);
 
   // Output summary
@@ -79,11 +86,22 @@ function displaySummary(result: AnalysisResult): void {
   console.log(`Languages:     ${summary.languages.join(', ')}`);
   console.log(`Cycles:        ${cycles.length}`);
 
-  // Component types
+  // Component types with examples
   if (componentTypes.size > 0) {
     console.log('\nComponent Types:');
     for (const [type, count] of Array.from(componentTypes.entries()).sort((a, b) => b[1] - a[1])) {
-      console.log(`  - ${type}: ${count}`);
+      console.log(`  - ${type}: ${count} nodes`);
+
+      // Get up to 5 examples of this component type
+      const examples = Array.from(nodes.entries())
+        .filter(([_, node]) => node.componentType === type)
+        .slice(0, MAX_EXAMPLES);
+
+      if (examples.length > 0) {
+        for (const [id, _] of examples) {
+          console.log(`      • ${id}`);
+        }
+      }
     }
   }
 
@@ -92,6 +110,24 @@ function displaySummary(result: AnalysisResult): void {
     console.log('\nTop modules by dependencies:');
     for (const [module, count] of topModules) {
       console.log(`  - ${module} (${count} deps)`);
+    }
+  }
+
+  // Edge/Relationship statistics
+  console.log('\nRelationship Types:');
+  console.log(`  - Resolved edges: ${resolvedEdges.length} edges`);
+  if (resolvedEdges.length > 0) {
+    for (const edge of resolvedEdges.slice(0, MAX_EXAMPLES)) {
+      const lineInfo = edge.callLine ? `:${edge.callLine}` : '';
+      console.log(`      • ${edge.caller} → ${edge.callee}${lineInfo}`);
+    }
+  }
+
+  console.log(`  - Unresolved edges: ${unresolvedEdges.length} edges`);
+  if (unresolvedEdges.length > 0) {
+    for (const edge of unresolvedEdges.slice(0, MAX_EXAMPLES)) {
+      const lineInfo = edge.callLine ? `:${edge.callLine}` : '';
+      console.log(`      • ${edge.caller} → ${edge.callee}${lineInfo}`);
     }
   }
 
@@ -233,20 +269,53 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
   initGlobalLogger(options.logLevel);
   const logger = getLogger();
 
-  // Default to current directory if no path provided
-  const pathToAnalyze = targetPath || '.';
+  // Resolve workspace path (working directory)
+  const workspacePath = resolveWorkspacePath(options.path, options.demo);
 
-  // Resolve target path
-  const resolvedPath = resolveWorkspacePath(pathToAnalyze, options.demo);
-  logger.debug(`Analyzing path: ${resolvedPath}`);
+  // Determine the path to analyze (relative to workspace or absolute)
+  let pathToAnalyze: string;
+  if (targetPath) {
+    // If targetPath is provided, it's relative to workspace (or absolute)
+    if (path.isAbsolute(targetPath)) {
+      pathToAnalyze = targetPath;
+    } else {
+      pathToAnalyze = path.join(workspacePath, targetPath);
+    }
+  } else {
+    // No targetPath means analyze the entire workspace
+    pathToAnalyze = workspacePath;
+  }
 
-  // Create dependencies
-  const fileSystem = new NodeFileSystem();
-  const pathUtils = new NodePathUtils();
-  const deps: DependencyAnalyzerDeps = { fileSystem, pathUtils };
+  logger.debug(`Workspace: ${workspacePath}`);
+  logger.debug(`Analyzing path: ${pathToAnalyze}`);
 
-  // Determine max files (can be configured later)
-  const maxFiles = 100;
+  // Create dependencies with workspace (like index/outline commands)
+  // This ensures IgnoreService uses the correct rootPath
+  const { createNodeDependencies } = await import('../adapters/nodejs');
+  const fullDeps = createNodeDependencies({
+    workspacePath: workspacePath,
+    storageOptions: {
+      globalStoragePath: options.storage || process.cwd(),
+    },
+    loggerOptions: {
+      name: 'Call-CLI',
+      level: options.logLevel,
+      timestamps: true,
+      colors: true,
+    },
+    configOptions: options.config ? { configPath: options.config } : {},
+  });
+
+  // Create demo files if requested
+  if (options.demo) {
+    await ensureDemoFiles(workspacePath, fullDeps.fileSystem);
+  }
+
+  const deps: DependencyAnalyzerDeps = {
+    fileSystem: fullDeps.fileSystem,
+    pathUtils: fullDeps.pathUtils,
+    workspace: fullDeps.workspace,
+  };
 
   // Determine output mode
   const hasOutput = !!options.output;
@@ -256,7 +325,7 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
   try {
     // Perform analysis
     logger.info('Analyzing dependencies...');
-    const result = await analyze(resolvedPath, deps, maxFiles, {
+    const result = await analyze(pathToAnalyze, deps, {
       enableCache: true,
       cacheBaseDir: options.cache,
     });

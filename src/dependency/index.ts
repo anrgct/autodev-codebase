@@ -4,6 +4,7 @@
  * 用最少的代码解决依赖分析问题
  * 独立管理 tree-sitter Parser，复用现有 WASM 文件
  */
+import * as path from 'path'
 import type { IFileSystem } from '../abstractions/core'
 import type { IPathUtils, IWorkspace } from '../abstractions/workspace'
 import type {
@@ -66,13 +67,34 @@ export interface DependencyAnalyzerDeps {
 }
 
 /**
+ * Find the Git repository root by walking up from the given path
+ * 
+ * @param startPath Starting directory path
+ * @param fileSystem File system abstraction
+ * @returns Git root path or null if not found
+ */
+async function findGitRoot(startPath: string, fileSystem: IFileSystem): Promise<string | null> {
+  let currentPath = startPath
+  const root = path.parse(currentPath).root
+  
+  while (currentPath !== root) {
+    const gitPath = path.join(currentPath, '.git')
+    if (await fileSystem.exists(gitPath)) {
+      return currentPath
+    }
+    currentPath = path.dirname(currentPath)
+  }
+  
+  return null
+}
+
+/**
  * 主入口：分析代码依赖（自动支持文件和目录）
  *
  * 支持语言: TypeScript, JavaScript, Python, Java, C, C++, C#, Rust, Go
  *
  * @param targetPath 文件或目录路径
  * @param deps 依赖注入
- * @param maxFiles 最大分析文件数
  * @param options 分析选项（包括缓存配置）
  * @returns 依赖分析结果
  *
@@ -80,7 +102,7 @@ export interface DependencyAnalyzerDeps {
  * ```typescript
  * const deps = { fileSystem, pathUtils }
  * // 分析目录（启用缓存）
- * const dirResult = await analyze('/path/to/project', deps, 100, { enableCache: true })
+ * const dirResult = await analyze('/path/to/project', deps, { enableCache: true })
  * // 分析单个文件
  * const fileResult = await analyze('/path/to/file.ts', deps)
  * console.log(`发现 ${fileResult.summary.totalNodes} 个组件`)
@@ -89,7 +111,6 @@ export interface DependencyAnalyzerDeps {
 export async function analyze(
   targetPath: string,
   deps: DependencyAnalyzerDeps,
-  maxFiles: number = 100,
   options?: AnalysisOptions
 ): Promise<DependencyResult> {
   const { fileSystem, pathUtils, workspace } = deps
@@ -102,12 +123,27 @@ export async function analyze(
   const enableCache = options?.enableCache ?? true
   let cacheManager: DependencyCacheManager | undefined
 
-  // Determine repository root
+  // Determine repository root with fallback chain:
+  // 1. Git root (highest priority - ensures same repo shares cache)
+  // 2. Workspace root (fallback for non-git projects)
+  // 3. Target path (final fallback)
   let repoPath: string
-  if (isTargetFile) {
-    repoPath = pathUtils.dirname(targetPath)
+  
+  const startPath = isTargetFile ? pathUtils.dirname(targetPath) : targetPath
+  const gitRoot = await findGitRoot(startPath, fileSystem)
+  
+  if (gitRoot) {
+    // Priority 1: Use Git repository root
+    repoPath = gitRoot
   } else {
-    repoPath = targetPath
+    // Priority 2: Use workspace root if available
+    const workspaceRoot = workspace?.getRootPath()
+    if (workspaceRoot) {
+      repoPath = workspaceRoot
+    } else {
+      // Priority 3: Fall back to target path
+      repoPath = startPath
+    }
   }
 
   if (enableCache) {
@@ -444,7 +480,6 @@ export class DependencyAnalysisService {
   async analyzeLocalRepository(
     repoPath: string,
     options: {
-      maxFiles?: number
       languages?: string[] // 未来扩展：按语言过滤
       enableCache?: boolean
       cacheBaseDir?: string
@@ -454,7 +489,7 @@ export class DependencyAnalysisService {
     relationships: DependencyEdge[]
     summary: DependencySummary
   }> {
-    const result = await analyze(repoPath, this.deps, options.maxFiles, {
+    const result = await analyze(repoPath, this.deps, {
       enableCache: options.enableCache,
       cacheBaseDir: options.cacheBaseDir,
     })

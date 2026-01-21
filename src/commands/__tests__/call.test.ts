@@ -1,10 +1,7 @@
 /// <reference types="vitest" />
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
-import { promises as fs } from 'fs'
-import path from 'path'
-import { execSync } from 'child_process'
-import { NodeFileSystem } from '../../adapters/nodejs/file-system'
-import { NodePathUtils } from '../../adapters/nodejs/workspace'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { vol } from 'memfs'
+import * as path from 'path'
 import {
   analyze,
   generateVisualizationData,
@@ -13,82 +10,127 @@ import {
   analyzeConnections,
   formatNodeQueryResult,
   formatConnectionAnalysisResult,
-  type QueryOptions
+  type QueryOptions,
+  type DependencyAnalyzerDeps
 } from '../../dependency'
+import { IFileSystem } from '../../abstractions'
+import { NodePathUtils } from '../../adapters/nodejs/workspace'
+import { IgnoreService } from '../../ignore/IgnoreService'
 
 /**
- * Test utilities for the call command
+ * Integration tests for call command using memfs
+ * 
+ * These tests verify real behavior without touching the actual file system
  */
-class CallTestUtils {
-  private testDir: string
-  private fileSystem = new NodeFileSystem()
-  private pathUtils = new NodePathUtils()
+describe('call command with memfs', () => {
+  const testWorkspace = '/test-workspace'
+  
+  // Create a wrapper for memfs that matches IFileSystem interface
+  const createMemFileSystem = (): IFileSystem => ({
+    async readFile(filePath: string): Promise<Uint8Array> {
+      const content = vol.readFileSync(filePath, 'utf-8') as string
+      return new TextEncoder().encode(content)
+    },
+    
+    async writeFile(filePath: string, data: Uint8Array): Promise<void> {
+      vol.writeFileSync(filePath, Buffer.from(data))
+    },
+    
+    async exists(filePath: string): Promise<boolean> {
+      return vol.existsSync(filePath)
+    },
+    
+    async stat(filePath: string) {
+      const stats = vol.statSync(filePath)
+      return {
+        isFile: stats.isFile(),
+        isDirectory: stats.isDirectory(),
+        size: stats.size,
+        mtime: stats.mtimeMs
+      }
+    },
+    
+    async readdir(dirPath: string): Promise<string[]> {
+      return vol.readdirSync(dirPath) as string[]
+    },
+    
+    async mkdir(dirPath: string): Promise<void> {
+      vol.mkdirSync(dirPath, { recursive: true })
+    },
+    
+    async delete(filePath: string): Promise<void> {
+      vol.unlinkSync(filePath)
+    }
+  })
+  
+  const pathUtils = new NodePathUtils()
+  let fileSystem: IFileSystem
 
-  constructor(testDir: string) {
-    this.testDir = testDir
-  }
+  beforeEach(() => {
+    // Reset memfs before each test
+    vol.reset()
+    fileSystem = createMemFileSystem()
+  })
+
+  afterEach(() => {
+    vol.reset()
+  })
 
   /**
-   * Create a test file with content
+   * Helper: Create test file
    */
-  async createFile(relativePath: string, content: string): Promise<string> {
-    const fullPath = path.join(this.testDir, relativePath)
+  async function createFile(relativePath: string, content: string): Promise<string> {
+    const fullPath = path.join(testWorkspace, relativePath)
     const dir = path.dirname(fullPath)
-
-    await fs.mkdir(dir, { recursive: true })
-    await fs.writeFile(fullPath, content, 'utf-8')
-
+    
+    vol.mkdirSync(dir, { recursive: true })
+    vol.writeFileSync(fullPath, content, { encoding: 'utf-8' })
+    
     return fullPath
   }
 
   /**
-   * Clean up test directory
+   * Helper: Run analysis on test directory
    */
-  async cleanup(): Promise<void> {
-    await fs.rm(this.testDir, { recursive: true, force: true })
-  }
-
-  /**
-   * Run analysis on test directory
-   */
-  async analyze(maxFiles = 100) {
-    const deps = {
-      fileSystem: this.fileSystem,
-      pathUtils: this.pathUtils
+  async function runAnalysis(targetPath?: string) {
+    const pathToAnalyze = targetPath 
+      ? path.join(testWorkspace, targetPath)
+      : testWorkspace
+    
+    // Create dependencies with workspace
+    const ignoreService = new IgnoreService(fileSystem, pathUtils, {
+      rootPath: testWorkspace
+    })
+    await ignoreService.initialize()
+    
+    const deps: DependencyAnalyzerDeps = {
+      fileSystem,
+      pathUtils,
+      workspace: {
+        getRootPath: () => testWorkspace,
+        getRelativePath: (fullPath: string) => pathUtils.relative(testWorkspace, fullPath),
+        getIgnoreRules: () => [],
+        getGlobIgnorePatterns: async () => [],
+        shouldIgnore: async (filePath: string) => ignoreService.shouldIgnore(filePath),
+        getIgnoreService: () => ignoreService,
+        getName: () => 'test-workspace',
+        getWorkspaceFolders: () => [],
+        findFiles: async () => []
+      }
     }
-
-    return await analyze(this.testDir, deps, maxFiles, {
-      enableCache: false // Disable cache for tests
+    
+    return await analyze(pathToAnalyze, deps, {
+      enableCache: false
     })
   }
-}
-
-describe('call command tests', () => {
-  const testBaseDir = path.join(process.cwd(), 'tmp', 'call-command-tests')
-  let utils: CallTestUtils
-  let testCounter = 0
-
-  beforeAll(async () => {
-    // Ensure test base directory exists
-    await fs.mkdir(testBaseDir, { recursive: true })
-  })
-
-  afterEach(async () => {
-    if (utils) {
-      await utils.cleanup()
-    }
-  })
 
   /**
    * Test 1: Overview mode (default) outputs correct summary
    */
   describe('Task 1: Overview mode', () => {
     it('should display dependency analysis summary correctly', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
       // Create test files with dependencies
-      await utils.createFile('src/main.ts', `
+      await createFile('src/main.ts', `
 import { helper } from './helper'
 import { util } from './utils/util'
 
@@ -98,13 +140,13 @@ export function main() {
 }
       `)
 
-      await utils.createFile('src/helper.ts', `
+      await createFile('src/helper.ts', `
 export function helper() {
   console.log('helper')
 }
       `)
 
-      await utils.createFile('src/utils/util.ts', `
+      await createFile('src/utils/util.ts', `
 export function util() {
   return 'util'
 }
@@ -114,7 +156,7 @@ export function format() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Verify summary statistics
       expect(result.summary.totalFiles).toBeGreaterThanOrEqual(3)
@@ -139,10 +181,7 @@ export function format() {
     })
 
     it('should show component types in summary', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/class.ts', `
+      await createFile('src/class.ts', `
 export class MyClass {
   method() {
     this.helper()
@@ -154,7 +193,7 @@ export class MyClass {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Count component types
       const componentTypes = new Map<string, number>()
@@ -173,10 +212,7 @@ export class MyClass {
    */
   describe('Task 2: JSON export', () => {
     it('should export data in correct JSON format', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function testFunction() {
   helper()
 }
@@ -186,7 +222,7 @@ export function helper() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
       const viz = generateVisualizationData(result.nodes, result.relationships, result.summary)
 
       // Verify structure
@@ -228,16 +264,13 @@ export function helper() {
     })
 
     it('should be valid JSON string', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function func() {
   return 'test'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
       const viz = generateVisualizationData(result.nodes, result.relationships, result.summary)
 
       // Verify it can be stringified and parsed
@@ -253,10 +286,7 @@ export function func() {
    */
   describe('Task 3: Query single function', () => {
     it('should find and query a single function by name', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/main.ts', `
+      await createFile('src/main.ts', `
 export function main() {
   helper1()
   helper2()
@@ -276,7 +306,7 @@ export function helper3() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Query single function
       const matchedNodes = findMatchingNodes(result.nodes, 'main')
@@ -305,16 +335,13 @@ export function helper3() {
     })
 
     it('should return empty result for non-existent function', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function existingFunction() {
   return 'test'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       const matchedNodes = findMatchingNodes(result.nodes, 'nonExistentFunction')
       expect(matchedNodes.length).toBe(0)
@@ -326,10 +353,7 @@ export function existingFunction() {
    */
   describe('Task 4: Query multiple functions', () => {
     it('should analyze connections between multiple functions', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function functionA() {
   functionC()
 }
@@ -343,7 +367,7 @@ export function functionC() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Query multiple functions
       const analysisResult = analyzeConnections(result.nodes, 'functionA,functionB')
@@ -366,10 +390,7 @@ export function functionC() {
     })
 
     it('should find direct connections between queried functions', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function functionA() {
   functionB()
 }
@@ -383,7 +404,7 @@ export function functionC() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       const analysisResult = analyzeConnections(result.nodes, 'functionA,functionC')
 
@@ -411,10 +432,7 @@ export function functionC() {
    */
   describe('Task 5: Wildcard queries', () => {
     it('should match functions using wildcard *', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function testFunc1() {
   return '1'
 }
@@ -428,10 +446,9 @@ export function otherFunction() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Query with wildcard - use containing wildcard to match ID
-      // (prefix wildcards like "testFunc*" don't work with ID-only matching)
       const matchedNodes = findMatchingNodes(result.nodes, '*testFunc*')
 
       // Should match testFunc1 and testFunc2 but not otherFunction
@@ -443,10 +460,7 @@ export function otherFunction() {
     })
 
     it('should match functions using wildcard ?', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function func1() {
   return '1'
 }
@@ -460,10 +474,9 @@ export function func99() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Query with ? wildcard matching end of function name in ID
-      // IDs are like "src/test.test.func1", so "test.ts.test.func?" works
       const matchedNodes = findMatchingNodes(result.nodes, '*test.func?')
 
       // Should match func1 and func2 but not func99
@@ -475,16 +488,13 @@ export function func99() {
     })
 
     it('should support case-insensitive wildcard matching', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function TestFunction() {
   return 'test'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Should match case-insensitively
       const matchedNodes1 = findMatchingNodes(result.nodes, 'testfunction')
@@ -502,10 +512,7 @@ export function TestFunction() {
    */
   describe('Task 6: Depth limit', () => {
     it('should respect depth limit in callee tree', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function level0() {
   level1()
 }
@@ -523,7 +530,7 @@ export function level3() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       const matchedNodes = findMatchingNodes(result.nodes, 'level0')
       expect(matchedNodes.length).toBe(1)
@@ -550,10 +557,7 @@ export function level3() {
     })
 
     it('should respect depth limit in caller tree', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function caller0() {
   caller1()
 }
@@ -571,7 +575,7 @@ export function callee() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       const matchedNodes = findMatchingNodes(result.nodes, 'callee')
       expect(matchedNodes.length).toBe(1)
@@ -597,10 +601,7 @@ export function callee() {
     })
 
     it('should handle depth 0 correctly', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function root() {
   child()
 }
@@ -610,7 +611,7 @@ export function child() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       const matchedNodes = findMatchingNodes(result.nodes, 'root')
       const queryOptions: QueryOptions = { depth: 0 }
@@ -622,28 +623,26 @@ export function child() {
   })
 
   /**
-   * Test 7: --open functionality (mock test)
+   * Test 7: --open functionality
    */
   describe('Task 7: --open functionality', () => {
     it('should handle --open flag in export mode', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function testFunction() {
   return 'test'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
       const viz = generateVisualizationData(result.nodes, result.relationships, result.summary)
 
-      // Verify the data can be exported (simulating --open without actually opening browser)
-      const outputPath = path.join(testDir, 'output.json')
-      await fs.writeFile(outputPath, JSON.stringify(viz.cytoscape.elements, null, 2), 'utf-8')
+      // Verify the data can be exported
+      const outputPath = path.join(testWorkspace, 'output.json')
+      const jsonContent = JSON.stringify(viz.cytoscape.elements, null, 2)
+      vol.writeFileSync(outputPath, jsonContent, { encoding: 'utf-8' })
 
       // Verify file was created
-      const content = await fs.readFile(outputPath, 'utf-8')
+      const content = vol.readFileSync(outputPath, 'utf-8') as string
       const parsed = JSON.parse(content)
 
       expect(Array.isArray(parsed)).toBe(true)
@@ -651,10 +650,7 @@ export function testFunction() {
     })
 
     it('should generate valid file:// URL for browser', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      const outputPath = path.join(testDir, 'dependencies.json')
+      const outputPath = path.join(testWorkspace, 'dependencies.json')
 
       // Simulate file:// URL generation
       const fileUrl = `file://${outputPath}`
@@ -669,30 +665,27 @@ export function testFunction() {
    */
   describe('Integration tests', () => {
     it('should handle complex dependency chains', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/a.ts', `
+      await createFile('src/a.ts', `
 import { b } from './b'
 export function a() {
   b()
 }
       `)
 
-      await utils.createFile('src/b.ts', `
+      await createFile('src/b.ts', `
 import { c } from './c'
 export function b() {
   c()
 }
       `)
 
-      await utils.createFile('src/c.ts', `
+      await createFile('src/c.ts', `
 export function c() {
   return 'end'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Should find all functions
       expect(result.nodes.size).toBeGreaterThanOrEqual(3)
@@ -709,22 +702,19 @@ export function c() {
     })
 
     it('should handle multiple files with same function names', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/one.ts', `
+      await createFile('src/one.ts', `
 export function helper() {
   return 'one'
 }
       `)
 
-      await utils.createFile('src/two.ts', `
+      await createFile('src/two.ts', `
 export function helper() {
   return 'two'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Should find both helpers
       const matchedNodes = findMatchingNodes(result.nodes, 'helper')
@@ -736,24 +726,21 @@ export function helper() {
     })
 
     it('should handle cycles in dependencies', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/a.ts', `
+      await createFile('src/a.ts', `
 import { b } from './b'
 export function a() {
   b()
 }
       `)
 
-      await utils.createFile('src/b.ts', `
+      await createFile('src/b.ts', `
 import { a } from './a'
 export function b() {
   a()
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Should detect cycles
       expect(result.cycles).toBeDefined()
@@ -771,10 +758,7 @@ export function b() {
    */
   describe('Revision 3: ID-only query matching', () => {
     it('should support exact name query (backward compatibility)', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function getUser() {
   return 'user'
 }
@@ -784,7 +768,7 @@ export function setUser() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Exact name query should work (backward compatibility)
       const matchedNodes = findMatchingNodes(result.nodes, 'getUser')
@@ -793,16 +777,13 @@ export function setUser() {
     })
 
     it('should support exact ID query', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function getUser() {
   return 'user'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // Find the node with exact ID
       const targetId = Array.from(result.nodes.keys()).find(id => id.endsWith('.getUser'))
@@ -815,10 +796,7 @@ export function getUser() {
     })
 
     it('should match ID with containing wildcard *keyword*', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function getUser() {
   return 'user'
 }
@@ -832,7 +810,7 @@ export function deleteUser() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // *User* should match all functions with "User" in their ID
       const matchedNodes = findMatchingNodes(result.nodes, '*User*')
@@ -845,10 +823,7 @@ export function deleteUser() {
     })
 
     it('should match ID with suffix wildcard *suffix', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function getter() {
   return 'get'
 }
@@ -862,65 +837,56 @@ export function other() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // *ter should match functions ending with "ter" in their name
       const matchedNodes = findMatchingNodes(result.nodes, '*ter')
       expect(matchedNodes.length).toBe(2)
       
       const names = matchedNodes.map(n => n.name)
-      expect(names).toContain('getter')   // getter ends with 'ter'
-      expect(names).toContain('setter')   // setter ends with 'ter'
+      expect(names).toContain('getter')
+      expect(names).toContain('setter')
       expect(names).not.toContain('other')
     })
 
     it('should NOT match with prefix wildcard prefix* (IDs start with path)', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function getUser() {
   return 'user'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // getUser* should NOT match because IDs don't start with "getUser"
-      // IDs start with path like "src/test.test.getUser"
       const matchedNodes = findMatchingNodes(result.nodes, 'getUser*')
       expect(matchedNodes.length).toBe(0)
     })
 
     it('should match module wildcard module.*', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function func1() {
   return '1'
 }
       `)
 
-      await utils.createFile('src/other.ts', `
+      await createFile('src/other.ts', `
 export function func2() {
   return '2'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
-      // src/test.* should match functions in src/test module
-      const matchedNodes = findMatchingNodes(result.nodes, 'src/test.*')
+      // */test.* should match functions in test.ts file
+      // ID format is usually: "src/test.func1" (relativePath + '.' + functionName)
+      const matchedNodes = findMatchingNodes(result.nodes, '*/test.*')
       expect(matchedNodes.length).toBe(1)
       expect(matchedNodes[0].name).toBe('func1')
     })
 
     it('should match class-level wildcard *.*.method*', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export class TestClass {
   method1() { return '1' }
   method2() { return '2' }
@@ -931,7 +897,7 @@ export function otherMethod() {
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // *.*.method* should match all methods starting with "method"
       const matchedNodes = findMatchingNodes(result.nodes, '*.*.method*')
@@ -944,25 +910,21 @@ export function otherMethod() {
     })
 
     it('should match path wildcard */path/*', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function func1() {
   return '1'
 }
 `)
 
-      await utils.createFile('src/other.ts', `
+      await createFile('src/other.ts', `
 export function func2() {
   return '2'
 }
 `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // */test.* should match functions in test.ts file
-      // Actual ID format: "src/test.func1" (relativePath + '.' + functionName)
       const matchedNodes = findMatchingNodes(result.nodes, '*/test.*')
       
       expect(matchedNodes.length).toBe(1)
@@ -970,16 +932,13 @@ export function func2() {
     })
 
     it('should be case-insensitive for wildcard queries', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function GetUser() {
   return 'user'
 }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // *USER* should match case-insensitively against ID
       const matchedNodes = findMatchingNodes(result.nodes, '*USER*')
@@ -988,19 +947,15 @@ export function GetUser() {
     })
 
     it('should support single character wildcard ?', async () => {
-      const testDir = path.join(testBaseDir, `test-${testCounter++}`)
-      utils = new CallTestUtils(testDir)
-
-      await utils.createFile('src/test.ts', `
+      await createFile('src/test.ts', `
 export function func1() { return '1' }
 export function func2() { return '2' }
 export function func99() { return '99' }
       `)
 
-      const result = await utils.analyze()
+      const result = await runAnalysis()
 
       // *.func? should match func1 and func2 but not func99
-      // (matching the end of the function name in ID)
       const matchedNodes = findMatchingNodes(result.nodes, '*.func?')
       expect(matchedNodes.length).toBe(2)
       

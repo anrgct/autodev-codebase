@@ -96,6 +96,23 @@ export function createDependencies(options: CommandOptions) {
 }
 
 /**
+ * Create demo files if requested
+ * 
+ * This helper ensures demo files are created when --demo flag is used.
+ * Should be called by all commands that support --demo option.
+ */
+export async function ensureDemoFiles(workspacePath: string, fileSystem: any): Promise<void> {
+  const { default: createSampleFiles } = await import('../examples/create-sample-files');
+  const workspaceExists = await fileSystem.exists(workspacePath);
+  if (!workspaceExists) {
+    const fs = await import('fs');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    await createSampleFiles(fileSystem, workspacePath);
+    getLogger().info(`Demo files created in: ${workspacePath}`);
+  }
+}
+
+/**
  * Initialize CodeIndexManager
  */
 export async function initializeManager(
@@ -106,14 +123,7 @@ export async function initializeManager(
 
   // Create demo files if requested
   if (options.demo) {
-    const { default: createSampleFiles } = await import('../examples/create-sample-files');
-    const workspaceExists = await deps.fileSystem.exists(options.path);
-    if (!workspaceExists) {
-      const fs = await import('fs');
-      fs.mkdirSync(options.path, { recursive: true });
-      await createSampleFiles(deps.fileSystem, options.path);
-      getLogger().info(`Demo files created in: ${options.path}`);
-    }
+    await ensureDemoFiles(options.path, deps.fileSystem);
   }
 
   // Load and validate configuration

@@ -75,20 +75,31 @@ This is a sample project for demonstrating the Autodev Codebase indexing system.
 - Markdown documentation
 - Automated code indexing
 
+## Files
+
+### JavaScript Files
+
+- **hello.js** - Core utilities for user greeting and management
+  - \`greetUser(name)\` - Greets a user by name
+  - \`UserManager\` - Class for managing user data
+  
+- **app.js** - Main application that uses hello.js utilities
+  - Demonstrates usage of greetUser and UserManager
+  - Creates and manages multiple users
+  - Displays user information
+
+### Python Files
+
+- **utils.py** - Utility functions for data processing
+  - \`process_data(data)\` - Cleans and processes input data
+  - \`DataProcessor\` - Class for batch data processing
+  
+- **model.py** - YOLO model class for computer vision tasks
+  - \`Model\` - Base class for implementing YOLO models
+
 ## Usage
 
 The system will automatically index all files in this directory and provide semantic search capabilities.
-
-### JavaScript Functions
-
-- greetUser(name) - Greets a user by name
-- UserManager - Class for managing user data
-
-### Python Functions
-
-- process_data(data) - Cleans and processes input data
-- DataProcessor - Class for batch data processing
-- Model - YOLO model class for computer vision tasks
 
 ## Search Examples
 
@@ -101,6 +112,8 @@ Try searching for:
 - "computer vision"
 - "object detection"
 - "model training"
+- "require hello module"
+- "import user manager"
 `
         },
         {
@@ -122,6 +135,38 @@ Try searching for:
     "search": true
   }
 }
+`
+        },
+        {
+            path: 'app.js',
+            content: `// Main application file
+const { greetUser, UserManager } = require('./hello');
+
+// Initialize user manager
+const userManager = new UserManager();
+
+// Add some users
+console.log('Starting application...');
+
+// Use the greetUser function
+const greeting = greetUser('Alice');
+console.log(greeting);
+
+// Add users to the manager
+userManager.addUser({ name: 'Alice', email: 'alice@example.com', role: 'admin' });
+userManager.addUser({ name: 'Bob', email: 'bob@example.com', role: 'user' });
+userManager.addUser({ name: 'Charlie', email: 'charlie@example.com', role: 'user' });
+
+// Get all users
+const allUsers = userManager.getUsers();
+console.log(\`Total users: \${allUsers.length}\`);
+
+// Display user information
+allUsers.forEach((user, index) => {
+  console.log(\`\${index + 1}. \${user.name} (\${user.role}) - \${user.email}\`);
+});
+
+console.log('Application finished successfully.');
 `
         },
         {

@@ -36,7 +36,7 @@ describe('Cache Integration with analyze()', () => {
     }
 
     // First analysis (cache miss)
-    const result1 = await analyze(tempProjectDir, deps, 100, {
+    const result1 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })
@@ -45,7 +45,7 @@ describe('Cache Integration with analyze()', () => {
 
     // Second analysis (cache hit)
     const start = Date.now()
-    const result2 = await analyze(tempProjectDir, deps, 100, {
+    const result2 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })
@@ -66,7 +66,7 @@ describe('Cache Integration with analyze()', () => {
     }
 
     // First analysis
-    const result1 = await analyze(tempProjectDir, deps, 100, {
+    const result1 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })
@@ -78,7 +78,7 @@ describe('Cache Integration with analyze()', () => {
     await fs.writeFile(testFile, 'function foo() { bar(); }\nfunction baz() {}')
 
     // Second analysis (cache should be invalidated)
-    const result2 = await analyze(tempProjectDir, deps, 100, {
+    const result2 = await analyze(tempProjectDir, deps, {
       enableCache: true,
       cacheBaseDir: tempCacheDir,
     })

@@ -3,7 +3,7 @@
  */
 import { Command } from 'commander';
 import * as path from 'path';
-import { CommandOptions, getLogger, initGlobalLogger, resolveWorkspacePath, createDependencies } from './shared';
+import { CommandOptions, getLogger, initGlobalLogger, resolveWorkspacePath, createDependencies, ensureDemoFiles } from './shared';
 
 /**
  * Handle outline command
@@ -131,6 +131,12 @@ async function outlineHandler(pattern: string, options: any): Promise<void> {
   };
 
   initGlobalLogger(commandOptions.logLevel);
+
+  // Create demo files if requested
+  if (commandOptions.demo) {
+    const deps = createDependencies(commandOptions);
+    await ensureDemoFiles(commandOptions.path, deps.fileSystem);
+  }
 
   // Handle --clear-cache without pattern
   if (commandOptions.clearCache && !pattern) {
