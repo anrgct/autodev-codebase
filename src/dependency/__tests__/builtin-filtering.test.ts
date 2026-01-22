@@ -6,6 +6,7 @@ import { PythonAnalyzer } from '../analyzers/python'
 import { GoAnalyzer } from '../analyzers/go'
 import { CAnalyzer } from '../analyzers/c'
 import { ParseOutput } from '../models'
+import { resolveWasmPath } from '../../tree-sitter/wasm-loader'
 
 // Initialize tree-sitter before tests
 async function initializeTreeSitter() {
@@ -26,7 +27,7 @@ async function analyze(
     case 'typescript':
     case 'javascript': {
       const parser = new Parser()
-      const wasmPath = path.join(process.cwd(), 'dist/tree-sitter/tree-sitter-javascript.wasm')
+      const wasmPath = resolveWasmPath('tree-sitter-javascript.wasm')
       const lang = await Parser.Language.load(wasmPath)
       parser.setLanguage(lang)
       analyzer = new TypeScriptAnalyzer(testFilePath, code, testRepoPath, parser)
@@ -34,7 +35,7 @@ async function analyze(
     }
     case 'python': {
       const parser = new Parser()
-      const wasmPath = path.join(process.cwd(), 'dist/tree-sitter/tree-sitter-python.wasm')
+      const wasmPath = resolveWasmPath('tree-sitter-python.wasm')
       const lang = await Parser.Language.load(wasmPath)
       parser.setLanguage(lang)
       analyzer = new PythonAnalyzer(testFilePath, code, testRepoPath, parser)
@@ -42,7 +43,7 @@ async function analyze(
     }
     case 'go': {
       const parser = new Parser()
-      const wasmPath = path.join(process.cwd(), 'dist/tree-sitter/tree-sitter-go.wasm')
+      const wasmPath = resolveWasmPath('tree-sitter-go.wasm')
       const lang = await Parser.Language.load(wasmPath)
       parser.setLanguage(lang)
       analyzer = new GoAnalyzer(testFilePath, code, testRepoPath, parser)
@@ -51,7 +52,7 @@ async function analyze(
     case 'c':
     case 'cpp': {
       const parser = new Parser()
-      const wasmPath = path.join(process.cwd(), 'dist/tree-sitter/tree-sitter-c.wasm')
+      const wasmPath = resolveWasmPath('tree-sitter-c.wasm')
       const lang = await Parser.Language.load(wasmPath)
       parser.setLanguage(lang)
       analyzer = new CAnalyzer(testFilePath, code, testRepoPath, parser)

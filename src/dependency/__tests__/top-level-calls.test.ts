@@ -3,6 +3,7 @@ import Parser from 'web-tree-sitter'
 import * as path from 'path'
 import { TypeScriptAnalyzer } from '../analyzers/typescript'
 import { ParseOutput } from '../models'
+import { resolveWasmPath } from '../../tree-sitter/wasm-loader'
 
 // Initialize tree-sitter before tests
 async function initializeTreeSitter() {
@@ -15,7 +16,7 @@ const testRepoPath = '/mock-project'
 // Test helper function to analyze JavaScript/TypeScript code
 async function analyze(code: string): Promise<ParseOutput> {
   const parser = new Parser()
-  const wasmPath = path.join(process.cwd(), 'dist/tree-sitter/tree-sitter-javascript.wasm')
+  const wasmPath = resolveWasmPath('tree-sitter-javascript.wasm')
   const lang = await Parser.Language.load(wasmPath)
   parser.setLanguage(lang)
   const analyzer = new TypeScriptAnalyzer(testFilePath, code, testRepoPath, parser)

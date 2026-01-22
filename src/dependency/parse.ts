@@ -3,8 +3,9 @@
  */
 
 import * as path from 'path'
-import { fileURLToPath } from 'url'
+import * as fs from 'fs'
 import Parser from 'web-tree-sitter'
+import { resolveWasmPath, createLocateFileFunction } from '../tree-sitter/wasm-loader'
 import { IFileSystem } from '../abstractions/core'
 import { IPathUtils } from '../abstractions/workspace'
 import { ParseOutput, FileParseResult, LanguageConfig, ParserCacheEntry, AnalysisOptions } from './models'
@@ -123,41 +124,6 @@ class ParserCache {
 
 const parserCache = new ParserCache()
 
-/**
- * Find core tree-sitter.wasm path
- */
-function findCoreWasmPath(): string {
-  const fileName = 'tree-sitter.wasm'
-
-  let basePath: string
-  if (typeof import.meta !== 'undefined' && import.meta.url) {
-    const currentFileUrl = import.meta.url
-    const currentFilePath = fileURLToPath(currentFileUrl)
-    basePath = path.dirname(currentFilePath)
-  } else if (typeof __dirname !== 'undefined') {
-    basePath = __dirname
-  } else {
-    basePath = process.cwd()
-  }
-
-  const possiblePaths = [
-    path.join(basePath, '..', '..', 'dist', fileName),
-    path.join(basePath, '..', 'dist', fileName),
-    path.join(basePath, fileName),
-    path.join(process.cwd(), 'dist', fileName),
-    path.join(process.cwd(), 'src', 'tree-sitter', fileName),
-    path.join(process.cwd(), 'node_modules', 'web-tree-sitter', fileName),
-  ]
-
-  for (const filePath of possiblePaths) {
-    if (fs.existsSync(filePath)) {
-      return filePath
-    }
-  }
-
-  return path.join('dist', fileName)
-}
-
 let isParserInitialized = false
 let initializationPromise: Promise<void> | null = null
 
@@ -172,65 +138,13 @@ async function ensureParserInitialized(): Promise<void> {
   }
 
   initializationPromise = (async () => {
-    const coreWasmPath = findCoreWasmPath()
-    await Parser.init({
-      locateFile(scriptName: string, scriptDirectory: string) {
-        if (scriptName === 'tree-sitter.wasm') {
-          return coreWasmPath
-        }
-        return scriptDirectory + scriptName
-      }
-    })
+    await Parser.init(createLocateFileFunction())
     isParserInitialized = true
   })()
 
   await initializationPromise
   initializationPromise = null
 }
-
-/**
- * Find WASM file path for a language
- */
-function findWasmPath(language: string, wasmBasePath: string): string {
-  const fileName = `tree-sitter-${language}.wasm`
-
-  // Determine base path
-  let basePath: string
-  if (typeof import.meta !== 'undefined' && import.meta.url) {
-    const currentFileUrl = import.meta.url
-    const currentFilePath = fileURLToPath(currentFileUrl)
-    basePath = path.dirname(currentFilePath)
-  } else if (typeof __dirname !== 'undefined') {
-    basePath = __dirname
-  } else {
-    basePath = process.cwd()
-  }
-
-  // Try custom path first, then default locations
-  if (wasmBasePath !== 'dist/tree-sitter') {
-    const customPath = path.join(wasmBasePath, fileName)
-    return customPath
-  }
-
-  // Default locations
-  const possiblePaths = [
-    path.join(basePath, '..', '..', 'dist', 'tree-sitter', fileName),
-    path.join(basePath, '..', 'dist', 'tree-sitter', fileName),
-    path.join(basePath, 'tree-sitter', fileName),
-    path.join(process.cwd(), 'dist', 'tree-sitter', fileName),
-    path.join(process.cwd(), 'src', 'tree-sitter', fileName),
-  ]
-
-  for (const filePath of possiblePaths) {
-    if (fs.existsSync(filePath)) {
-      return filePath
-    }
-  }
-
-  return path.join(wasmBasePath, fileName)
-}
-
-import * as fs from 'fs'
 
 /**
  * Initialize Tree-sitter parser for a language
@@ -249,7 +163,10 @@ export async function initializeParser(
     // Ensure core parser is initialized
     await ensureParserInitialized()
 
-    const wasmPath = findWasmPath(language, wasmBasePath)
+    // Resolve WASM path - support custom base path for testing
+    const wasmPath = wasmBasePath === 'dist/tree-sitter'
+      ? resolveWasmPath(`tree-sitter-${language}.wasm`)
+      : resolveWasmPath(`tree-sitter-${language}.wasm`, wasmBasePath)
 
     // Check if file exists
     if (!fs.existsSync(wasmPath)) {

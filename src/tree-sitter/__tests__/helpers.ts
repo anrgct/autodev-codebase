@@ -4,6 +4,7 @@ import * as path from "path"
 import Parser from "web-tree-sitter"
 import tsxQuery from "../queries/tsx"
 import { vi, expect } from "vitest"
+import { resolveWasmPath } from "../wasm-loader"
 
 // Mock setup
 vi.mock("fs/promises")
@@ -53,7 +54,7 @@ export async function initializeWorkingParser() {
 	const originalLoad = (TreeSitter as any).Language.load
 	;(TreeSitter as any).Language.load = async (wasmPath: string) => {
 		const filename = path.basename(wasmPath)
-		const correctPath = path.join(process.cwd(), "dist/tree-sitter", filename)
+		const correctPath = resolveWasmPath(filename)
 		// console.log(`Redirecting WASM load from ${wasmPath} to ${correctPath}`)
 		return originalLoad(correctPath)
 	}
@@ -94,7 +95,7 @@ export async function testParseSourceCodeDefinitions(
 	const parser = new Parser()
 
 	// Load language and configure parser
-	const wasmPath = path.join(process.cwd(), `dist/tree-sitter/${wasmFile}`)
+	const wasmPath = resolveWasmPath(wasmFile)
 	const lang = await Parser.Language.load(wasmPath)
 	parser.setLanguage(lang)
 
@@ -144,7 +145,7 @@ export async function testParseSourceCodeDefinitions(
 export async function inspectTreeStructure(content: string, language: string = "typescript"): Promise<string> {
 	await initializeTreeSitter()
 	const parser = new Parser()
-	const wasmPath = path.join(process.cwd(), `dist/tree-sitter/tree-sitter-${language}.wasm`)
+	const wasmPath = resolveWasmPath(`tree-sitter-${language}.wasm`)
 	const lang = await Parser.Language.load(wasmPath)
 	parser.setLanguage(lang)
 

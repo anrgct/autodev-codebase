@@ -1,7 +1,6 @@
 import * as path from "path"
-import { fileURLToPath } from "url"
-import * as fs from "fs"
 import Parser from "web-tree-sitter"
+import { resolveWasmPath, createLocateFileFunction } from "./wasm-loader"
 import {
 	javascriptQuery,
 	typescriptQuery,
@@ -39,125 +38,9 @@ export interface LanguageParser {
 	}
 }
 
-/**
- * 查找 WASM 文件的完整路径
- * 支持开发环境和打包后环境的路径解析
- */
-function findWasmFile(langName: string): string {
-	const fileName = `tree-sitter-${langName}.wasm`
-
-	// 确定当前模块的基础路径
-	let basePath: string
-	if (typeof import.meta !== 'undefined' && import.meta.url) {
-		// ES 模块环境
-		const currentFileUrl = import.meta.url
-		const currentFilePath = fileURLToPath(currentFileUrl)
-		basePath = path.dirname(currentFilePath)
-	} else if (typeof __dirname !== 'undefined') {
-		// CommonJS 环境
-		basePath = __dirname
-	} else {
-		// 降级处理：使用当前工作目录
-		basePath = process.cwd()
-	}
-
-	// 可能的文件位置（按优先级排序）
-	const possiblePaths = [
-		// 1. 当前模块目录（开发环境，WASM 文件被复制到这里）
-		path.join(basePath, fileName),
-		// 2. 打包后的情况：相对于 dist/index.js 找到 dist/tree-sitter/
-		path.join(basePath, 'tree-sitter', fileName)
-	]
-
-	// 逐个检查文件是否存在
-	for (const [index, filePath] of possiblePaths.entries()) {
-		try {
-			if (fs.existsSync(filePath)) {
-				// console.log(`Found WASM file for ${langName} at: ${filePath}, filePath: ${filePath}, index: ${index}`)
-				return filePath
-			}
-		} catch (error) {
-			// 忽略访问权限等错误，继续尝试下一个路径
-			continue
-		}
-	}
-
-	// 如果都找不到，抛出详细的错误信息
-	const error = new Error(`无法找到 WASM 文件: ${fileName}`)
-	;(error as any).details = {
-		searchedPaths: possiblePaths,
-		currentWorkingDirectory: process.cwd(),
-		basePath,
-		moduleUrl: typeof import.meta !== 'undefined' ? import.meta.url : undefined,
-		dirname: typeof __dirname !== 'undefined' ? __dirname : undefined,
-	}
-	throw error
-}
-
-function findCoreTreeSitterWasm(): string {
-	const fileName = 'tree-sitter.wasm'
-
-	// 确定当前模块的基础路径
-	let basePath: string
-	if (typeof import.meta !== 'undefined' && import.meta.url) {
-		// ES 模块环境
-		const currentFileUrl = import.meta.url
-		const currentFilePath = fileURLToPath(currentFileUrl)
-		basePath = path.dirname(currentFilePath)
-	} else if (typeof __dirname !== 'undefined') {
-		// CommonJS 环境
-		basePath = __dirname
-	} else {
-		// 降级处理：使用当前工作目录
-		basePath = process.cwd()
-	}
-
-	// 可能的文件位置（按优先级排序）
-	const possiblePaths = [
-		// 1. 打包后的 dist 目录根（优先）
-		path.join(basePath, fileName),
-		// 2. 打包后的 dist 目录相对路径
-		path.join(basePath, '..', fileName),
-		// 3. 当前模块目录
-		path.join(basePath, 'tree-sitter', fileName),
-		// 4. 项目根目录
-		path.join(process.cwd(), fileName),
-		// 5. dist 目录（如果当前不在 dist 中）
-		path.join(process.cwd(), 'dist', fileName),
-		// 6. 源码目录（开发环境）
-		path.join(process.cwd(), 'src', 'tree-sitter', fileName),
-		// 7. node_modules 中的文件（开发环境备选）
-		path.join(process.cwd(), 'node_modules', 'web-tree-sitter', fileName),
-	]
-
-	// 逐个检查文件是否存在
-	for (const filePath of possiblePaths) {
-		try {
-			if (fs.existsSync(filePath)) {
-				// console.log(`Found core tree-sitter WASM file at: ${filePath}`)
-				return filePath
-			}
-		} catch (error) {
-			// 忽略访问权限等错误，继续尝试下一个路径
-			continue
-		}
-	}
-
-	// 如果都找不到，抛出详细的错误信息
-	const error = new Error(`无法找到核心 tree-sitter WASM 文件: ${fileName}`)
-	;(error as any).details = {
-		searchedPaths: possiblePaths,
-		currentWorkingDirectory: process.cwd(),
-		basePath,
-		moduleUrl: typeof import.meta !== 'undefined' ? import.meta.url : undefined,
-		dirname: typeof __dirname !== 'undefined' ? __dirname : undefined,
-	}
-	throw error
-}
-
 async function loadLanguage(langName: string) {
 	try {
-		const wasmPath = findWasmFile(langName)
+		const wasmPath = resolveWasmPath(`tree-sitter-${langName}.wasm`)
 		return await Parser.Language.load(wasmPath)
 	} catch (error) {
 		console.warn(`Failed to load language parser for ${langName}:`, error instanceof Error ? error.message : String(error))
@@ -183,16 +66,7 @@ export async function initializeParser() {
 	// Start initialization
 	initializationPromise = (async () => {
 		// console.log("🌲 Initializing tree-sitter parser...\n")
-		// 动态查找核心 tree-sitter.wasm 文件路径
-		const wasmPath = findCoreTreeSitterWasm()
-		await Parser.init({
-			locateFile(scriptName: string, scriptDirectory: string) {
-				if (scriptName === 'tree-sitter.wasm') {
-					return wasmPath
-				}
-				return scriptDirectory + scriptName
-			}
-		})
+		await Parser.init(createLocateFileFunction())
 		isParserInitialized = true
 	})()
 
