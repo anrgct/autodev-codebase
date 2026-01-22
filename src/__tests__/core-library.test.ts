@@ -2,8 +2,8 @@
  * Integration tests for core library functionality
  * Tests that the abstracted core works with different platform adapters
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
-import { promises as fs } from 'fs'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
+import { fs, vol } from 'memfs'
 import path from 'path'
 import os from 'os'
 import { createSimpleNodeDependencies } from '../adapters/nodejs'
@@ -14,23 +14,36 @@ import { DirectoryScanner } from '../code-index/processors/scanner'
 import { EmbedderProvider } from '../code-index/interfaces/manager'
 import type { ICodeParser } from '../code-index/interfaces'
 
+// Mock fs with memfs
+vi.mock('fs', async () => {
+  const memfs = await vi.importActual<typeof import('memfs')>('memfs')
+  return memfs.fs
+})
+vi.mock('fs/promises', async () => {
+  const memfs = await vi.importActual<typeof import('memfs')>('memfs')
+  return memfs.fs.promises
+})
+
 describe('Core Library Integration', () => {
   let tempDir: string
   let workspacePath: string
   let dependencies: ReturnType<typeof createSimpleNodeDependencies>
 
   beforeAll(async () => {
-    // Create temporary directory for tests
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'core-lib-test-'))
+    // Setup memfs with virtual directory structure
+    tempDir = '/tmp/core-lib-test'
     workspacePath = path.join(tempDir, 'test-workspace')
-    await fs.mkdir(workspacePath, { recursive: true })
+    
+    vol.fromJSON({
+      [workspacePath]: null  // Create directory
+    })
 
     dependencies = createSimpleNodeDependencies(workspacePath)
   })
 
-  afterAll(async () => {
-    // Clean up temporary directory
-    await fs.rm(tempDir, { recursive: true, force: true })
+  afterAll(() => {
+    // Clean up memfs
+    vol.reset()
   })
 
   describe('CacheManager Integration', () => {

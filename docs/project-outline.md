@@ -1,123 +1,65 @@
-# src/cli.ts (1764 lines)
-└─ 实现了一个基于Node.js的CLI工具，提供代码索引、搜索、MCP服务器、配置管理等功能，支持多种操作模式和参数配置。
+# src/cli.ts (41 lines)
+└─ 定义CLI入口程序，使用commander.js创建子命令模式，整合搜索、索引、大纲等工具功能，提供命令行接口。
 
-   28--36 | function initGlobalLogger
-   └─ 初始化全局日志记录器，配置日志级别、时间戳和终端颜色
-
-   46--55 | interface SearchResult
-   └─ 定义搜索结果接口，包含文件路径、代码片段、行号和分数信息
-
-   63--163 | function formatSearchResults
-   └─ 格式化搜索结果，按文件分组、去重、排序并生成可读的文本输出
-   165--241 | function formatSearchResultsAsJson
-   └─ 将搜索结果转换为JSON格式，包含去重逻辑和元数据信息
-
-   244--265 | interface SimpleCliOptions
-   └─ 定义CLI选项接口，包含路径、端口、过滤器和输出格式等配置项
-
-   318--473 | function printHelp
-   └─ 打印CLI帮助信息，展示所有命令和选项用法
-   478--512 | function resolveOptions
-   └─ 解析命令行参数，配置工作路径和服务器选项
-   517--536 | function createDependencies
-   └─ 创建Node.js依赖项，配置存储、日志和路径
-   543--585 | function initializeManager
-   └─ 初始化代码索引管理器，加载配置并创建实例
-   590--654 | function startMCPServer
-   └─ 启动MCP服务器，处理连接和索引进程管理
-   660--688 | function waitForIndexingCompletion
-   └─ 监控代码索引状态，等待完成或失败，每2秒检查一次状态
-   693--718 | function initializeManagerForDryRun
-   └─ 初始化代码索引管理器用于预览模式，加载配置但不启动索引
-   723--935 | function performIndexDryRun
-   └─ 执行索引预览分析，统计文件状态并生成详细报告
-   940--991 | function indexCodebase
-   └─ 处理代码索引操作，支持正常索引和预览模式两种流程
-   996--1082 | function searchIndex
-   └─ 执行代码搜索，处理路径过滤和自动索引重试逻辑
-   1087--1107 | function clearIndex
-   └─ 清除索引数据，使用searchOnly模式避免不必要的后台索引流程
-   1112--1139 | function clearSummarizeCache
-   └─ 清除项目所有摘要缓存，创建SummaryCacheManager实例并清理缓存文件
-   1147--1178 | function startStdioAdapter
-   └─ 启动stdio适配器，桥接stdio客户端与HTTP MCP服务器，处理优雅关闭
-   1183--1188 | function formatValue
-   └─ 格式化配置值，处理undefined、null和对象类型，返回字符串表示
-   1193--1214 | function sanitizeConfig
-   └─ 清理敏感配置信息，对包含关键词的值进行脱敏处理，保留首尾字符
-   1216--1219 | function isSensitiveConfigKey
-   └─ 检测配置键是否包含敏感信息关键词
-   1228--1266 | function printAllConfigLayers
-   └─ 按优先级显示配置层合并结果
-   1271--1291 | function printConfigItemLayers
-   └─ 显示指定配置键在各层的值
-   1296--1384 | function getConfigHandler
-   └─ 读取并合并全局和项目配置
-   1389--1459 | function parseConfigValue
-   └─ 验证配置值类型和格式
-   1464--1587 | function setConfigHandler
-   └─ 解析配置字符串并验证键值，合并保存配置文件
-   1592--1691 | function handleOutlineCommand
-   └─ 处理代码大纲命令，解析文件路径并提取结构信息
-   1696--1760 | function main
-   └─ 解析命令行参数，分发到对应功能模块执行
+   16--34 | function main
+   └─ 初始化CLI程序，配置名称、描述和版本，添加搜索、索引、大纲、stdio、配置和调用子命令，解析命令行参数
 
 ---
 
 # src/index.ts (14 lines)
-└─ 导出库的核心模块，包括代码索引、抽象层、Node.js适配器、全局搜索、Tree-Sitter解析、代码库和依赖管理功能。
+└─ 导出库中所有核心模块，包括代码索引、抽象层、Node.js适配器、全局处理、搜索功能、Tree-sitter集成、代码库实现和依赖管理。
 
 
 ---
 
 # src/abstractions/config.ts (52 lines)
-└─ 定义配置提供者抽象接口，支持获取和监听配置变化，并重新导出配置类型和提供者枚举。
+└─ 配置类型从接口文件重新导出，定义配置提供者抽象接口，获取配置并监听变更，支持多种嵌入器配置
 
    22--32 | interface IConfigProvider
-   └─ 定义配置提供者接口，支持获取配置和监听配置变更，返回清理函数
+   └─ 配置提供者抽象接口，定义获取和监听配置的核心方法，支持异步加载与变更回调
 
 ---
 
 # src/abstractions/core.ts (117 lines)
-└─ 定义平台无关的文件系统操作接口，提供读写、检查、统计、目录管理等核心功能。定义存储、事件总线、日志、文件监控等抽象接口，构成平台依赖容器。
+└─ 定义跨平台文件系统操作的核心接口，提供读写、检查、统计、目录管理等基础功能。定义存储操作、事件系统、日志记录、文件监控等核心抽象接口。整合所有平台依赖项，提供统一的基础设施接口。
 
    4--64 | interface IFileSystem
-   └─ 提供跨平台文件系统操作抽象，支持读写、检查、统计、遍历、创建和删除文件及目录
+   └─ 提供跨平台文件系统操作接口，支持读写、统计、目录管理等核心功能。
    69--73 | interface IStorage
-   └─ 管理全局存储路径和缓存路径生成，为不同工作区提供存储位置管理
+   └─ 管理全局存储路径和缓存路径，为数据持久化提供统一存储方案。
    78--83 | interface IEventBus
-   └─ 实现事件发布订阅机制，支持事件触发、监听、移除和一次性监听功能
+   └─ 实现事件发布订阅机制，支持多组件间异步通信和数据传递。
    88--93 | interface ILogger
-   └─ 提供分级日志记录接口，支持调试、信息、警告和错误级别日志输出
+   └─ 提供分级日志记录功能，支持调试、信息、警告和错误级别输出。
    98--101 | interface IFileWatcher
-   └─ 监听文件和目录变化事件，支持创建、修改和删除事件的回调通知
+   └─ 监听文件和目录变化事件，实现实时文件系统状态更新机制。
    103--106 | interface FileWatchEvent
-   └─ 定义文件系统事件类型，包含创建、修改、删除事件及文件URI
+   └─ 定义文件事件通知接口，描述文件创建、修改、删除事件类型
    111--117 | interface IPlatformDependencies
-   └─ 定义平台依赖容器，整合文件系统、存储、事件总线等核心组件
+   └─ 实现平台依赖注入容器，组合文件系统、存储、事件总线等核心组件
 
 ---
 
 # src/abstractions/index.ts (35 lines)
-└─ 导出平台无关的核心抽象类型，包括文件系统、存储、事件总线、日志、文件监控、工作区、路径工具、配置提供者等，实现跨平台解耦
+└─ 导出平台无关核心抽象，包括文件系统、存储、事件总线、日志、文件监听等接口，提供跨平台基础功能抽象
 
 
 ---
 
-# src/abstractions/workspace.ts (96 lines)
-└─ 定义平台无关的工作区抽象接口，提供路径管理、忽略规则处理和文件查找功能，包含工作区文件夹和路径工具接口。
+# src/abstractions/workspace.ts (105 lines)
+└─ 定义平台无关的 workspace 抽象接口，提供根路径管理、忽略规则处理、文件查找等核心功能，支持多根工作区和路径工具操作。
 
-   4--45 | interface IWorkspace
-   └─ 定义工作空间核心接口，提供路径管理、忽略规则和文件查找功能
-   47--51 | interface WorkspaceFolder
-   └─ 表示工作空间文件夹，包含名称、URI和索引信息
-   56--96 | interface IPathUtils
-   └─ 提供路径操作工具方法，支持路径拼接、解析和规范化
+   6--54 | interface IWorkspace
+   └─ 定义工作空间核心接口，提供路径管理、忽略规则处理和多根工作空间支持
+   56--60 | interface WorkspaceFolder
+   └─ 表示工作空间文件夹，包含名称、URI和索引标识
+   65--105 | interface IPathUtils
+   └─ 实现路径工具方法，提供路径拼接、解析和格式化等操作
 
 ---
 
 # src/cli-tools/data-flow-analyzer.ts (698 lines)
-└─ 实现数据流分析器，识别CLI和MCP入口点，追踪核心组件调用链，生成Mermaid流程图。
+└─ 定义数据流节点和边的数据结构，用于存储函数、类等组件及其调用关系。实现数据流分析器的核心逻辑，递归追踪组件调用链，生成可视化文本树和JSON结果。识别CLI和MCP入口点，分析核心组件创建和调用关系。
 
    6--13 | interface DataFlowNode
    └─ 定义数据流节点结构，包含ID、文件位置、类型和层级信息
@@ -127,7 +69,7 @@
    └─ 定义分析结果结构，包含节点、边和文本/JSON输出
 
    43--681 | class DataFlowAnalyzer
-   └─ 实现数据流分析器核心类，递归追踪调用链并生成可视化
+   └─ 实现数据流分析器核心类，管理节点映射和调用链追踪
 
    50--55 | method constructor
    └─ 初始化TypeScript项目，配置tsconfig文件路径和加载选项
@@ -136,7 +78,7 @@
    83--111 | method analyzeCliMain
    └─ 分析CLI主入口，定位main函数并追踪调用链
    116--158 | method analyzeMcpServer
-   └─ 分析MCP服务器入口，处理HTTP和Stdio适配器
+   └─ 解析MCP服务器入口点，识别HTTP和Stdio适配器启动函数
    163--190 | method analyzePublicApi
    └─ 分析公开API，识别CodeIndexManager的关键方法
    195--249 | method analyzeCallChain
@@ -179,8 +121,8 @@
 
 ---
 
-# src/cli-tools/outline.ts (949 lines)
-└─ 实现代码结构提取工具，支持文本和JSON格式输出，集成AI摘要功能，使用tree-sitter解析代码结构
+# src/cli-tools/outline.ts (952 lines)
+└─ CLI工具：代码大纲提取器，使用tree-sitter解析源文件结构，支持文本和JSON格式输出及AI摘要功能。
 
    31--61 | interface OutlineOptions
    └─ 定义代码大纲提取的配置参数，包含文件路径、输出格式、摘要选项等核心设置
@@ -191,29 +133,29 @@
 
    94--135 | function extractOutline
    └─ 执行大纲提取的主入口，处理路径解析、文件验证和格式分发逻辑
-   137--148 | function createFallbackWorkspace
-   └─ 创建简化工作区实现，提供基本的路径解析和忽略规则处理功能
-   161--218 | function getOutlineAsText
+   137--151 | function createFallbackWorkspace
+   └─ 创建基本工作区适配器，提供路径解析和忽略规则处理，支持单文件模式。
+   164--221 | function getOutlineAsText
    └─ 生成文本格式代码大纲，支持AI摘要和缓存管理
-   230--281 | function getOutlineAsJson
+   233--284 | function getOutlineAsJson
    └─ 生成JSON格式代码大纲，复用文本处理逻辑并输出结构化数据
-   287--337 | function buildOutlineDefinitions
+   290--340 | function buildOutlineDefinitions
    └─ 解析文件内容并提取代码定义，支持Markdown和tree-sitter解析
-   342--461 | function extractDefinitionsFromCaptures
+   345--464 | function extractDefinitionsFromCaptures
    └─ 从tree-sitter捕获中提取结构化定义，过滤docstring并映射标识符
-   466--508 | function renderDefinitionsAsText
+   469--511 | function renderDefinitionsAsText
    └─ 渲染文本大纲，支持文件摘要和函数详情的紧凑显示
-   513--536 | function renderDefinitionsAsJson
+   516--539 | function renderDefinitionsAsJson
    └─ 将代码结构数据转换为JSON格式，支持摘要截断和标题模式
-   541--561 | function createStorageForOutline
+   544--564 | function createStorageForOutline
    └─ 为代码大纲工具创建存储抽象层，加载配置并返回存储实例
-   566--610 | function createSummarizerForOutline
+   569--613 | function createSummarizerForOutline
    └─ 创建AI摘要器实例，处理配置路径并初始化相关服务
-   615--642 | function loadSummarizerConfig
+   618--645 | function loadSummarizerConfig
    └─ 加载摘要器配置，通过配置管理器访问摘要相关设置
-   653--806 | function generateSummariesWithRetry
+   656--809 | function generateSummariesWithRetry
    └─ 批量生成代码摘要，支持并发控制、重试机制和降级处理
-   808--948 | function applySummaryCache
+   811--951 | function applySummaryCache
    └─ 管理AI摘要缓存，支持缓存命中检查、批量生成和错误处理，优化代码摘要性能
 
 ---
@@ -265,46 +207,99 @@
 
 ---
 
-# src/glob/index.ts (2 lines)
-└─ 导出文件列表工具模块，提供文件操作相关功能
+# src/commands/call.ts (533 lines)
+└─ 实现代码依赖分析命令，支持总结显示、数据导出、图形可视化和依赖查询功能。
 
+   39--67 | function openGraphViewer
+   └─ 检测运行环境，解析图形查看器路径，验证文件存在性并在浏览器中打开
+   72--168 | function displaySummary
+   └─ 分析依赖结果，统计组件类型和模块依赖，分类展示解析与未解析的依赖关系
+   173--204 | function exportData
+   └─ 生成可视化数据，导出JSON文件，可选择在浏览器中打开图形查看器
+   209--243 | function querySingleFunction
+   └─ 查找匹配节点，遍历查询每个节点，格式化输出单函数依赖分析结果
+   248--261 | function queryMultipleFunctions
+   └─ 分析多函数之间的连接关系，输出依赖关系分析结果
+   266--289 | function queryMode
+   └─ 解析查询模式，根据模式数量和通配符选择单函数查询或多函数连接分析
+   300--487 | function callHandler
+   └─ 处理依赖分析命令，初始化环境、路径解析、缓存管理及多模式分发逻辑
+   498--532 | function createCallCommand
+   └─ 创建CLI命令，定义依赖分析的各种参数选项和帮助文档
 
 ---
 
-# src/glob/list-files.ts (414 lines)
-└─ 使用ripgrep递归或非递归列出目录文件，过滤特殊目录和.gitignore，支持限制数量和超时处理。
+# src/commands/index.ts (412 lines)
+└─ 实现代码库索引命令，支持多种模式：正常索引、预览分析、清理缓存、启动MCP服务器和监控文件变化。
 
-   30--33 | interface ListFilesDependencies
-   └─ 定义文件列表操作的依赖接口，包含路径工具和ripgrep路径
+   13--35 | function initializeManagerForDryRun
+   └─ 初始化代码索引管理器，配置依赖项并加载配置
+   40--227 | function performIndexDryRun
+   └─ 执行代码索引预运行分析，统计文件状态并生成详细报告
+   232--385 | function indexHandler
+   └─ 处理索引命令参数，管理不同模式下的代码索引流程
+   390--411 | function createIndexCommand
+   └─ 创建命令行接口，定义索引命令的参数和选项配置
 
-   44--71 | function listFiles
-   └─ 实现文件列表主逻辑，处理特殊目录并组合文件和目录结果
-   76--94 | function handleSpecialDirectories
-   └─ 处理根目录和用户主目录等特殊目录，限制访问权限
-   100--110 | function listFilesWithRipgrep
-   └─ 使用ripgrep工具递归或非递归列出指定目录的文件
-   115--124 | function buildRipgrepArgs
-   └─ 构建ripgrep命令参数，根据递归模式选择不同的过滤规则
-   129--141 | function buildRecursiveArgs
-   └─ 构建递归搜索的ripgrep参数，排除大型目录并尊重.gitignore
-   146--169 | function buildNonRecursiveArgs
-   └─ 构建非递归搜索的ripgrep参数，限制深度并忽略隐藏文件
-   174--203 | function parseGitignoreFile
-   └─ 解析.gitignore文件内容，提取有效忽略模式用于递归过滤
-   208--234 | function listFilteredDirectories
-   └─ 列出目录并应用过滤规则，返回格式化的目录路径列表
-   239--256 | function shouldIncludeDirectory
-   └─ 判断目录是否应包含在结果中，检查隐藏目录和忽略模式
-   261--278 | function isDirectoryExplicitlyIgnored
-   └─ 检查目录名是否在忽略列表中，支持精确匹配和路径模式匹配
-   283--310 | function isIgnoredByGitignore
-   └─ 判断目录名是否被gitignore规则排除，处理目录、简单名和通配符模式
-   315--334 | function formatAndCombineResults
-   └─ 合并文件和目录路径，去重排序，确保目录在前并应用数量限制
-   339--413 | function execRipgrep
-   └─ 执行ripgrep命令，处理输出流，支持超时控制和结果截断
-   393--411 | function processRipgrepOutput
-   └─ 处理ripgrep输出缓冲区，分割行并收集结果，处理不完整行
+---
+
+# src/commands/outline.ts (195 lines)
+└─ 实现outline命令，处理文件路径或通配符模式，提取代码大纲，支持AI摘要和缓存管理
+
+   11--106 | function handleOutline
+   └─ 处理代码大纲提取，解析文件模式，支持批量处理和缓存清理
+   111--169 | function outlineHandler
+   └─ 配置命令参数，初始化日志，处理缓存清理和演示文件准备
+   174--194 | function createOutlineCommand
+   └─ 创建命令行工具，定义大纲提取的参数选项和处理器
+
+---
+
+# src/commands/search.ts (303 lines)
+└─ 实现代码搜索命令，支持语义搜索、结果格式化、路径过滤和JSON输出
+
+   10--19 | interface SearchResult
+   └─ 定义搜索结果接口，包含文件路径、代码片段、行号范围和相似度分数。
+
+   24--105 | function formatSearchResults
+   └─ 格式化搜索结果，按文件分组、去重排序，输出可读性强的代码片段展示。
+   110--175 | function formatSearchResultsAsJson
+   └─ 将搜索结果格式化为JSON输出，包含去重信息和详细元数据。
+   180--278 | function searchHandler
+   └─ 执行搜索命令处理逻辑，初始化搜索参数、调用搜索引擎并输出格式化结果。
+   283--302 | function createSearchCommand
+   └─ 创建搜索命令行接口，定义命令参数选项和对应的用户交互逻辑。
+
+---
+
+# src/commands/shared.ts (187 lines)
+└─ 定义CLI命令的共享工具和类型，包括日志管理、路径解析、依赖创建、演示文件处理和代码索引管理器初始化等功能。
+
+   12--40 | interface CommandOptions
+   └─ 定义CLI命令的配置选项接口，包含路径、服务器、日志等配置参数
+
+   45--53 | function initGlobalLogger
+   └─ 根据日志级别初始化全局日志记录器，设置名称、级别和时间戳
+   65--72 | function resolveWorkspacePath
+   └─ 解析输入路径为绝对路径，demo模式下添加demo子目录路径
+   77--96 | function createDependencies
+   └─ 基于配置选项创建Node.js依赖项，设置工作空间和存储选项
+   104--113 | function ensureDemoFiles
+   └─ 检查工作空间是否存在，不存在时创建目录并生成示例文件用于演示
+   118--155 | function initializeManager
+   └─ 初始化代码索引管理器，创建依赖、加载配置并启动索引
+   160--186 | function waitForIndexingCompletion
+   └─ 等待索引完成，轮询状态并处理不同结果
+
+---
+
+# src/commands/stdio.ts (59 lines)
+└─ stdio命令实现，创建stdio适配器桥接stdio与HTTP MCP服务器，处理信号关闭，支持超时配置和日志级别设置
+
+   11--40 | function stdioHandler
+   └─ 初始化日志系统，配置目标URL和超时时间，创建适配器，处理信号，启动适配器保持运行。
+   45--58 | function createStdioCommand
+   └─ 配置stdio命令行工具，定义选项参数如服务器URL、端口、超时和日志级别，关联处理函数。
 
 ---
 
@@ -393,60 +388,68 @@
 
 ---
 
+# src/code-index/i18n.ts (28 lines)
+└─ 定义国际化翻译字典，支持多语言错误消息模板，提供参数化字符串替换功能。
+
+   19--27 | function t
+   └─ 实现国际化翻译函数，根据键查找消息并替换参数，支持动态文本替换
+
+---
+
 # src/code-index/index.ts (29 lines)
 └─ 导出代码索引核心功能模块，包括管理器、配置、缓存、状态、编排、搜索、服务工厂、接口、嵌入器、处理器、向量存储、常量和工具函数。
 
 
 ---
 
-# src/code-index/manager.ts (542 lines)
-└─ 实现代码索引管理器，提供初始化、搜索、错误恢复等功能，管理向量存储和缓存。
+# src/code-index/manager.ts (535 lines)
+└─ 实现代码索引管理器的核心类，负责初始化配置、管理状态、协调搜索和索引服务，提供错误恢复和资源清理功能。
 
-   19--27 | interface CodeIndexManagerDependencies
+   17--25 | interface CodeIndexManagerDependencies
    └─ 定义代码索引管理器依赖接口，包含文件系统、存储、事件总线等核心组件
 
-   29--542 | class CodeIndexManager
-   └─ 实现代码索引管理器单例模式，管理索引生命周期和状态转换
+   27--535 | class CodeIndexManager
+   └─ 实现代码索引管理器的单例模式，管理配置、状态、服务和索引流程。
 
-   44--58 | method getInstance
+   42--56 | method getInstance
    └─ 获取指定工作区的管理器实例，确保每个工作区独立管理
-   60--65 | method disposeAll
+   58--63 | method disposeAll
    └─ 清理所有工作区的管理器实例，释放系统资源
-   71--75 | method constructor
+   69--73 | method constructor
    └─ 初始化管理器核心组件，设置工作区路径和依赖注入
-   87--91 | method assertInitialized
+   85--89 | method assertInitialized
    └─ 验证核心服务组件是否已初始化，未初始化则抛出错误
-   93--99 | method state
+   91--97 | method state
    └─ 获取当前索引状态，若功能未启用则返回待机状态
-   109--116 | method isInitialized
+   107--114 | method isInitialized
    └─ 检查管理器是否已初始化，通过断言初始化状态实现
-   126--182 | method initialize
+   124--180 | method initialize
    └─ 初始化代码索引管理器，配置组件并启动索引服务
-   187--191 | method loadConfiguration
+   185--189 | method loadConfiguration
    └─ 重新加载配置信息，确保配置管理器状态最新
-   201--218 | method startIndexing
+   199--216 | method startIndexing
    └─ 检查功能状态，处理错误恢复，启动索引流程
-   223--230 | method stopWatcher
+   221--228 | method stopWatcher
    └─ 停止文件监听器，释放资源
-   246--270 | method recoverFromError
+   244--268 | method recoverFromError
    └─ 清除错误状态，重置服务实例，防止并发恢复
-   275--280 | method dispose
+   273--278 | method dispose
    └─ 释放资源，停止监听器，清理状态管理器
-   286--293 | method clearIndexData
+   284--291 | method clearIndexData
    └─ 清除索引数据，重置向量存储和缓存文件
-   297--303 | method getCurrentStatus
+   295--301 | method getCurrentStatus
    └─ 获取当前系统状态并添加工作区路径信息
-   310--333 | method getDryRunComponents
+   308--331 | method getDryRunComponents
    └─ 提供预览模式所需的组件访问接口
-   335--369 | method reconcileIndex
+   333--367 | method reconcileIndex
    └─ 同步索引与文件系统，删除过期文件条目
-   371--377 | method searchIndex
+   369--375 | method searchIndex
    └─ 执行向量搜索并返回过滤后的结果
-   383--473 | method _recreateServices
-   └─ 重新创建所有服务实例并验证配置
-   480--496 | method _initializeForSearchOnly
+   381--466 | method _recreateServices
+   └─ 重新创建服务实例，停止现有服务并初始化新服务，验证嵌入器和重排序器配置。
+   473--489 | method _initializeForSearchOnly
    └─ 初始化向量存储连接，检查现有索引数据，设置系统状态为已索引或待机
-   504--541 | method handleSettingsChange
+   497--534 | method handleSettingsChange
    └─ 处理设置变更，重新加载配置，根据需要重启服务或禁用功能
 
 ---
@@ -483,33 +486,33 @@
 
 ---
 
-# src/code-index/service-factory.ts (386 lines)
-└─ 代码索引服务工厂类，负责创建和配置嵌入器、向量存储、目录扫描器、文件监视器、重排序器和摘要器等核心服务组件，支持多种AI模型提供商，提供配置验证和错误处理功能。
+# src/code-index/service-factory.ts (353 lines)
+└─ 代码索引服务工厂类，负责创建和配置嵌入器、向量存储、目录扫描器等组件，支持多种AI服务提供商
 
-   58--385 | class CodeIndexServiceFactory
-   └─ 实现代码索引服务工厂类，管理依赖注入和组件创建
+   29--352 | class CodeIndexServiceFactory
+   └─ 管理代码索引服务的依赖创建与配置，支持多种嵌入和存储策略
 
-   59--64 | method constructor
+   30--35 | method constructor
    └─ 初始化工厂实例，接收配置管理器、工作路径等核心依赖
-   88--146 | method createEmbedder
+   59--117 | method createEmbedder
    └─ 根据配置创建不同提供商的嵌入器，支持OpenAI、Ollama等多种AI服务
-   153--163 | method validateEmbedder
+   124--134 | method validateEmbedder
    └─ 验证嵌入器配置有效性，返回验证结果和错误信息
-   168--202 | method createVectorStore
+   139--173 | method createVectorStore
    └─ 创建向量存储实例，确定向量维度并连接Qdrant数据库
-   207--227 | method createDirectoryScanner
-   └─ 创建目录扫描器实例，注入嵌入器、向量存储等依赖
-   232--243 | method createFileWatcher
-   └─ 创建文件监视器实例，监听文件变化并触发索引更新
-   249--280 | method createServices
-   └─ 创建完整服务套件，包括嵌入器、向量存储和扫描器
-   286--317 | method createReranker
+   178--196 | method createDirectoryScanner
+   └─ 创建目录扫描器，整合嵌入器、向量存储和代码解析功能
+   201--211 | method createFileWatcher
+   └─ 创建文件监视器，响应文件变化并实时更新索引
+   217--247 | method createServices
+   └─ 批量创建完整代码索引服务链，确保配置正确性
+   253--284 | method createReranker
    └─ 根据配置创建重排序器，支持Ollama和OpenAI兼容
-   324--334 | method validateReranker
+   291--301 | method validateReranker
    └─ 验证重排序器配置，返回验证结果和错误信息
-   340--368 | method createSummarizer
+   307--335 | method createSummarizer
    └─ 根据配置创建总结器实例，支持Ollama和OpenAI兼容两种类型，未知时回退到默认Ollama
-   375--384 | method validateSummarizer
+   342--351 | method validateSummarizer
    └─ 异步验证总结器配置，捕获异常并返回验证结果，包含错误信息
 
 ---
@@ -543,11 +546,247 @@
 
 ---
 
-# src/examples/create-sample-files.ts (1285 lines)
-└─ 创建示例文件函数，生成JavaScript、Python、Markdown、JSON和YOLO模型文件，用于演示代码索引系统。
+# src/glob/index.ts (2 lines)
+└─ 导出文件列表工具模块，提供文件操作相关功能
 
-   2--1283 | function createSampleFiles
-   └─ [Code too large to summarize (1282 lines)]
+
+---
+
+# src/glob/list-files.ts (123 lines)
+└─ 实现文件列表功能，使用fast-glob高效遍历目录，结合统一忽略服务过滤文件，限制返回数量，处理特殊目录。
+
+   23--28 | interface ListFilesDependencies
+   └─ 定义文件列表依赖接口，包含路径工具、文件系统、工作区及可选适配器
+   31--39 | interface IFileSystem
+   └─ 定义文件系统操作接口，提供读写、检查、统计、目录等基础方法
+
+   53--99 | function listFiles
+   └─ 递归列目录文件，使用 fast-glob 过滤大目录，通过忽略服务精准过滤
+   104--122 | function handleSpecialDirectories
+   └─ 处理根目录和用户主目录等特殊目录，限制访问权限
+
+---
+
+# src/dependency/cache-manager.ts (420 lines)
+└─ 实现依赖分析缓存管理器，持久化存储文件分析结果，通过SHA-256哈希验证文件变化，配置指纹确保版本一致性，使用防抖机制优化磁盘写入。
+
+   40--419 | class DependencyCacheManager
+   └─ 实现依赖分析缓存管理器，提供文件级缓存、内容校验和配置指纹功能
+
+   51--74 | method constructor
+   └─ 初始化缓存管理器，生成项目哈希路径并创建空缓存结构
+   79--101 | method initialize
+   └─ 加载现有缓存文件，验证版本并处理异常情况
+   107--134 | method getCacheEntry
+   └─ 获取缓存条目，验证文件哈希并反序列化依赖节点
+   139--177 | method setCacheEntry
+   └─ 设置缓存条目，序列化节点并写入缓存，执行节流保存
+   182--187 | method deleteCacheEntry
+   └─ 删除指定文件的缓存条目，更新缓存状态并触发保存
+   192--195 | method clearCache
+   └─ 清空所有缓存条目，重新创建空缓存结构并持久化
+   200--221 | method getStats
+   └─ 计算缓存统计信息，包括命中率、文件数量等性能指标
+   244--250 | method serializeNode
+   └─ 将依赖节点序列化，转换Set类型为可存储的数组格式
+   255--260 | method deserializeNode
+   └─ 将序列化节点反序列化，恢复Set类型的数据结构
+   265--274 | method createEmptyCache
+   └─ 创建空缓存结构，初始化版本号、指纹和文件映射
+   279--288 | method createFingerprint
+   └─ 生成配置指纹，包含缓存版本和解析器版本信息
+   293--299 | method isFingerprintValid
+   └─ 验证当前缓存指纹是否与配置指纹匹配
+   318--344 | method _performSave
+   └─ 执行原子性缓存保存，包含清理、大小检查和文件写入
+   349--360 | method cleanOldEntries
+   └─ 移除超过最大缓存时间的历史缓存条目
+   366--388 | method cleanOrphanedEntries
+   └─ 清理缓存中不再存在的文件条目，返回删除数量
+   394--418 | method cleanOldCacheEntries
+   └─ 清理超过指定天数的缓存条目，返回删除数量
+
+---
+
+# src/dependency/cache-types.ts (117 lines)
+└─ 定义依赖分析缓存的数据结构，包括配置指纹、序列化节点、文件缓存条目、完整缓存结构、缓存统计和缓存限制配置，用于存储和管理代码依赖分析结果。
+
+   11--17 | interface CacheFingerprint
+   └─ 定义缓存格式版本和解析器版本，用于检测分析配置变化
+   23--26 | interface SerializedDependencyNode
+   └─ 继承依赖节点，将Set转为数组便于JSON序列化存储
+   31--55 | interface FileCacheEntry
+   └─ 记录文件哈希、路径、分析结果及元数据，实现单文件缓存管理
+   60--75 | interface AnalysisCache
+   └─ 包含版本指纹、文件映射和时间戳，组织完整分析缓存结构
+   80--99 | interface CacheStats
+   └─ 统计缓存命中率和无效文件原因，评估缓存系统性能
+
+---
+
+# src/dependency/graph.ts (394 lines)
+└─ 实现依赖图构建与分析，包括ID解析、模块距离计算、智能边解析、环检测和拓扑排序等核心功能。
+
+   20--23 | function extractSimpleName
+   └─ 提取节点ID中的简单名称，处理点分隔符获取函数或方法名
+   35--56 | function extractModulePath
+   └─ 解析模块路径，处理路径分隔符和类名方法名，返回模块根路径
+   76--91 | function moduleDistance
+   └─ 计算两个模块间的距离，基于公共前缀长度和路径差异
+   111--183 | function resolveEdges
+   └─ 智能解析依赖边，按优先级匹配完整ID，支持同模块和最近模块策略
+   188--206 | function buildAdjacency
+   └─ 构建邻接表表示依赖关系，初始化节点并添加已解析的依赖边
+   220--265 | function detectCycles
+   └─ 实现Tarjan算法检测强连通分量，识别图中的循环依赖关系
+   228--256 | function strongconnect
+   └─ 递归处理节点，计算lowlink值并构建强连通分量
+   278--316 | function topologicalSort
+   └─ 使用Kahn算法进行拓扑排序，确定节点依赖顺序
+   323--332 | function getLeafNodes
+   └─ 识别不被其他节点依赖的叶子节点，定位入口点和底层实现
+   349--393 | function buildGraph
+   └─ 统一构建流程：解析边、去重、构建邻接表、环检测、拓扑排序
+
+---
+
+# src/dependency/index.ts (518 lines)
+└─ 导出依赖分析核心接口和工具函数，包含语言映射、缓存管理、图构建和可视化数据生成功能
+
+   66--70 | interface DependencyAnalyzerDeps
+   └─ 定义依赖分析器所需依赖项接口，包含文件系统、路径工具和工作区支持
+
+   85--98 | function findGitRoot
+   └─ 向上遍历目录查找.git文件夹，定位Git仓库根目录
+   120--325 | function analyze
+   └─ 实现核心依赖分析逻辑，支持文件/目录模式，集缓存管理和解析器
+   332--337 | function analyzeFile
+   └─ 提供便捷文件分析方法，直接调用通用analyze函数
+
+   346--360 | interface VisualizationData
+   └─ 定义Cytoscape.js可视化数据接口，包含图元素和统计摘要结构
+
+   383--472 | function generateVisualizationData
+   └─ 生成可视化数据，将依赖分析结果转换为Cytoscape.js兼容格式，包含节点、边和统计信息
+
+   483--518 | class DependencyAnalysisService
+   └─ 封装依赖分析服务类，提供本地仓库分析的面向对象API
+
+   489--517 | method analyzeLocalRepository
+   └─ 分析本地仓库，启用缓存并转换节点格式，兼容旧API，返回依赖分析结果
+
+---
+
+# src/dependency/models.ts (207 lines)
+└─ 定义依赖分析的核心数据结构，包括节点、边、结果统计等接口，用于表示代码元素及其依赖关系
+
+   18--68 | interface DependencyNode
+   └─ 定义代码元素节点，包含ID、类型、路径、依赖关系及LLM上下文字段
+   75--90 | interface DependencyEdge
+   └─ 表示依赖关系边，记录调用者、被调用者、调用位置和解析置信度
+   95--113 | interface DependencyResult
+   └─ 封装依赖分析结果，包含节点映射、关系列表、统计信息和拓扑排序
+   118--130 | interface DependencySummary
+   └─ 提供依赖分析统计摘要，包括文件数、节点数、关系数和语言列表
+   136--139 | interface ParseOutput
+   └─ 表示解析输出，包含节点数组和边数组，用于语言分析器结果
+   145--163 | interface FileParseResult
+   └─ 存储文件解析结果，包含路径、内容、语言、AST和错误信息
+   168--173 | interface LanguageConfig
+   └─ 配置语言支持，定义文件扩展名和TreeSitter解析器
+   178--182 | interface ParserCacheEntry
+   └─ 缓存解析器实例，记录使用时间以提高性能
+   187--191 | interface FileFilter
+   └─ 过滤文件，支持包含/排除规则和文件大小限制
+   196--206 | interface AnalysisOptions
+   └─ 定义依赖分析配置选项，控制包含测试、模块、符号链接处理、文件过滤、缓存启用和自定义缓存目录
+
+---
+
+# src/dependency/parse.ts (399 lines)
+└─ 解析器管理模块，提供文件解析、语言配置和缓存功能，支持多种编程语言的语法树分析
+
+   75--123 | class ParserCache
+   └─ 实现Tree-sitter解析器缓存管理，支持LRU淘汰和过期清理
+
+   80--83 | method constructor
+   └─ 初始化缓存实例，设置最大容量和过期时间参数
+   85--97 | method get
+   └─ 获取缓存条目，检查过期时间并更新最后使用时间
+   99--118 | method set
+   └─ 设置缓存条目，超出容量时移除最久未使用的条目
+
+   133--147 | function ensureParserInitialized
+   └─ 确保 tree-sitter 解析器初始化，避免重复初始化
+   152--192 | function initializeParser
+   └─ 初始化指定语言的 tree-sitter 解析器，支持 WASM 缓存
+   197--213 | function loadLanguageParser
+   └─ 根据文件扩展名加载对应的语言解析器
+   225--288 | function walkFiles
+   └─ 递归遍历目录收集支持文件，应用统一过滤逻辑
+   238--284 | function walk
+   └─ 递归处理目录条目，过滤收集支持的代码文件
+   293--336 | function parseFile
+   └─ 读取文件内容并使用对应语言解析器生成AST
+   341--364 | function parseDirectory
+   └─ 批量解析目录中的所有支持文件，提供进度回调
+   369--377 | function getLanguageConfig
+   └─ 根据文件扩展名查找对应的语言配置，返回匹配的配置对象或null
+
+---
+
+# src/dependency/query.ts (586 lines)
+└─ 实现依赖查询核心功能：模式匹配、双向树构建、连接分析、格式化输出，支持通配符搜索和深度限制
+
+   19--22 | interface QueryOptions
+   └─ 定义查询配置，指定最大遍历深度
+   27--34 | interface NodeQueryResult
+   └─ 封装单节点查询结果，包含节点本身、被调用者和调用者
+   39--54 | interface TreeNode
+   └─ 表示树形节点结构，包含ID、路径、行号和子节点
+   59--70 | interface ConnectionAnalysisResult
+   └─ 记录多函数连接分析结果，包含查询名称、匹配节点和连接链
+   75--82 | interface DirectConnection
+   └─ 定义直接连接关系，指定源节点和目标节点
+   87--92 | interface Chain
+   └─ 表示连接路径的有序节点ID列表和链长度
+
+   102--108 | function globToRegex
+   └─ 将通配符模式转换为正则表达式实现模糊匹配
+   124--134 | function matchesPattern
+   └─ 判断节点是否匹配模式支持通配符和精确匹配
+   143--179 | function findMatchingNodes
+   └─ 查找匹配模式的节点提供智能提示和批量查询
+   188--220 | function buildCalleeTree
+   └─ 构建被调用函数树实现递归依赖关系遍历
+   225--257 | function buildCallerTree
+   └─ 递归构建调用者树，遍历所有依赖目标节点的函数
+   267--285 | function queryNode
+   └─ 查询节点的双向依赖关系，分别构建被调用和调用树
+   294--302 | function buildAdjacency
+   └─ 构建节点邻接表，将依赖关系转换为图结构
+   307--327 | function findDirectConnections
+   └─ 查找匹配节点间的直接连接关系，过滤非目标依赖
+   332--366 | function findShortestPath
+   └─ 使用BFS算法查找两节点间的最短路径，限制最大长度
+   371--393 | function findChains
+   └─ 遍历所有节点对，寻找最短路径并构建连接链，按长度排序结果
+   402--451 | function analyzeConnections
+   └─ 执行完整连接分析流程：匹配节点、查找直接连接和路径链、收集相关节点
+   460--473 | function formatTreeNode
+   └─ 递归格式化树节点，生成带缩进和连接符的文本表示
+   478--513 | function formatNodeQueryResult
+   └─ 格式化单个节点的依赖结果，显示调用者和被调用者树形结构
+   518--585 | function formatConnectionAnalysisResult
+   └─ 格式化连接分析结果，展示匹配节点、直接连接和路径链信息
+
+---
+
+# src/examples/create-sample-files.ts (1330 lines)
+└─ 创建示例文件函数，生成包含JavaScript、Python、Markdown、JSON和多个代码文件的完整项目结构，用于演示Autodev代码库索引系统的功能。
+
+   2--1328 | function createSampleFiles
+   └─ [Code too large to summarize (1327 lines)]
 
 ---
 
@@ -615,6 +854,14 @@
 
 ---
 
+# src/examples/run-dependency-analyzer.ts (237 lines)
+└─ 初始化文件系统适配器与路径工具，配置依赖分析器依赖项，准备执行依赖分析流程
+
+   26--233 | function main
+   └─ 执行依赖分析主函数，解析路径参数，调用分析器并输出详细结果，包括节点关系统计、循环依赖检测和可视化数据导出
+
+---
+
 # src/examples/run-example.ts (25 lines)
 └─ 根据命令行参数选择并执行不同的示例代码，包括基础、高级和CLI三种模式
 
@@ -673,153 +920,35 @@
 
 ---
 
-# src/ignore/RooIgnoreController.ts (219 lines)
-└─ 实现基于.rooignore文件控制LLM文件访问权限，支持.gitignore语法，动态加载和验证文件路径。
+# src/ignore/IgnoreService.ts (191 lines)
+└─ 实现统一忽略服务，提供gitignore语义文件过滤，支持目录跳过和文件忽略功能
 
-   12--218 | class RooIgnoreController
-   └─ 管理LLM文件访问权限，通过.rooignore文件控制文件读写。
+   11--15 | interface IgnoreServiceOptions
+   └─ 定义忽略服务的配置选项，包含根路径、忽略文件和额外规则
 
-   21--37 | method constructor
-   └─ 初始化控制器，设置依赖并监听.rooignore文件变化。
-   50--69 | method setupFileWatcher
-   └─ 配置文件监视器，在.rooignore文件变更时自动重新加载规则。
-   74--98 | method loadRooIgnore
-   └─ 异步加载.rooignore文件内容，解析并应用到忽略规则实例。
-   105--121 | method validateAccess
-   └─ 验证文件路径是否被忽略，支持绝对和相对路径检查。
-   128--177 | method validateCommand
-   └─ 解析终端命令，检查文件读取操作是否违反忽略规则，返回被阻止的文件路径。
-   184--197 | method filterPaths
-   └─ 过滤路径列表，移除被忽略的文件，确保只返回允许访问的路径。
-   202--205 | method dispose
-   └─ 清理资源，移除所有文件监视器回调函数，防止内存泄漏。
-   211--217 | method getInstructions
-   └─ 生成.rooignore文件的说明文本，指导大模型遵守文件访问限制。
+   21--190 | class IgnoreService
+   └─ 提供统一忽略服务，实现gitignore语义的文件过滤功能
 
----
-
-# src/dependency/graph.ts (394 lines)
-└─ 实现依赖图构建与分析，包括ID解析、模块距离计算、智能边解析、环检测和拓扑排序等核心功能。
-
-   20--23 | function extractSimpleName
-   └─ 提取节点ID中的简单名称，处理点分隔符获取函数或方法名
-   35--56 | function extractModulePath
-   └─ 解析模块路径，处理路径分隔符和类名方法名，返回模块根路径
-   76--91 | function moduleDistance
-   └─ 计算两个模块间的距离，基于公共前缀长度和路径差异
-   111--183 | function resolveEdges
-   └─ 智能解析依赖边，按优先级匹配完整ID，支持同模块和最近模块策略
-   188--206 | function buildAdjacency
-   └─ 构建邻接表表示依赖关系，初始化节点并添加已解析的依赖边
-   220--265 | function detectCycles
-   └─ 实现Tarjan算法检测强连通分量，识别图中的循环依赖关系
-   228--256 | function strongconnect
-   └─ 递归处理节点，计算lowlink值并构建强连通分量
-   278--316 | function topologicalSort
-   └─ 使用Kahn算法进行拓扑排序，确定节点依赖顺序
-   323--332 | function getLeafNodes
-   └─ 识别不被其他节点依赖的叶子节点，定位入口点和底层实现
-   349--393 | function buildGraph
-   └─ 统一构建流程：解析边、去重、构建邻接表、环检测、拓扑排序
+   26--33 | method constructor
+   └─ 初始化忽略服务，接收文件系统、路径工具和配置选项
+   39--60 | method initialize
+   └─ 异步加载忽略规则，包括默认目录、忽略文件和额外规则
+   62--73 | method loadIgnoreFile
+   └─ 读取并解析忽略文件，提取有效规则到忽略库中
+   87--109 | method shouldSkipDirectory
+   └─ 检查目录是否应跳过，通过快速路径和完整规则判断
+   118--130 | method shouldIgnore
+   └─ 判断文件是否被忽略，处理路径并返回忽略状态
+   150--173 | method toRelative
+   └─ 将路径转换为相对路径，处理绝对路径和路径规范化
+   178--182 | method getRules
+   └─ 返回已知规则，排除忽略库的内部规则
 
 ---
 
-# src/dependency/index.ts (492 lines)
-└─ 定义依赖分析核心模块，提供仓库和文件级别的依赖分析功能，支持多种编程语言，包含图构建、循环检测和可视化数据生成。
+# src/ignore/default-dirs.ts (31 lines)
+└─ 定义全局忽略目录列表，统一版本控制、依赖、构建及缓存目录的过滤规则，支持 ripgrep 隐藏目录通配符
 
-   50--53 | interface DependencyAnalyzerDeps
-   └─ 定义依赖分析器所需的文件系统和路径工具接口
-
-   76--141 | function analyze
-   └─ 分析整个仓库依赖，解析文件并构建依赖图
-   157--213 | function analyzeFile
-   └─ 分析单个文件依赖，提取节点和边
-   218--225 | function isFile
-   └─ 判断路径是否为文件类型
-   243--254 | function analyzeTarget
-   └─ 自动判断目标路径类型并调用相应分析函数
-   259--314 | function extractNodesAndEdges
-   └─ 从解析结果提取节点和边，动态加载语言分析器，无分析器时创建文件节点作为后备
-
-   323--337 | interface VisualizationData
-   └─ 定义Cytoscape.js可视化数据接口，包含图元素和统计摘要结构
-
-   360--449 | function generateVisualizationData
-   └─ 生成可视化数据，将依赖分析结果转换为Cytoscape.js兼容格式，包含节点、边和统计信息
-
-   460--491 | class DependencyAnalysisService
-   └─ 提供Service风格API，封装依赖分析功能，支持本地仓库分析
-
-   466--490 | method analyzeLocalRepository
-   └─ 分析本地仓库，将Map格式节点转换为Record格式，兼容旧API
-
----
-
-# src/dependency/models.ts (203 lines)
-└─ 定义依赖分析核心数据结构，包括节点、边、结果等接口，支持跨平台代码元素标识和依赖关系建模
-
-   18--68 | interface DependencyNode
-   └─ 定义代码元素节点，包含ID、类型、路径、依赖关系及LLM上下文字段
-   75--90 | interface DependencyEdge
-   └─ 表示依赖关系边，记录调用者、被调用者、调用位置和解析置信度
-   95--113 | interface DependencyResult
-   └─ 封装依赖分析结果，包含节点映射、关系列表、统计信息和拓扑排序
-   118--130 | interface DependencySummary
-   └─ 提供依赖分析统计摘要，包括文件数、节点数、关系数和语言列表
-   136--139 | interface ParseOutput
-   └─ 表示解析输出，包含节点数组和边数组，用于语言分析器结果
-   145--163 | interface FileParseResult
-   └─ 存储文件解析结果，包含路径、内容、语言、AST和错误信息
-   168--173 | interface LanguageConfig
-   └─ 配置语言支持，定义文件扩展名和TreeSitter解析器
-   178--182 | interface ParserCacheEntry
-   └─ 缓存解析器实例，记录使用时间以提高性能
-   187--191 | interface FileFilter
-   └─ 过滤文件，支持包含/排除规则和文件大小限制
-   196--202 | interface AnalysisOptions
-   └─ 控制分析行为，包括模块、测试、深度和符号链接处理
-
----
-
-# src/dependency/parse.ts (510 lines)
-└─ 管理Tree-sitter解析器，支持多种编程语言的文件解析和AST生成，提供缓存机制和文件遍历功能。
-
-   97--145 | class ParserCache
-   └─ 实现Tree-sitter解析器缓存管理，支持LRU淘汰和过期清理
-
-   102--105 | method constructor
-   └─ 初始化缓存实例，设置最大容量和过期时间参数
-   107--119 | method get
-   └─ 获取缓存条目，检查过期时间并更新最后使用时间
-   121--140 | method set
-   └─ 设置缓存条目，超出容量时移除最久未使用的条目
-
-   152--182 | function findCoreWasmPath
-   └─ 查找核心tree-sitter.wasm文件，支持多种路径查找策略
-   190--212 | function ensureParserInitialized
-   └─ 确保Tree-sitter解析器初始化，避免重复初始化
-
-   200--205 | method locateFile
-   └─ 定位WASM文件路径，优先返回核心解析器路径
-
-   217--254 | function findWasmPath
-   └─ 查找语言特定的WASM文件路径，支持自定义和默认位置
-   261--298 | function initializeParser
-   └─ 初始化指定语言的Tree-sitter解析器，支持缓存机制
-   303--319 | function loadLanguageParser
-   └─ 根据文件扩展名加载对应的语言解析器
-   324--385 | function walkFiles
-   └─ 递归遍历目录，收集符合条件的目标文件
-   333--381 | function walk
-   └─ 递归处理目录条目，过滤并收集支持的文件
-   390--400 | function matchesPattern
-   └─ 将通配符模式转换为正则表达式进行匹配
-   405--448 | function parseFile
-   └─ 读取文件内容并使用对应语言解析器生成AST
-   453--475 | function parseDirectory
-   └─ 批量解析目录中的所有文件并返回解析结果
-   480--488 | function getLanguageConfig
-   └─ 根据文件扩展名查找对应的语言配置，返回匹配的配置对象或null
 
 ---
 
@@ -968,6 +1097,69 @@
 
 ---
 
+# src/tools/file-chunker-cli.ts (271 lines)
+└─ 实现文件切块命令行工具，支持多种输出格式和切块策略，提供文件查找和信息查询功能。
+
+   9--23 | interface CLIOptions
+   └─ 定义CLI选项接口，包含输出格式、切块参数和文件处理配置
+
+   28--92 | function formatOutput
+   └─ 格式化输出结果，支持JSON、CSV和文本三种格式，可选择保存到文件
+   97--101 | function findFiles
+   └─ 实现文件查找功能，当前为简化实现，实际可使用glob库
+   106--261 | function main
+   └─ 构建命令行程序，提供chunk、find、info和list-ext四个子命令
+
+---
+
+# src/tools/file-chunker.ts (249 lines)
+└─ 实现文件切块工具类，支持tree-sitter解析、批量处理文件，生成带哈希的代码块结构。
+
+   11--14 | interface ParentContainer
+   └─ 定义父级容器信息结构，包含标识符和类型
+   19--44 | interface FileChunk
+   └─ 定义文件块结构，包含路径、内容、哈希等完整信息
+   49--64 | interface FileChunkerOptions
+   └─ 定义切块配置选项，控制块大小和类型等参数
+   69--82 | interface ChunkResult
+   └─ 定义切块结果结构，包含文件信息和生成的块列表
+
+   109--227 | class FileChunker
+   └─ 实现文件切块工具类，支持单文件和批量处理
+
+   110--118 | property defaultOptions
+   └─ 定义文件切块的默认配置参数，包含最小块大小、最大块大小等关键设置
+
+   130--186 | method chunkFile
+   └─ 实现单个文件切块逻辑，读取文件内容、计算哈希值、使用CodeParser解析并转换为FileChunk格式
+   194--208 | method chunkFiles
+   └─ 批量处理多个文件切块，遍历文件列表并调用chunkFile方法，错误处理确保继续执行
+   215--218 | method isFileSupported
+   └─ 检查文件扩展名是否在支持列表中，判断文件是否可进行切块处理
+
+   235--238 | function chunkFile
+   └─ 提供便捷的单文件切块函数，创建FileChunker实例并调用chunkFile方法
+   246--249 | function chunkFiles
+   └─ 创建文件切块器实例，批量处理多个文件并返回切块结果列表
+
+---
+
+# src/tools/test-tree-sitter.ts (201 lines)
+└─ 测试Tree-sitter解析器的工具脚本，支持解析代码定义和输出JSON格式的捕获详情，提供命令行接口和错误处理。
+
+   27--44 | function parseFile
+   └─ 解析指定文件的代码定义，输出解析结果或错误信息
+   49--122 | function outputCapturesAsJson
+   └─ 读取文件内容并生成JSON格式的语法树捕获数据
+   127--142 | function getFilePath
+   └─ 从命令行参数或环境变量获取文件路径，支持默认值
+   147--163 | function showUsage
+   └─ 显示程序使用说明和命令行参数示例
+   166--194 | function main
+   └─ 主函数协调整个流程，包括文件验证、解析和JSON输出
+
+---
+
 # src/tree-sitter/index.ts (453 lines)
 └─ 使用tree-sitter解析代码文件，提取函数、类等定义，支持多种编程语言和Markdown文件，提供代码结构化视图。
 
@@ -987,25 +1179,17 @@
 
 ---
 
-# src/tree-sitter/languageParser.ts (373 lines)
-└─ 实现多语言解析器加载系统，动态查找WASM文件，支持ES模块和CommonJS环境，初始化tree-sitter核心解析器，根据文件扩展名加载对应语言的语法解析器和查询规则。
+# src/tree-sitter/languageParser.ts (247 lines)
+└─ 定义语言解析器接口，加载Tree-sitter WASM模块，初始化解析器，根据文件扩展名加载对应语言的语法解析器和查询规则，支持多种编程语言的语法树解析
 
-   35--40 | interface LanguageParser
+   34--39 | interface LanguageParser
    └─ 定义语言解析器接口，存储解析器和查询对象
 
-   46--95 | function findWasmFile
-   └─ 查找指定语言的WASM文件，支持多种环境路径解析
-   97--156 | function findCoreTreeSitterWasm
-   └─ 查找核心tree-sitter WASM文件，支持多种部署环境
-   158--166 | function loadLanguage
-   └─ 异步加载指定语言的解析器，处理加载错误
-   171--201 | function initializeParser
-   └─ 初始化tree-sitter解析器，确保单例模式并设置WASM路径
-
-   189--194 | method locateFile
-   └─ 重写tree-sitter.wasm文件路径，确保核心库正确加载
-
-   225--372 | function loadRequiredLanguageParsers
+   41--49 | function loadLanguage
+   └─ 加载指定语言的tree-sitter WASM模块，返回语言解析器实例
+   54--75 | function initializeParser
+   └─ 初始化tree-sitter解析器，确保单例模式和线程安全
+   99--246 | function loadRequiredLanguageParsers
    └─ 根据文件扩展名动态加载对应的语言解析器和查询规则
 
 ---
@@ -1022,6 +1206,28 @@
    └─ 解析Markdown文件，提取标题和章节范围，生成模拟捕获
    183--216 | function formatMarkdownCaptures
    └─ 格式化Markdown捕获，输出标题行范围和文本内容
+
+---
+
+# src/tree-sitter/wasm-loader.ts (116 lines)
+└─ 提供统一的 WASM 文件路径解析功能，支持开发与生产环境切换，并创建用于 web-tree-sitter 的 locateFile 函数。
+
+   16--24 | function getBasePath
+   └─ 获取当前模块基础路径，优先使用 import.meta.url，降级报错
+   30--34 | function isDevelopment
+   └─ 通过检查路径是否包含 '/src/' 判断是否为开发环境
+   55--90 | function resolveWasmPath
+   └─ 解析 WASM 文件路径，支持环境检测和自定义目录，验证文件存在性
+   104--115 | function createLocateFileFunction
+   └─ 创建拦截 tree-sitter.wasm 加载请求的 locateFile 函数，返回预解析路径
+
+---
+
+# src/types/vitest.d.ts (140 lines)
+└─ 定义Vitest测试框架的全局类型声明，提供describe、it、expect等测试函数的类型支持，并添加Jest兼容性方法。
+
+   116--136 | interface Mock
+   └─ 为Vitest的Mock接口添加Jest兼容方法，支持设置解析值、拒绝值及一次性延迟操作
 
 ---
 
@@ -1236,69 +1442,6 @@
 
 ---
 
-# src/tools/file-chunker-cli.ts (271 lines)
-└─ 实现文件切块命令行工具，支持多种输出格式和切块策略，提供文件查找和信息查询功能。
-
-   9--23 | interface CLIOptions
-   └─ 定义CLI选项接口，包含输出格式、切块参数和文件处理配置
-
-   28--92 | function formatOutput
-   └─ 格式化输出结果，支持JSON、CSV和文本三种格式，可选择保存到文件
-   97--101 | function findFiles
-   └─ 实现文件查找功能，当前为简化实现，实际可使用glob库
-   106--261 | function main
-   └─ 构建命令行程序，提供chunk、find、info和list-ext四个子命令
-
----
-
-# src/tools/file-chunker.ts (249 lines)
-└─ 实现文件切块工具类，支持tree-sitter解析、批量处理文件，生成带哈希的代码块结构。
-
-   11--14 | interface ParentContainer
-   └─ 定义父级容器信息结构，包含标识符和类型
-   19--44 | interface FileChunk
-   └─ 定义文件块结构，包含路径、内容、哈希等完整信息
-   49--64 | interface FileChunkerOptions
-   └─ 定义切块配置选项，控制块大小和类型等参数
-   69--82 | interface ChunkResult
-   └─ 定义切块结果结构，包含文件信息和生成的块列表
-
-   109--227 | class FileChunker
-   └─ 实现文件切块工具类，支持单文件和批量处理
-
-   110--118 | property defaultOptions
-   └─ 定义文件切块的默认配置参数，包含最小块大小、最大块大小等关键设置
-
-   130--186 | method chunkFile
-   └─ 实现单个文件切块逻辑，读取文件内容、计算哈希值、使用CodeParser解析并转换为FileChunk格式
-   194--208 | method chunkFiles
-   └─ 批量处理多个文件切块，遍历文件列表并调用chunkFile方法，错误处理确保继续执行
-   215--218 | method isFileSupported
-   └─ 检查文件扩展名是否在支持列表中，判断文件是否可进行切块处理
-
-   235--238 | function chunkFile
-   └─ 提供便捷的单文件切块函数，创建FileChunker实例并调用chunkFile方法
-   246--249 | function chunkFiles
-   └─ 创建文件切块器实例，批量处理多个文件并返回切块结果列表
-
----
-
-# src/tools/test-tree-sitter.ts (201 lines)
-└─ 测试Tree-sitter解析器的工具脚本，支持解析代码定义和输出JSON格式的捕获详情，提供命令行接口和错误处理。
-
-   27--44 | function parseFile
-   └─ 解析指定文件的代码定义，输出解析结果或错误信息
-   49--122 | function outputCapturesAsJson
-   └─ 读取文件内容并生成JSON格式的语法树捕获数据
-   127--142 | function getFilePath
-   └─ 从命令行参数或环境变量获取文件路径，支持默认值
-   147--163 | function showUsage
-   └─ 显示程序使用说明和命令行参数示例
-   166--194 | function main
-   └─ 主函数协调整个流程，包括文件验证、解析和JSON输出
-
----
-
 # src/adapters/nodejs/config.ts (354 lines)
 └─ Node.js配置提供器适配器，实现JSON配置文件管理，支持全局和项目级配置加载、保存、验证及变更通知。
 
@@ -1441,41 +1584,101 @@
 
 ---
 
-# src/adapters/nodejs/workspace.ts (233 lines)
-└─ 实现Node.js工作区适配器，提供文件系统操作和忽略规则处理功能，支持路径转换和文件查找。
+# src/adapters/nodejs/workspace.ts (193 lines)
+└─ Node.js工作区适配器实现，提供文件系统操作和忽略规则处理，支持工作区管理和路径工具功能。
 
    11--14 | interface NodeWorkspaceOptions
    └─ 定义Node.js工作区适配器的配置接口，包含根路径和忽略文件列表
 
-   16--199 | class NodeWorkspace
-   └─ 实现IWorkspace接口，提供文件系统操作和忽略规则处理功能
+   16--158 | class NodeWorkspace
+   └─ 实现IWorkspace接口，提供Node.js文件系统操作的核心工作区功能
 
-   24--37 | property DEFAULT_IGNORES
-   └─ 定义默认忽略模式列表，包含常见项目目录和文件类型
-
-   39--43 | method constructor
-   └─ 初始化工作区适配器，设置根路径、忽略文件和忽略实例
-   49--52 | method getRelativePath
-   └─ 计算相对于工作区根路径的相对路径，用于文件匹配和忽略规则
-   54--63 | method getIgnoreRules
-   └─ 返回忽略规则列表，确保规则已加载，未加载时发出警告
-   69--87 | method getGlobIgnorePatterns
-   └─ 将忽略规则转换为glob格式，支持目录和通配符模式
-   89--106 | method shouldIgnore
-   └─ 检查文件路径是否应被忽略，使用gitignore语义处理
-   112--118 | method getWorkspaceFolders
-   └─ 返回工作区文件夹信息，包含名称、URI和索引
-   120--136 | method findFiles
-   └─ 根据模式查找文件，排除指定模式并应用忽略规则
-   138--164 | method loadIgnoreRules
-   └─ 加载忽略规则文件，解析内容并过滤注释行，构建忽略规则列表
-   170--178 | method matchPattern
+   23--34 | method constructor
+   └─ 初始化工作区，配置文件系统接口和忽略规则服务
+   40--44 | method getRelativePath
+   └─ 计算相对于工作区根目录的文件路径，处理空根路径情况
+   54--73 | method getGlobIgnorePatterns
+   └─ 转换忽略模式为glob格式，支持目录匹配和通配符处理
+   75--78 | method shouldIgnore
+   └─ 初始化忽略服务后检查文件是否被忽略，使用异步确认
+   88--91 | method getName
+   └─ 返回工作区名称，取根目录名或默认值
+   93--100 | method getWorkspaceFolders
+   └─ 生成工作区文件夹列表，包含名称和URI
+   102--123 | method findFiles
+   └─ 根据模式匹配查找文件，支持排除规则
+   129--137 | method matchPattern
    └─ 将通配符模式转换为正则表达式，匹配文件路径或文件名
-   180--198 | method walkDirectory
-   └─ 递归遍历目录结构，对每个文件执行回调函数处理
+   139--157 | method walkDirectory
+   └─ 递归遍历目录结构，处理文件和子目录
 
-   201--233 | class NodePathUtils
+   160--192 | class NodePathUtils
    └─ 实现路径工具类，提供文件路径操作的各种方法
+
+---
+
+# src/commands/config/file-loader.ts (88 lines)
+└─ 加载配置文件的工具模块，支持全局和项目层级配置的读取与合并，提供默认配置作为基础。
+
+   14--19 | interface ConfigLayer
+   └─ 定义配置层结构，包含解析后的配置对象和文件路径
+   24--33 | interface ConfigLayers
+   └─ 定义所有配置层次结构，包括默认、全局、项目及合并后的配置
+
+   42--54 | function loadConfigLayer
+   └─ 读取并解析单个配置文件，若文件不存在则返回null，出错则退出进程
+   67--87 | function loadConfigLayers
+   └─ 加载所有配置层次，按优先级合并配置并返回完整配置结构
+
+---
+
+# src/commands/config/get.ts (123 lines)
+└─ 实现配置获取命令，支持查看默认、全局和项目配置层的详细信息或特定配置项的值。
+
+   14--19 | function formatValue
+   └─ 将配置值格式化为字符串显示，处理undefined、null、object等特殊类型。
+   24--53 | function printAllConfigLayers
+   └─ 详细打印所有配置层级信息，展示有效配置、项目配置、全局配置和默认值。
+   58--74 | function printConfigItemLayers
+   └─ 打印指定配置项在各层级中的值，包括默认值、全局值、项目值和有效值。
+   79--122 | function configGetHandler
+   └─ 实现配置获取命令的核心逻辑，支持JSON格式或详细格式输出，解析并合并各层级配置。
+
+---
+
+# src/commands/config/index.ts (38 lines)
+└─ 配置命令入口，实现配置获取与设置逻辑，支持全局配置和JSON输出，动态加载子命令处理器
+
+   9--37 | function createConfigCommand
+   └─ 创建配置命令管理器，实现配置获取和设置功能，支持路径和JSON输出选项
+
+---
+
+# src/commands/config/metadata.ts (147 lines)
+└─ 定义配置键元数据类型和验证规则，集中管理所有配置项的常量和约束条件，确保配置一致性和正确性。
+
+   13--24 | interface ConfigKeyMetadata
+   └─ 定义配置键的元数据接口，包含值类型、枚举值、数值范围约束和人类可读描述
+
+---
+
+# src/commands/config/parser.ts (146 lines)
+└─ 解析配置值并进行类型转换与验证，支持布尔、整数、数字、枚举和字符串类型。解析键值对字符串，验证格式和有效性。
+
+   18--97 | function parseConfigValue
+   └─ 解析配置值，根据类型转换并验证输入，支持布尔、整数、数字、枚举等类型，包含错误处理。
+   106--135 | function parseConfigPairs
+   └─ 解析逗号分隔的键值对字符串，验证格式和键的有效性，返回键值映射对象。
+
+---
+
+# src/commands/config/set.ts (91 lines)
+└─ 实现配置设置命令，解析键值对，合并配置，验证并保存到指定路径，同时更新Git全局忽略文件。
+
+   20--49 | function saveConfig
+   └─ 保存配置到文件，创建目录、合并配置并更新git全局忽略列表
+   54--90 | function configSetHandler
+   └─ 解析配置参数，确定配置路径，合并验证后保存配置
 
 ---
 
@@ -1494,73 +1697,6 @@
    └─ 定义搜索结果数量限制的常量类型，包含默认、最大和最小值
    20--24 | type SearchMinScore
    └─ 定义搜索最小分数的常量类型，包含默认、最小和最大值
-
----
-
-# src/types/vitest.d.ts (140 lines)
-└─ 定义Vitest测试框架的全局类型声明，提供describe、it、expect等测试函数的类型支持，并添加Jest兼容性方法。
-
-   116--136 | interface Mock
-   └─ 为Vitest的Mock接口添加Jest兼容方法，支持设置解析值、拒绝值及一次性延迟操作
-
----
-
-# src/code-index/rerankers/index.ts (3 lines)
-└─ 导出ollama和openai兼容模块的索引文件，统一暴露外部接口
-
-
----
-
-# src/code-index/rerankers/ollama.ts (495 lines)
-
-   12--494 | class OllamaLLMReranker
-   └─ 实现基于Ollama LLM的代码重排序器，支持批量处理、并发控制和重试机制，通过LLM评分对候选结果进行智能排序。
-
-   20--36 | method constructor
-   └─ 初始化Ollama LLM重排序器，配置基础URL、模型ID、批处理大小、并发数、重试次数和延迟时间，规范化基础URL。
-   46--134 | method rerank
-   └─ 实现批量重排序逻辑，支持并发处理和重试机制，使用指数退避策略处理失败批次，最终合并排序结果。
-   142--162 | method rerankSingleBatch
-   └─ 构建评分提示并调用Ollama API生成候选分数，合并结果并按分数降序排序返回。
-   167--196 | method buildScoringPrompt
-   └─ 构建LLM评分提示，定义评分标准，格式化查询和代码片段，要求返回JSON格式的分数数组
-   201--225 | method buildContextInfo
-   └─ 构建候选代码的上下文信息，包含层次结构和文件路径，用于提示词生成。
-   230--316 | method generateScores
-   └─ 调用Ollama API生成评分，处理代理配置、超时控制和响应解析，确保评分在0-10范围内
-   321--336 | method extractScoresFromText
-   └─ 从文本中提取数字分数，使用正则匹配并限制在0-10范围内
-   342--486 | method validateConfiguration
-   └─ 验证Ollama服务可用性，检查模型存在性和文本生成能力，处理代理连接和超时错误
-   488--493 | method rerankerInfo
-   └─ 返回重排序器信息，包含名称和模型标识符
-
----
-
-# src/code-index/rerankers/openai-compatible.ts (575 lines)
-└─ 实现了OpenAI兼容API的代码重排序器，支持批量处理、并发控制和重试机制，通过LLM评分对候选结果进行智能排序
-
-   12--574 | class OpenAICompatibleReranker
-   └─ 实现OpenAI兼容的代码重排序器，支持批量处理和重试机制
-
-   21--39 | method constructor
-   └─ 初始化重排序器配置，设置基础URL、模型ID和批处理参数
-   49--139 | method rerank
-   └─ 执行重排序逻辑，分组处理候选结果并应用重试策略
-   147--167 | method rerankSingleBatch
-   └─ 处理单个批次候选结果，调用LLM生成相关性评分
-   172--201 | method buildScoringPrompt
-   └─ 构建评分提示模板，定义评分标准和响应格式要求
-   206--230 | method buildContextInfo
-   └─ 构建候选代码的上下文信息，包含层次结构和文件路径
-   235--344 | method generateScores
-   └─ 调用OpenAI兼容API生成代码相关性分数，处理代理和超时
-   349--364 | method extractScoresFromText
-   └─ 从文本中提取并验证分数，确保数值在0-10范围内
-   370--566 | method validateConfiguration
-   └─ 验证OpenAI兼容服务配置，检查模型可用性和连接状态
-   568--573 | method rerankerInfo
-   └─ 返回重排序器信息，包含名称和模型标识符
 
 ---
 
@@ -1755,144 +1891,6 @@
 
 ---
 
-# src/code-index/processors/batch-processor.ts (496 lines)
-└─ 批量处理器类，实现文件删除、嵌入生成、向量存储和缓存更新，支持重试和截断回退机制。
-
-   16--21 | interface BatchProcessingResult
-   └─ 定义批量处理结果接口，包含处理数量、失败数量、错误列表和文件处理结果
-   23--44 | interface BatchProcessorOptions
-   └─ 定义批量处理器选项接口，包含嵌入器、向量存储、缓存管理器和策略函数
-
-   54--495 | class BatchProcessor
-   └─ 实现通用批量处理器，处理文件删除、嵌入生成、向量存储和缓存更新
-
-   60--70 | method _isRecoverableError
-   └─ 判断错误是否可恢复，检查错误消息中是否包含上下文长度相关关键词
-   76--104 | method _truncateTextByLines
-   └─ 按行截断文本以保持代码完整性，避免添加语言特定截断标记
-   111--204 | method _processItemWithTruncation
-   └─ 实现文本截断重试逻辑，逐步减少阈值直到成功或达到最小限制
-   209--305 | method _processItemsIndividually
-   └─ 提供个体处理回退机制，包含超时保护和逐项截断重试
-   307--340 | method processBatch
-   └─ 协调整个批处理流程，分阶段处理文件删除和批量索引
-   342--376 | method handleDeletions
-   └─ 处理文件删除操作，同步清理向量存储和缓存记录
-   378--393 | method processItemsInBatches
-   └─ 动态分批处理项目，根据嵌入器能力调整批次大小
-   398--494 | method processSingleBatch
-   └─ 处理单个批次，包含重试机制、错误恢复和降级处理，确保批量操作可靠性
-
----
-
-# src/code-index/processors/file-watcher.ts (582 lines)
-└─ 文件监视器实现，监听文件变化并批量处理代码块，支持创建、修改、删除事件，集成向量存储和缓存管理。
-
-   35--581 | class FileWatcher
-   └─ 实现文件监控接口，监听文件变化事件并批量处理
-
-   59--63 | property onBatchProgressUpdate
-   └─ 报告批量处理进度，显示已处理文件数量和当前文件
-   68--71 | property onBatchProgressBlocksUpdate
-   └─ 报告批量处理进度，显示已处理代码块数量
-
-   87--124 | method constructor
-   └─ 初始化文件监控器，设置依赖和事件处理器
-   129--158 | method initialize
-   └─ 创建文件监控实例，监听工作区文件变化事件
-   163--170 | method dispose
-   └─ 清理文件监视器和定时器资源，释放内存占用
-   176--179 | method handleFileCreated
-   └─ 将文件创建事件加入待处理队列，触发批量处理
-   185--188 | method handleFileChanged
-   └─ 将文件变更事件加入待处理队列，触发批量处理
-   194--197 | method handleFileDeleted
-   └─ 将文件删除事件加入待处理队列，触发批量处理
-   202--207 | method scheduleBatchProcessing
-   └─ 设置防抖定时器，合并短时间内多个文件事件
-   212--224 | method triggerBatchProcessing
-   └─ 触发批量处理，清空事件队列并开始处理
-   230--485 | method processBatch
-   └─ 处理批量事件，读取文件内容并生成代码块
-   492--580 | method processFile
-   └─ 处理单个文件，验证并生成嵌入向量
-
----
-
-# src/code-index/processors/index.ts (4 lines)
-└─ 导出解析器、扫描器和文件监视器模块，统一索引处理功能入口
-
-
----
-
-# src/code-index/processors/parser.ts (1059 lines)
-└─ 实现代码解析器，支持多种语言和Markdown文件，使用Tree-sitter进行语法分析，将代码块分割为语义单元并构建父子关系链。
-
-   46--50 | interface MarkdownHeader
-   └─ 定义Markdown头部信息结构，包含层级、文本和行号
-
-   55--1055 | class CodeParser
-   └─ [Code too large to summarize (1001 lines)]
-
-   67--101 | method parseFile
-   └─ 解析文件入口，处理文件路径、内容读取和哈希生成
-   128--319 | method parseContent
-   └─ 核心解析逻辑，处理不同语言类型和树状结构解析
-   324--500 | method _chunkTextByLines
-   └─ 按行分块处理，支持大行分割和内容平衡
-   502--510 | method _performFallbackChunking
-   └─ 回退分块策略，简单按行分割内容
-   512--548 | method _chunkLeafNodeByLines
-   └─ 将语法树叶子节点按行分割，保留父级上下文信息
-   555--594 | method _chunkDefinitionNodeByLines
-   └─ 按行分割定义节点，保持标识符和层级结构
-   599--615 | method deduplicateBlocks
-   └─ 按优先级去重，移除被包含的代码块
-   623--632 | method buildParentChain
-   └─ 根据上下文选择构建父级链的方法
-   637--689 | method buildTreeSitterParentChain
-   └─ 遍历父节点构建层级链，跳过非容器节点
-   695--726 | method buildMarkdownParentChain
-   └─ 构建Markdown标题的父子层级链，通过栈结构递归查找父级标题
-   739--780 | method extractNodeIdentifier
-   └─ 从语法节点中提取标识符，支持字段名、子节点和JSON键等多种方式
-   785--805 | method normalizeNodeType
-   └─ 规范化节点类型名称，将声明和定义类型映射为统一简洁的标识
-   810--825 | method buildHierarchyDisplay
-   └─ 构建代码节点的层级显示字符串，组合父级链和当前节点信息
-   830--845 | method buildMarkdownHierarchyDisplay
-   └─ 构建Markdown标题的层级显示字符串，使用精简的header_X格式
-   850--860 | method updateHeaderStack
-   └─ 维护markdown标题栈，移除同级或更低级标题，添加新标题
-   865--870 | method isBlockContained
-   └─ 检查代码块是否被包含在另一个代码块内，避免重复
-   875--944 | method processMarkdownSection
-   └─ 处理markdown章节内容，根据大小决定分块或创建单个代码块
-   946--1054 | method parseMarkdownContent
-   └─ 解析markdown文件，处理标题层级关系和剩余内容
-
----
-
-# src/code-index/processors/scanner.ts (471 lines)
-└─ 目录扫描器实现递归扫描代码文件，过滤支持扩展名，并发处理代码块，生成嵌入向量并存储到向量数据库，同时处理缓存和错误管理。
-
-   31--41 | interface DirectoryScannerDependencies
-   └─ 定义目录扫描器依赖接口，包含嵌入器、向量存储等核心组件
-
-   43--471 | class DirectoryScanner
-   └─ 实现目录扫描器类，支持并发文件处理和批量索引
-
-   47--58 | method constructor
-   └─ 初始化扫描器，设置批处理阈值和依赖注入
-   75--348 | method scanDirectory
-   └─ 扫描目录并处理文件，支持缓存、批处理和错误处理
-   350--435 | method processBatch
-   └─ 处理代码块批次，生成嵌入向量并存储到向量数据库
-   437--470 | method getAllFilePaths
-   └─ 递归扫描目录，过滤目录和忽略规则，返回支持的文件路径列表
-
----
-
 # src/code-index/interfaces/cache.ts (38 lines)
 └─ 定义缓存管理器接口，提供初始化、清空、获取、更新和删除文件哈希的功能，用于文件变更检测和缓存管理。
 
@@ -2060,6 +2058,215 @@
 
 ---
 
+# src/code-index/processors/batch-processor.ts (496 lines)
+└─ 批量处理器类，实现文件删除、嵌入生成、向量存储和缓存更新，支持重试和截断回退机制。
+
+   16--21 | interface BatchProcessingResult
+   └─ 定义批量处理结果接口，包含处理数量、失败数量、错误列表和文件处理结果
+   23--44 | interface BatchProcessorOptions
+   └─ 定义批量处理器选项接口，包含嵌入器、向量存储、缓存管理器和策略函数
+
+   54--495 | class BatchProcessor
+   └─ 实现通用批量处理器，处理文件删除、嵌入生成、向量存储和缓存更新
+
+   60--70 | method _isRecoverableError
+   └─ 判断错误是否可恢复，检查错误消息中是否包含上下文长度相关关键词
+   76--104 | method _truncateTextByLines
+   └─ 按行截断文本以保持代码完整性，避免添加语言特定截断标记
+   111--204 | method _processItemWithTruncation
+   └─ 实现文本截断重试逻辑，逐步减少阈值直到成功或达到最小限制
+   209--305 | method _processItemsIndividually
+   └─ 提供个体处理回退机制，包含超时保护和逐项截断重试
+   307--340 | method processBatch
+   └─ 协调整个批处理流程，分阶段处理文件删除和批量索引
+   342--376 | method handleDeletions
+   └─ 处理文件删除操作，同步清理向量存储和缓存记录
+   378--393 | method processItemsInBatches
+   └─ 动态分批处理项目，根据嵌入器能力调整批次大小
+   398--494 | method processSingleBatch
+   └─ 处理单个批次，包含重试机制、错误恢复和降级处理，确保批量操作可靠性
+
+---
+
+# src/code-index/processors/file-watcher.ts (574 lines)
+└─ 实现了文件监控与批量处理机制，监听文件变化事件，解析代码块并嵌入向量存储
+
+   34--573 | class FileWatcher
+   └─ 实现代码文件监控，支持文件创建、修改、删除事件处理和批量处理
+
+   56--60 | property onBatchProgressUpdate
+   └─ 报告批量处理进度，显示已处理文件数量和当前文件
+   65--68 | property onBatchProgressBlocksUpdate
+   └─ 报告批量处理进度，显示已处理代码块数量
+
+   84--115 | method constructor
+   └─ 初始化文件观察器，设置事件处理机制，支持可配置批量大小
+   120--149 | method initialize
+   └─ 创建文件监控实例，监听工作区文件变化事件
+   154--161 | method dispose
+   └─ 清理文件监视器和定时器资源，释放内存占用
+   167--170 | method handleFileCreated
+   └─ 将文件创建事件加入待处理队列，触发批量处理
+   176--179 | method handleFileChanged
+   └─ 将文件变更事件加入待处理队列，触发批量处理
+   185--188 | method handleFileDeleted
+   └─ 将文件删除事件加入待处理队列，触发批量处理
+   193--198 | method scheduleBatchProcessing
+   └─ 设置防抖定时器，合并短时间内多个文件事件
+   203--215 | method triggerBatchProcessing
+   └─ 触发批量处理，清空事件队列并开始处理
+   221--427 | method processBatch
+   └─ 批量处理文件事件，包括读取内容、解析代码块和向量化存储
+   437--481 | method handleFileDeletions
+   └─ 处理文件删除操作，从向量存储和缓存中移除相关数据
+   488--572 | method processFile
+   └─ 单独处理文件，检查文件状态并生成向量嵌入点
+
+---
+
+# src/code-index/processors/index.ts (4 lines)
+└─ 导出解析器、扫描器和文件监视器模块，统一索引处理功能入口
+
+
+---
+
+# src/code-index/processors/parser.ts (1059 lines)
+└─ 实现代码解析器，支持多种语言和Markdown文件，使用Tree-sitter进行语法分析，将代码块分割为语义单元并构建父子关系链。
+
+   46--50 | interface MarkdownHeader
+   └─ 定义Markdown头部信息结构，包含层级、文本和行号
+
+   55--1055 | class CodeParser
+   └─ [Code too large to summarize (1001 lines)]
+
+   67--101 | method parseFile
+   └─ 解析文件入口，处理文件路径、内容读取和哈希生成
+   128--319 | method parseContent
+   └─ 核心解析逻辑，处理不同语言类型和树状结构解析
+   324--500 | method _chunkTextByLines
+   └─ 按行分块处理，支持大行分割和内容平衡
+   502--510 | method _performFallbackChunking
+   └─ 回退分块策略，简单按行分割内容
+   512--548 | method _chunkLeafNodeByLines
+   └─ 将语法树叶子节点按行分割，保留父级上下文信息
+   555--594 | method _chunkDefinitionNodeByLines
+   └─ 按行分割定义节点，保持标识符和层级结构
+   599--615 | method deduplicateBlocks
+   └─ 按优先级去重，移除被包含的代码块
+   623--632 | method buildParentChain
+   └─ 根据上下文选择构建父级链的方法
+   637--689 | method buildTreeSitterParentChain
+   └─ 遍历父节点构建层级链，跳过非容器节点
+   695--726 | method buildMarkdownParentChain
+   └─ 构建Markdown标题的父子层级链，通过栈结构递归查找父级标题
+   739--780 | method extractNodeIdentifier
+   └─ 从语法节点中提取标识符，支持字段名、子节点和JSON键等多种方式
+   785--805 | method normalizeNodeType
+   └─ 规范化节点类型名称，将声明和定义类型映射为统一简洁的标识
+   810--825 | method buildHierarchyDisplay
+   └─ 构建代码节点的层级显示字符串，组合父级链和当前节点信息
+   830--845 | method buildMarkdownHierarchyDisplay
+   └─ 构建Markdown标题的层级显示字符串，使用精简的header_X格式
+   850--860 | method updateHeaderStack
+   └─ 维护markdown标题栈，移除同级或更低级标题，添加新标题
+   865--870 | method isBlockContained
+   └─ 检查代码块是否被包含在另一个代码块内，避免重复
+   875--944 | method processMarkdownSection
+   └─ 处理markdown章节内容，根据大小决定分块或创建单个代码块
+   946--1054 | method parseMarkdownContent
+   └─ 解析markdown文件，处理标题层级关系和剩余内容
+
+---
+
+# src/code-index/processors/scanner.ts (458 lines)
+└─ 代码目录扫描器，过滤支持文件并并行处理代码块，生成嵌入向量存储到向量数据库。
+
+   30--39 | interface DirectoryScannerDependencies
+   └─ 定义扫描器所需依赖项接口，包含嵌入器、向量存储等核心组件
+
+   41--458 | class DirectoryScanner
+   └─ 实现目录扫描器类，支持文件批量处理和并发控制
+
+   45--56 | method constructor
+   └─ 初始化扫描器，设置批处理阈值和依赖注入
+   73--109 | method filterSupportedFiles
+   └─ 过滤支持文件，移除目录和忽略规则，检查文件扩展类型
+   119--363 | method scanDirectory
+   └─ 扫描目录并处理代码块，实现增量缓存和批量索引
+   365--450 | method processBatch
+   └─ 处理代码块批次，生成嵌入向量并存储到向量数据库
+   452--457 | method getAllFilePaths
+   └─ 获取指定目录下所有支持的文件路径列表
+
+---
+
+# src/code-index/rerankers/index.ts (3 lines)
+└─ 导出ollama和openai兼容模块的索引文件，统一暴露外部接口
+
+
+---
+
+# src/code-index/rerankers/ollama.ts (495 lines)
+
+   12--494 | class OllamaLLMReranker
+   └─ 实现基于Ollama LLM的代码重排序器，支持批量处理、并发控制和重试机制，通过LLM评分对候选结果进行智能排序。
+
+   20--36 | method constructor
+   └─ 初始化Ollama LLM重排序器，配置基础URL、模型ID、批处理大小、并发数、重试次数和延迟时间，规范化基础URL。
+   46--134 | method rerank
+   └─ 实现批量重排序逻辑，支持并发处理和重试机制，使用指数退避策略处理失败批次，最终合并排序结果。
+   142--162 | method rerankSingleBatch
+   └─ 构建评分提示并调用Ollama API生成候选分数，合并结果并按分数降序排序返回。
+   167--196 | method buildScoringPrompt
+   └─ 构建LLM评分提示，定义评分标准，格式化查询和代码片段，要求返回JSON格式的分数数组
+   201--225 | method buildContextInfo
+   └─ 构建候选代码的上下文信息，包含层次结构和文件路径，用于提示词生成。
+   230--316 | method generateScores
+   └─ 调用Ollama API生成评分，处理代理配置、超时控制和响应解析，确保评分在0-10范围内
+   321--336 | method extractScoresFromText
+   └─ 从文本中提取数字分数，使用正则匹配并限制在0-10范围内
+   342--486 | method validateConfiguration
+   └─ 验证Ollama服务可用性，检查模型存在性和文本生成能力，处理代理连接和超时错误
+   488--493 | method rerankerInfo
+   └─ 返回重排序器信息，包含名称和模型标识符
+
+---
+
+# src/code-index/rerankers/openai-compatible.ts (575 lines)
+└─ 实现了OpenAI兼容API的代码重排序器，支持批量处理、并发控制和重试机制，通过LLM评分对候选结果进行智能排序
+
+   12--574 | class OpenAICompatibleReranker
+   └─ 实现OpenAI兼容的代码重排序器，支持批量处理和重试机制
+
+   21--39 | method constructor
+   └─ 初始化重排序器配置，设置基础URL、模型ID和批处理参数
+   49--139 | method rerank
+   └─ 执行重排序逻辑，分组处理候选结果并应用重试策略
+   147--167 | method rerankSingleBatch
+   └─ 处理单个批次候选结果，调用LLM生成相关性评分
+   172--201 | method buildScoringPrompt
+   └─ 构建评分提示模板，定义评分标准和响应格式要求
+   206--230 | method buildContextInfo
+   └─ 构建候选代码的上下文信息，包含层次结构和文件路径
+   235--344 | method generateScores
+   └─ 调用OpenAI兼容API生成代码相关性分数，处理代理和超时
+   349--364 | method extractScoresFromText
+   └─ 从文本中提取并验证分数，确保数值在0-10范围内
+   370--566 | method validateConfiguration
+   └─ 验证OpenAI兼容服务配置，检查模型可用性和连接状态
+   568--573 | method rerankerInfo
+   └─ 返回重排序器信息，包含名称和模型标识符
+
+---
+
+# src/code-index/search/query-prefill.ts (37 lines)
+└─ 为Qwen3嵌入模型提供查询预填充模板，指导模型生成更好的代码搜索嵌入。仅适用于ollama提供商的qwen3-embedding模型，防止重复预填充并返回处理后的查询。
+
+   18--37 | function applyQueryPrefill
+   └─ 检查提供者和模型ID，匹配qwen3-embedding模型时添加查询前缀模板，避免重复应用。
+
+---
+
 # src/code-index/shared/block-text-generator.ts (38 lines)
 └─ 生成代码块嵌入文本，添加文件路径、标识符和父级链等上下文信息，增强语义搜索准确性
 
@@ -2224,54 +2431,60 @@
 
 ---
 
-# src/dependency/analyzers/base.ts (496 lines)
-└─ 定义依赖分析基类，提供节点遍历、调用关系提取和过滤功能，支持多语言扩展
+# src/dependency/analyzers/base.ts (699 lines)
+└─ 定义依赖分析抽象基类，提供节点遍历、导入解析、调用关系提取等核心分析能力，支持多语言扩展
 
    11--15 | interface CallInfo
    └─ 定义调用信息结构，包含方法名、完整路径和调用类型标识
    20--41 | interface NodeTypes
    └─ 配置语言节点类型，定义函数、类、方法等节点类型集合
 
-   53--495 | class BaseAnalyzer
-   └─ 实现依赖分析基类，提供节点遍历和调用关系提取的核心逻辑
+   53--698 | class BaseAnalyzer
+   └─ 定义抽象基类，提供依赖分析的核心框架和语言特定扩展点
 
    70--82 | method constructor
    └─ 初始化分析器，设置文件路径、内容和解析器实例
    123--134 | method getComponentType
    └─ 根据节点类型和上下文确定组件类型，支持类、方法和函数分类
-   140--162 | method analyze
-   └─ 解析代码生成语法树，提取导入、节点和调用关系，返回依赖分析结果
-   168--203 | method traverseForNodes
-   └─ 递归遍历语法树，识别类和函数定义，构建节点对象并维护类上下文
-   205--241 | method traverseForCalls
-   └─ 递归遍历语法树，提取函数调用关系，区分全局和成员调用并添加依赖边
-   247--263 | method addClassNode
+   140--165 | method analyze
+   └─ 执行源码分析的入口方法，按顺序解析导入、节点和调用关系
+   171--206 | method traverseForNodes
+   └─ 递归遍历AST，提取函数、类、方法定义并构建依赖节点
+   208--247 | method traverseForCalls
+   └─ 递归遍历AST，提取调用表达式并根据上下文构建调用边
+   253--269 | method addClassNode
    └─ 创建类节点对象，包含类名、路径、源码等信息，存储到节点映射中
-   265--282 | method addFunctionNode
+   271--288 | method addFunctionNode
    └─ 创建函数节点对象，包含函数名、参数、源码等信息，存储到节点映射中
-   284--306 | method addMethodNode
+   290--312 | method addMethodNode
    └─ 创建方法节点对象，设置唯一标识符和依赖关系
-   308--323 | method addEdge
-   └─ 添加调用边，解析调用目标并避免重复边
-   333--343 | method findChildByType
+   318--346 | method createModuleNode
+   └─ 创建模块节点表示文件本身，用于跟踪顶层调用和文件级依赖
+   356--393 | method addEdge
+   └─ 解析调用依赖，导入匹配与模块路径处理
+   403--425 | method resolveModulePath
+   └─ 解析相对路径为模块路径，支持目录导航
+   435--445 | method findChildByType
    └─ 查找指定类型的子节点，返回第一个匹配项
-   345--350 | method findChildrenByType
+   447--452 | method findChildrenByType
    └─ 查找所有指定类型的子节点，返回数组
-   353--366 | method getModulePath
+   455--468 | method getModulePath
    └─ 计算模块路径，移除扩展名并标准化路径分隔符
-   369--374 | method getRelativePath
-   └─ 计算文件相对于仓库根目录的路径，移除前缀部分
-   377--383 | method makeNodeId
+   471--478 | method getRelativePath
+   └─ 获取文件相对于仓库根目录的路径
+   481--487 | method makeNodeId
    └─ 生成节点唯一标识符，支持模块、类名和方法名的组合
-   386--390 | method getSourceSegment
+   490--494 | method getSourceSegment
    └─ 提取语法节点对应的源代码片段，按行号范围截取
-   393--400 | method findNodeIdByLine
+   497--504 | method findNodeIdByLine
    └─ 根据行号查找对应的节点ID，遍历所有顶级节点进行匹配
-   403--428 | method extractParameters
+   507--532 | method extractParameters
    └─ 从函数节点中提取参数列表，支持多种参数节点类型的解析
-   448--480 | method extractCallInfo
-   └─ 解析调用表达式，区分全局和成员调用，提取名称和路径
-   483--494 | method shouldFilterCall
+   588--637 | method extractMemberPath
+   └─ 递归提取成员表达式的完整路径
+   644--683 | method extractCallInfo
+   └─ 提取调用信息，支持全局与成员调用
+   686--697 | method shouldFilterCall
    └─ 过滤内置函数调用，根据调用类型检查全局或成员内置函数
 
 ---
@@ -2439,11 +2652,11 @@
 
 ---
 
-# src/dependency/analyzers/typescript.ts (256 lines)
-└─ 定义TypeScript/JavaScript分析器，支持TS/JS/TSX文件，解析函数、类、方法、调用和导入，内置全局和成员函数集合，提供节点类型提取和导入遍历逻辑。
+# src/dependency/analyzers/typescript.ts (265 lines)
+└─ 定义 TypeScript/JavaScript 分析器，支持解析函数、类、方法调用和导入语句，识别全局和成员内置函数，处理 TSX 文件扩展名。
 
-   9--236 | class TypeScriptAnalyzer
-   └─ 继承BaseAnalyzer，实现TypeScript/JavaScript代码分析功能，支持多种文件类型和语法结构解析。
+   9--245 | class TypeScriptAnalyzer
+   └─ TypeScriptAnalyzer类继承BaseAnalyzer，内置全局和成员函数集，支持TS/JS文件分析
 
    11--37 | property GLOBAL_BUILTINS
    └─ 定义全局内置函数集合，包含定时器、类型转换、编码、构造函数等JavaScript和Node.js标准API。
@@ -2460,24 +2673,16 @@
    └─ 提取调用名称，处理直接调用、成员调用和new表达式
    146--188 | method traverseImports
    └─ 递归遍历AST处理ES6导入语句，构建导入映射表
-   190--214 | method processImportClause
-   └─ 处理导入子句，处理默认导出和命名导出及别名
-   216--227 | method getComponentType
+   190--223 | method processImportClause
+   └─ processImportClause方法解析ES6导入语句，处理命名空间、默认导出和重命名导入
+   225--236 | method getComponentType
    └─ 确定组件类型，识别接口、抽象类和普通类声明
 
-   247--255 | class TSXAnalyzer
+   256--264 | class TSXAnalyzer
    └─ 继承TypeScriptAnalyzer，专门处理.tsx文件
 
-   248--254 | method getNodeTypes
+   257--263 | method getNodeTypes
    └─ 重写getNodeTypes方法，限制文件扩展名为.tsx
-
----
-
-# src/code-index/search/query-prefill.ts (37 lines)
-└─ 为Qwen3嵌入模型提供查询预填充模板，指导模型生成更好的代码搜索嵌入。仅适用于ollama提供商的qwen3-embedding模型，防止重复预填充并返回处理后的查询。
-
-   18--37 | function applyQueryPrefill
-   └─ 检查提供者和模型ID，匹配qwen3-embedding模型时添加查询前缀模板，避免重复应用。
 
 ---
 

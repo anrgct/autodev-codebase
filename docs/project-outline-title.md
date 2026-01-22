@@ -1,35 +1,35 @@
-# src/cli.ts (1764 lines)
-└─ 实现了一个基于Node.js的CLI工具，提供代码索引、搜索、MCP服务器、配置管理等功能，支持多种操作模式和参数配置。
+# src/cli.ts (41 lines)
+└─ 定义CLI入口程序，使用commander.js创建子命令模式，整合搜索、索引、大纲等工具功能，提供命令行接口。
 
 ---
 
 # src/index.ts (14 lines)
-└─ 导出库的核心模块，包括代码索引、抽象层、Node.js适配器、全局搜索、Tree-Sitter解析、代码库和依赖管理功能。
+└─ 导出库中所有核心模块，包括代码索引、抽象层、Node.js适配器、全局处理、搜索功能、Tree-sitter集成、代码库实现和依赖管理。
 
 ---
 
 # src/abstractions/config.ts (52 lines)
-└─ 定义配置提供者抽象接口，支持获取和监听配置变化，并重新导出配置类型和提供者枚举。
+└─ 配置类型从接口文件重新导出，定义配置提供者抽象接口，获取配置并监听变更，支持多种嵌入器配置
 
 ---
 
 # src/abstractions/core.ts (117 lines)
-└─ 定义平台无关的文件系统操作接口，提供读写、检查、统计、目录管理等核心功能。定义存储、事件总线、日志、文件监控等抽象接口，构成平台依赖容器。
+└─ 定义跨平台文件系统操作的核心接口，提供读写、检查、统计、目录管理等基础功能。定义存储操作、事件系统、日志记录、文件监控等核心抽象接口。整合所有平台依赖项，提供统一的基础设施接口。
 
 ---
 
 # src/abstractions/index.ts (35 lines)
-└─ 导出平台无关的核心抽象类型，包括文件系统、存储、事件总线、日志、文件监控、工作区、路径工具、配置提供者等，实现跨平台解耦
+└─ 导出平台无关核心抽象，包括文件系统、存储、事件总线、日志、文件监听等接口，提供跨平台基础功能抽象
 
 ---
 
-# src/abstractions/workspace.ts (96 lines)
-└─ 定义平台无关的工作区抽象接口，提供路径管理、忽略规则处理和文件查找功能，包含工作区文件夹和路径工具接口。
+# src/abstractions/workspace.ts (105 lines)
+└─ 定义平台无关的 workspace 抽象接口，提供根路径管理、忽略规则处理、文件查找等核心功能，支持多根工作区和路径工具操作。
 
 ---
 
 # src/cli-tools/data-flow-analyzer.ts (698 lines)
-└─ 实现数据流分析器，识别CLI和MCP入口点，追踪核心组件调用链，生成Mermaid流程图。
+└─ 定义数据流节点和边的数据结构，用于存储函数、类等组件及其调用关系。实现数据流分析器的核心逻辑，递归追踪组件调用链，生成可视化文本树和JSON结果。识别CLI和MCP入口点，分析核心组件创建和调用关系。
 
 ---
 
@@ -38,8 +38,8 @@
 
 ---
 
-# src/cli-tools/outline.ts (949 lines)
-└─ 实现代码结构提取工具，支持文本和JSON格式输出，集成AI摘要功能，使用tree-sitter解析代码结构
+# src/cli-tools/outline.ts (952 lines)
+└─ CLI工具：代码大纲提取器，使用tree-sitter解析源文件结构，支持文本和JSON格式输出及AI摘要功能。
 
 ---
 
@@ -63,13 +63,18 @@
 
 ---
 
+# src/code-index/i18n.ts (28 lines)
+└─ 定义国际化翻译字典，支持多语言错误消息模板，提供参数化字符串替换功能。
+
+---
+
 # src/code-index/index.ts (29 lines)
 └─ 导出代码索引核心功能模块，包括管理器、配置、缓存、状态、编排、搜索、服务工厂、接口、嵌入器、处理器、向量存储、常量和工具函数。
 
 ---
 
-# src/code-index/manager.ts (542 lines)
-└─ 实现代码索引管理器，提供初始化、搜索、错误恢复等功能，管理向量存储和缓存。
+# src/code-index/manager.ts (535 lines)
+└─ 实现代码索引管理器的核心类，负责初始化配置、管理状态、协调搜索和索引服务，提供错误恢复和资源清理功能。
 
 ---
 
@@ -83,8 +88,8 @@
 
 ---
 
-# src/code-index/service-factory.ts (386 lines)
-└─ 代码索引服务工厂类，负责创建和配置嵌入器、向量存储、目录扫描器、文件监视器、重排序器和摘要器等核心服务组件，支持多种AI模型提供商，提供配置验证和错误处理功能。
+# src/code-index/service-factory.ts (353 lines)
+└─ 代码索引服务工厂类，负责创建和配置嵌入器、向量存储、目录扫描器等组件，支持多种AI服务提供商
 
 ---
 
@@ -98,28 +103,83 @@
 
 ---
 
+# src/commands/call.ts (533 lines)
+└─ 实现代码依赖分析命令，支持总结显示、数据导出、图形可视化和依赖查询功能。
+
+---
+
+# src/commands/index.ts (412 lines)
+└─ 实现代码库索引命令，支持多种模式：正常索引、预览分析、清理缓存、启动MCP服务器和监控文件变化。
+
+---
+
+# src/commands/outline.ts (195 lines)
+└─ 实现outline命令，处理文件路径或通配符模式，提取代码大纲，支持AI摘要和缓存管理
+
+---
+
+# src/commands/search.ts (303 lines)
+└─ 实现代码搜索命令，支持语义搜索、结果格式化、路径过滤和JSON输出
+
+---
+
+# src/commands/shared.ts (187 lines)
+└─ 定义CLI命令的共享工具和类型，包括日志管理、路径解析、依赖创建、演示文件处理和代码索引管理器初始化等功能。
+
+---
+
+# src/commands/stdio.ts (59 lines)
+└─ stdio命令实现，创建stdio适配器桥接stdio与HTTP MCP服务器，处理信号关闭，支持超时配置和日志级别设置
+
+---
+
+# src/dependency/cache-manager.ts (420 lines)
+└─ 实现依赖分析缓存管理器，持久化存储文件分析结果，通过SHA-256哈希验证文件变化，配置指纹确保版本一致性，使用防抖机制优化磁盘写入。
+
+---
+
+# src/dependency/cache-types.ts (117 lines)
+└─ 定义依赖分析缓存的数据结构，包括配置指纹、序列化节点、文件缓存条目、完整缓存结构、缓存统计和缓存限制配置，用于存储和管理代码依赖分析结果。
+
+---
+
 # src/dependency/graph.ts (394 lines)
 └─ 实现依赖图构建与分析，包括ID解析、模块距离计算、智能边解析、环检测和拓扑排序等核心功能。
 
 ---
 
-# src/dependency/index.ts (492 lines)
-└─ 定义依赖分析核心模块，提供仓库和文件级别的依赖分析功能，支持多种编程语言，包含图构建、循环检测和可视化数据生成。
+# src/dependency/index.ts (518 lines)
+└─ 导出依赖分析核心接口和工具函数，包含语言映射、缓存管理、图构建和可视化数据生成功能
 
 ---
 
-# src/dependency/models.ts (203 lines)
-└─ 定义依赖分析核心数据结构，包括节点、边、结果等接口，支持跨平台代码元素标识和依赖关系建模
+# src/dependency/models.ts (207 lines)
+└─ 定义依赖分析的核心数据结构，包括节点、边、结果统计等接口，用于表示代码元素及其依赖关系
 
 ---
 
-# src/dependency/parse.ts (510 lines)
-└─ 管理Tree-sitter解析器，支持多种编程语言的文件解析和AST生成，提供缓存机制和文件遍历功能。
+# src/dependency/parse.ts (399 lines)
+└─ 解析器管理模块，提供文件解析、语言配置和缓存功能，支持多种编程语言的语法树分析
 
 ---
 
-# src/examples/create-sample-files.ts (1285 lines)
-└─ 创建示例文件函数，生成JavaScript、Python、Markdown、JSON和YOLO模型文件，用于演示代码索引系统。
+# src/dependency/query.ts (586 lines)
+└─ 实现依赖查询核心功能：模式匹配、双向树构建、连接分析、格式化输出，支持通配符搜索和深度限制
+
+---
+
+# src/glob/index.ts (2 lines)
+└─ 导出文件列表工具模块，提供文件操作相关功能
+
+---
+
+# src/glob/list-files.ts (123 lines)
+└─ 实现文件列表功能，使用fast-glob高效遍历目录，结合统一忽略服务过滤文件，限制返回数量，处理特殊目录。
+
+---
+
+# src/examples/create-sample-files.ts (1330 lines)
+└─ 创建示例文件函数，生成包含JavaScript、Python、Markdown、JSON和多个代码文件的完整项目结构，用于演示Autodev代码库索引系统的功能。
 
 ---
 
@@ -145,6 +205,11 @@
 
 # src/examples/run-demo.ts (244 lines)
 └─ 演示脚本监控本地demo文件夹，使用Ollama嵌入和Qdrant向量存储索引代码，展示Node.js环境下的代码库库使用方法。
+
+---
+
+# src/examples/run-dependency-analyzer.ts (237 lines)
+└─ 初始化文件系统适配器与路径工具，配置依赖分析器依赖项，准备执行依赖分析流程
 
 ---
 
@@ -183,18 +248,13 @@
 
 ---
 
-# src/glob/index.ts (2 lines)
-└─ 导出文件列表工具模块，提供文件操作相关功能
+# src/ignore/IgnoreService.ts (191 lines)
+└─ 实现统一忽略服务，提供gitignore语义文件过滤，支持目录跳过和文件忽略功能
 
 ---
 
-# src/glob/list-files.ts (414 lines)
-└─ 使用ripgrep递归或非递归列出目录文件，过滤特殊目录和.gitignore，支持限制数量和超时处理。
-
----
-
-# src/ignore/RooIgnoreController.ts (219 lines)
-└─ 实现基于.rooignore文件控制LLM文件访问权限，支持.gitignore语法，动态加载和验证文件路径。
+# src/ignore/default-dirs.ts (31 lines)
+└─ 定义全局忽略目录列表，统一版本控制、依赖、构建及缓存目录的过滤规则，支持 ripgrep 隐藏目录通配符
 
 ---
 
@@ -268,13 +328,18 @@
 
 ---
 
-# src/tree-sitter/languageParser.ts (373 lines)
-└─ 实现多语言解析器加载系统，动态查找WASM文件，支持ES模块和CommonJS环境，初始化tree-sitter核心解析器，根据文件扩展名加载对应语言的语法解析器和查询规则。
+# src/tree-sitter/languageParser.ts (247 lines)
+└─ 定义语言解析器接口，加载Tree-sitter WASM模块，初始化解析器，根据文件扩展名加载对应语言的语法解析器和查询规则，支持多种编程语言的语法树解析
 
 ---
 
 # src/tree-sitter/markdownParser.ts (217 lines)
 └─ 解析Markdown文件，提取标题和章节行范围，生成与tree-sitter兼容的模拟捕获数据。
+
+---
+
+# src/tree-sitter/wasm-loader.ts (116 lines)
+└─ 提供统一的 WASM 文件路径解析功能，支持开发与生产环境切换，并创建用于 web-tree-sitter 的 locateFile 函数。
 
 ---
 
@@ -368,8 +433,8 @@
 
 ---
 
-# src/adapters/nodejs/workspace.ts (233 lines)
-└─ 实现Node.js工作区适配器，提供文件系统操作和忽略规则处理功能，支持路径转换和文件查找。
+# src/adapters/nodejs/workspace.ts (193 lines)
+└─ Node.js工作区适配器实现，提供文件系统操作和忽略规则处理，支持工作区管理和路径工具功能。
 
 ---
 
@@ -473,8 +538,8 @@
 
 ---
 
-# src/code-index/processors/file-watcher.ts (582 lines)
-└─ 文件监视器实现，监听文件变化并批量处理代码块，支持创建、修改、删除事件，集成向量存储和缓存管理。
+# src/code-index/processors/file-watcher.ts (574 lines)
+└─ 实现了文件监控与批量处理机制，监听文件变化事件，解析代码块并嵌入向量存储
 
 ---
 
@@ -488,8 +553,8 @@
 
 ---
 
-# src/code-index/processors/scanner.ts (471 lines)
-└─ 目录扫描器实现递归扫描代码文件，过滤支持扩展名，并发处理代码块，生成嵌入向量并存储到向量数据库，同时处理缓存和错误管理。
+# src/code-index/processors/scanner.ts (458 lines)
+└─ 代码目录扫描器，过滤支持文件并并行处理代码块，生成嵌入向量存储到向量数据库。
 
 ---
 
@@ -504,11 +569,6 @@
 
 # src/code-index/rerankers/openai-compatible.ts (575 lines)
 └─ 实现了OpenAI兼容API的代码重排序器，支持批量处理、并发控制和重试机制，通过LLM评分对候选结果进行智能排序
-
----
-
-# src/code-index/search/query-prefill.ts (37 lines)
-└─ 为Qwen3嵌入模型提供查询预填充模板，指导模型生成更好的代码搜索嵌入。仅适用于ollama提供商的qwen3-embedding模型，防止重复预填充并返回处理后的查询。
 
 ---
 
@@ -537,6 +597,11 @@
 
 ---
 
+# src/code-index/search/query-prefill.ts (37 lines)
+└─ 为Qwen3嵌入模型提供查询预填充模板，指导模型生成更好的代码搜索嵌入。仅适用于ollama提供商的qwen3-embedding模型，防止重复预填充并返回处理后的查询。
+
+---
+
 # src/code-index/summarizers/index.ts (3 lines)
 └─ 导出Ollama和OpenAI兼容的摘要器模块，提供统一的接口
 
@@ -557,8 +622,38 @@
 
 ---
 
-# src/dependency/analyzers/base.ts (496 lines)
-└─ 定义依赖分析基类，提供节点遍历、调用关系提取和过滤功能，支持多语言扩展
+# src/commands/config/file-loader.ts (88 lines)
+└─ 加载配置文件的工具模块，支持全局和项目层级配置的读取与合并，提供默认配置作为基础。
+
+---
+
+# src/commands/config/get.ts (123 lines)
+└─ 实现配置获取命令，支持查看默认、全局和项目配置层的详细信息或特定配置项的值。
+
+---
+
+# src/commands/config/index.ts (38 lines)
+└─ 配置命令入口，实现配置获取与设置逻辑，支持全局配置和JSON输出，动态加载子命令处理器
+
+---
+
+# src/commands/config/metadata.ts (147 lines)
+└─ 定义配置键元数据类型和验证规则，集中管理所有配置项的常量和约束条件，确保配置一致性和正确性。
+
+---
+
+# src/commands/config/parser.ts (146 lines)
+└─ 解析配置值并进行类型转换与验证，支持布尔、整数、数字、枚举和字符串类型。解析键值对字符串，验证格式和有效性。
+
+---
+
+# src/commands/config/set.ts (91 lines)
+└─ 实现配置设置命令，解析键值对，合并配置，验证并保存到指定路径，同时更新Git全局忽略文件。
+
+---
+
+# src/dependency/analyzers/base.ts (699 lines)
+└─ 定义依赖分析抽象基类，提供节点遍历、导入解析、调用关系提取等核心分析能力，支持多语言扩展
 
 ---
 
@@ -602,8 +697,8 @@
 
 ---
 
-# src/dependency/analyzers/typescript.ts (256 lines)
-└─ 定义TypeScript/JavaScript分析器，支持TS/JS/TSX文件，解析函数、类、方法、调用和导入，内置全局和成员函数集合，提供节点类型提取和导入遍历逻辑。
+# src/dependency/analyzers/typescript.ts (265 lines)
+└─ 定义 TypeScript/JavaScript 分析器，支持解析函数、类、方法调用和导入语句，识别全局和成员内置函数，处理 TSX 文件扩展名。
 
 ---
 

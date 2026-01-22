@@ -2,8 +2,8 @@
  * Integration tests for Node.js adapters
  * Tests the complete functionality of Node.js platform adapters
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest'
-import { promises as fs } from 'fs'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest'
+import { fs, vol } from 'memfs'
 import path from 'path'
 import os from 'os'
 import {
@@ -20,20 +20,33 @@ import {
 } from '../adapters/nodejs'
 import { EmbedderProvider } from '../code-index/interfaces/manager'
 
+// Mock fs with memfs
+vi.mock('fs', async () => {
+  const memfs = await vi.importActual<typeof import('memfs')>('memfs')
+  return memfs.fs
+})
+vi.mock('fs/promises', async () => {
+  const memfs = await vi.importActual<typeof import('memfs')>('memfs')
+  return memfs.fs.promises
+})
+
 describe('Node.js Adapters Integration', () => {
   let tempDir: string
   let workspacePath: string
 
   beforeAll(async () => {
-    // Create temporary directory for tests
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'autodev-test-'))
+    // Setup memfs with virtual directory structure
+    tempDir = '/tmp/autodev-test'
     workspacePath = path.join(tempDir, 'workspace')
-    await fs.mkdir(workspacePath, { recursive: true })
+    
+    vol.fromJSON({
+      [workspacePath]: null  // Create directory
+    })
   })
 
-  afterAll(async () => {
-    // Clean up temporary directory
-    await fs.rm(tempDir, { recursive: true, force: true })
+  afterAll(() => {
+    // Clean up memfs
+    vol.reset()
   })
 
   describe('NodeFileSystem', () => {
