@@ -1,17 +1,20 @@
 # @autodev/codebase
 
-<div align="center">
+<p align="center">
 
 [![npm version](https://img.shields.io/npm/v/@autodev/codebase)](https://www.npmjs.com/package/@autodev/codebase)
 [![GitHub stars](https://img.shields.io/github/stars/anrgct/autodev-codebase)](https://github.com/anrgct/autodev-codebase)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-</div>
+</p>
+
+A vector embedding-based code semantic search tool with MCP server and multi-model integration. Can be used as a pure CLI tool. Supports Ollama for fully local embedding and reranking, enabling complete offline operation and privacy protection for your code repository.
 
 ```sh
+# Semantic code search - Find code by meaning, not just keywords
 ╭─ ~/workspace/autodev-codebase 
 ╰─❯ codebase search "user manage" --demo
-Found 3 results in 2 files for: "user manage"
+Found 20 results in 5 files for: "user manage"
 
 ==================================================
 File: "hello.js"
@@ -31,36 +34,44 @@ class UserManager {
     return this.users;
   }
 }
+……
 
-==================================================
-File: "README.md" | 2 snippets
-==================================================
-< md_h1 Demo Project > md_h2 Usage > md_h3 JavaScript Functions > (L16-20)
-### JavaScript Functions
+# Call graph analysis - Trace function call relationships and execution paths
+╭─ ~/workspace/autodev-codebase 
+╰─❯ codebase call --demo --query="app,addUser"
+Connections between app, addUser:
 
-- greetUser(name) - Greets a user by name
-- UserManager - Class for managing user data
+Found 2 matching node(s):
+  - demo/app:L1-29
+  - demo/hello.UserManager.addUser:L12-15
 
-─────
-< md_h1 Demo Project > md_h2 Search Examples > (L27-38)
-## Search Examples
+Direct connections:
+  - demo/app:L1-29 → demo/hello.UserManager.addUser:L12-15
 
-Try searching for:
-- "greet user"
-- "process data"
-- "user management"
-- "batch processing"
-- "YOLO model"
-- "computer vision"
-- "object detection"
-- "model training"
+Chains found:
+  - demo/app:L1-29 → demo/hello.UserManager.addUser:L12-15
 
+# Code outline with AI summaries - Understand code structure at a glance
+╭─ ~/workspace/autodev-codebase 
+╰─❯ codebase outline 'hello.js' --demo --summarize
+# hello.js (23 lines)
+└─ Defines a greeting function that logs a personalized hello message and returns a welcome string. Implements a UserManager class managing an array of users with methods to add users and retrieve the current user list. Exports both components for external use.
+
+   2--5 | function greetUser
+   └─ Implements user greeting logic by logging a personalized hello message and returning a welcome message
+
+   7--20 | class UserManager
+   └─ Manages user data with methods to add users to a list and retrieve all stored users
+
+   12--15 | method addUser
+   └─ Adds a user to the users array and logs a confirmation message with the user's name.
 ```
-A vector embedding-based code semantic search tool with MCP server and multi-model integration. Can be used as a pure CLI tool. Supports Ollama for fully local embedding and reranking, enabling complete offline operation and privacy protection for your code repository.
+
 
 ## 🚀 Features
 
 - **🔍 Semantic Code Search**: Vector-based search using advanced embedding models
+- **🔗 Call Graph Analysis**: Trace function call relationships and execution paths
 - **🌐 MCP Server**: HTTP-based MCP server with SSE and stdio adapters
 - **💻 Pure CLI Tool**: Standalone command-line interface without GUI dependencies
 - **⚙️ Layered Configuration**: CLI, project, and global config management
@@ -103,51 +114,68 @@ codebase config --set embedderProvider=ollama,embedderModelId=nomic-embed-text
 codebase index --demo
 codebase search "user greet" --demo
 
+# Call graph analysis
+codebase call --demo --query="app,addUser"
+
 # MCP server
 codebase index --serve --demo
 ```
 
 ## 📋 Commands
 
-### 📝 AI-Powered Code Outlines
-
-Generate intelligent code summaries with one command:
-
+### 📝 Code Outlines
 ```bash
+# Extract code structure (functions, classes, methods)
+codebase outline "src/**/*.ts"
+
+# Generate code structure with AI summaries
 codebase outline "src/**/*.ts" --summarize
+
+# View only file-level summaries
+codebase outline "src/**/*.ts" --summarize --title
+
+# Clear summary cache
+codebase outline --clear-summarize-cache
 ```
 
-**Output Example:**
-```
-# src/cli.ts (1902 lines)
-└─ Implements a simplified CLI for @autodev/codebase using Node.js native parseArgs. 
-   Manages codebase indexing, searching, and MCP server operations.
-
-   27--35 | function initGlobalLogger
-   └─ Initializes a global logger instance with specified log level and timestamps.
-
-   45--54 | interface SearchResult
-   └─ Defines the structure for search result payloads, including file path, code chunk, 
-      and relevance score.
-
-   ... (full outline with AI summaries)
-```
-
-**Benefits:**
-- 🧠 **Understand code fast** - Get function-level summaries without reading every line
-- 💾 **Smart caching** - Only summarizes changed code blocks
-- 🌐 **Multi-language** - English/Chinese summaries supported
-- ⚡ **Batch processing** - Efficiently handles large codebases
-
-**Quick Setup:**
+### 🔗 Call Graph Analysis
 ```bash
-# Configure Ollama (recommended for free, local AI)
-codebase config --set summarizerProvider=ollama,summarizerOllamaModelId=qwen3-vl:4b-instruct
+# Analyze function call relationships
+codebase call --query="functionA,functionB"
 
-# Or use DeepSeek (cost-effective API)
-codebase config --set summarizerProvider=openai-compatible,summarizerOpenAiCompatibleBaseUrl=https://api.deepseek.com/v1,summarizerOpenAiCompatibleModelId=deepseek-chat,summarizerOpenAiCompatibleApiKey=sk-your-key
+# Analyze specific directory
+codebase call src/commands
+
+# Export analysis results
+codebase call --output=graph.json
+
+# Open interactive graph viewer
+codebase call --open
+
+# Set analysis depth
+codebase call --query="main" --depth=3
+
+# Specify workspace path
+codebase call --path=/my/project
 ```
 
+**Query Patterns:**
+- **Exact match**: `--query="functionName"` or `--query="ClassName.methodName"`
+- **Wildcards**: `*` (any characters), `?` (single character)
+  - Examples: `--query="get*"`, `--query="*User*"`, `--query="*.*.get*"`
+- **Single pattern**: `--query="main"` - Shows dependency tree (what it calls, who calls it)
+  - Use `--depth` to control tree depth (default: 10)
+- **Multiple patterns**: `--query="main,helper"` - Analyzes connections between functions
+  - Connection search depth is fixed at 10 (--depth is ignored)
+
+**Supported Languages:**
+- **TypeScript/JavaScript** (.ts, .tsx, .js, .jsx)
+- **Python** (.py)
+- **Java** (.java)
+- **C/C++** (.c, .h, .cpp, .cc, .cxx, .hpp, .hxx, .c++)
+- **C#** (.cs)
+- **Rust** (.rs)
+- **Go** (.go)
 
 ### 🔍 Indexing & Search
 ```bash
@@ -287,6 +315,7 @@ codebase search "auth" --json
 - `index` - Index the codebase
 - `search <query>` - Search the codebase (required positional argument)
 - `outline <pattern>` - Extract code outlines (supports glob patterns)
+- `call` - Analyze function call relationships and dependency graphs
 - `stdio` - Start stdio adapter for MCP
 - `config` - Manage configuration (use with --get or --set)
 - `--serve` - Start MCP HTTP server (use with `index` command)
@@ -297,6 +326,10 @@ codebase search "auth" --json
 - `--path`, `--demo`, `--force` - Common options
 - `--limit` / `-l <number>` - Maximum number of search results (default: from config, max 50)
 - `--min-score` / `-S <number>` - Minimum similarity score for search results (0-1, default: from config)
+- `--query <patterns>` - Query patterns for call graph analysis (comma-separated)
+- `--output <file>` - Export analysis results to JSON file
+- `--open` - Open interactive graph viewer
+- `--depth <number>` - Set analysis depth for call graphs
 - `--help` - Show all available options
 
 **Configuration Commands:**

@@ -7,6 +7,9 @@
 import * as path from 'path'
 import type { IFileSystem } from '../abstractions/core'
 import type { IPathUtils, IWorkspace } from '../abstractions/workspace'
+
+// Re-export IPathUtils for external use
+export type { IPathUtils, IWorkspace }
 import type {
   DependencyNode,
   DependencyEdge,

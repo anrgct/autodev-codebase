@@ -34,6 +34,39 @@ import open from 'open';
 type AnalysisResult = Awaited<ReturnType<typeof analyze>>;
 
 /**
+ * Find and open the graph viewer HTML file
+ */
+async function openGraphViewer(fileSystem: any): Promise<void> {
+  const logger = getLogger();
+  const { fileURLToPath } = await import('url');
+  const currentFileUrl = import.meta.url;
+  const currentFilePath = fileURLToPath(currentFileUrl);
+  const currentDir = path.dirname(currentFilePath);
+  
+  // Detect if running in development mode (tsx/ts-node) vs production (built)
+  const isDevelopment = currentFilePath.endsWith('.ts');
+  
+  // Precise path based on environment
+  const viewerPath = isDevelopment
+    ? path.join(currentDir, '../../static/graph_viewer.html')  // src/commands -> static
+    : path.join(currentDir, 'static/graph_viewer.html');       // dist -> dist/static
+  
+  logger.debug(`Running in ${isDevelopment ? 'development' : 'production'} mode`);
+  logger.debug(`currentDir: ${currentDir}`);
+  logger.debug(`viewerPath: ${viewerPath}`);
+  
+  // Verify file exists
+  const stat = await fileSystem.stat(viewerPath);
+  if (!stat?.isFile) {
+    throw new Error(`Graph viewer not found at: ${viewerPath}`);
+  }
+  
+  await open(viewerPath);
+  console.log(`\nOpened graph viewer in browser`);
+  console.log(`  Drag and drop the JSON file into the browser to visualize`);
+}
+
+/**
  * Format and display dependency analysis summary
  */
 function displaySummary(result: AnalysisResult): void {
@@ -140,7 +173,8 @@ function displaySummary(result: AnalysisResult): void {
 async function exportData(
   result: AnalysisResult,
   outputPath: string,
-  openInBrowser: boolean
+  openInBrowser: boolean,
+  fileSystem: any
 ): Promise<void> {
   // Generate visualization data
   const viz = generateVisualizationData(result.nodes, result.relationships, result.summary);
@@ -158,14 +192,13 @@ async function exportData(
 
   // Optionally open in browser
   if (openInBrowser) {
-    // Convert file path to file:// URL
-    const fileUrl = `file://${resolvedPath}`;
     try {
-      await open(fileUrl);
-      console.log(`\nOpened in default browser`);
+      await openGraphViewer(fileSystem);
     } catch (error) {
       console.error(`\nWarning: Could not open browser: ${error}`);
-      console.log(`  Manually open: ${resolvedPath}`);
+      if (error instanceof Error) {
+        console.error(error.message);
+      }
     }
   }
 }
@@ -405,14 +438,24 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
     // Mode selection
     if (hasOutput) {
       // Export mode - Task 3
-      await exportData(result, options.output!, hasOpen);
+      await exportData(result, options.output!, hasOpen, fullDeps.fileSystem);
     } else if (hasQuery) {
       // Query mode - Task 4
       queryMode(result, options.query!, options.depth || '10', options.json);
     } else if (hasOpen) {
-      // Open mode - TODO: Task 5
-      logger.error('Open mode (--open) not yet implemented');
-      process.exit(1);
+      // Open mode - directly open viewer without exporting
+      try {
+        await openGraphViewer(fullDeps.fileSystem);
+        logger.info('Opened graph viewer in browser');
+        console.log('\n✓ Graph viewer opened');
+        console.log('  Drag and drop a dependency JSON file to visualize');
+      } catch (error) {
+        logger.error(`Could not open graph viewer: ${error}`);
+        if (error instanceof Error) {
+          console.error(`\n${error.message}`);
+        }
+        process.exit(1);
+      }
     } else {
       // Summary mode (default) - Task 2
       displaySummary(result);
@@ -463,7 +506,20 @@ export function createCallCommand(): Command {
     .option('--demo', 'Use demo workspace')
     .option('--output <file>', 'Export dependency data to JSON file')
     .option('--open', 'Open HTML visualization in browser')
-    .option('--query <names>', 'Query dependencies for specific names (comma-separated)')
+    .option('--query <names>', [
+      'Query dependencies for specific names',
+      '',
+      'Pattern Matching:',
+      '  - Exact match: "functionName" or "ClassName.methodName"',
+      '  - Wildcards: "*" (any chars), "?" (single char)',
+      '    Examples: "get*", "*User*", "*.*.get*"',
+      '',
+      'Query Modes:',
+      '  - Single pattern: --query="main"',
+      '    → Shows dependency tree: what "main" calls and who calls "main"',
+      '  - Multiple patterns (comma-separated): --query="main,helper"',
+      '    → Analyzes connections: how "main" connects to "helper"'
+    ].join('\n                       '))
     .option('--depth <number>', 'Query depth for dependency traversal', '10')
     .option('--json', 'Output query results in JSON format')
     .option('--clear-cache', 'Clear dependency analysis cache')

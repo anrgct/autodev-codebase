@@ -79,7 +79,7 @@ codebase --force index
 - `--path, -p <path>` - Working directory path
 - `--force` - Force reindex all files, ignoring cache
 - `--demo` - Create demo files in workspace for testing
-- `outline <pattern>` - Extract code outline from file(s) using glob patterns
+- `outline <pattern>` - Extract code outlines from file(s) using glob patterns
 - `--summarize` - Generate AI summaries for code outlines
 - `--title` - Show only file-level summary (no function details)
 - `--clear-summarize-cache` - Clear all summary caches for current project
@@ -88,6 +88,12 @@ codebase --force index
 - `--limit, -l <number>` - Maximum number of search results (overrides config, max 50)
 - `--min-score, -S <number>` - Minimum similarity score for search results 0-1 (overrides config)
 - `--json` - Output search results in JSON format
+- `call [path]` - Analyze code dependencies (file or directory)
+- `--query <names>` - Query dependencies for specific names (comma-separated, for call command)
+- `--depth <number>` - Query depth for dependency traversal (default: 10, for call command)
+- `--output <file>` - Export dependency data to JSON file (for call command)
+- `--open` - Open HTML visualization in browser (for call command)
+- `--clear-cache` - Clear dependency analysis cache (for call command)
 
 ### 2. Project Configuration
 

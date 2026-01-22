@@ -6,9 +6,9 @@
 import * as path from 'path'
 import * as fs from 'fs/promises'
 
-import { analyze, DependencyAnalyzerDeps, IPathUtils, generateVisualizationData } from './src/dependency/index'
-import { NodeFileSystem } from './src/adapters/nodejs/file-system'
-import { NodePathUtils } from './src/adapters/nodejs/workspace'
+import { analyze, DependencyAnalyzerDeps, IPathUtils, generateVisualizationData } from '../dependency/index'
+import { NodeFileSystem } from '../adapters/nodejs/file-system'
+import { NodePathUtils } from '../adapters/nodejs/workspace'
 
 // ═══════════════════════════════════════════════════════════════
 // 依赖适配器

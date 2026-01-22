@@ -309,11 +309,14 @@ export function helper3() {
       const result = await runAnalysis()
 
       // Query single function
-      const matchedNodes = findMatchingNodes(result.nodes, 'main')
-      expect(matchedNodes.length).toBe(1)
+      let matchedNodes = findMatchingNodes(result.nodes, 'main')
+
+      // When multiple nodes match (module + function), prefer function over module
+      const functionNode = matchedNodes.find(n => n.componentType === 'function')
+      const targetNode = functionNode || matchedNodes[0]
 
       const queryOptions: QueryOptions = { depth: 10 }
-      const queryResult = queryNode(result.nodes, matchedNodes[0], queryOptions)
+      const queryResult = queryNode(result.nodes, targetNode, queryOptions)
 
       // Verify structure
       expect(queryResult.node).toBeDefined()
@@ -691,14 +694,39 @@ export function c() {
       expect(result.nodes.size).toBeGreaterThanOrEqual(3)
 
       // Query chain
-      const matchedNodes = findMatchingNodes(result.nodes, 'a')
-      expect(matchedNodes.length).toBe(1)
+      let matchedNodes = findMatchingNodes(result.nodes, 'a')
+      // When multiple nodes match (module + function), prefer function over module
+      const functionNode = matchedNodes.find(n => n.componentType === 'function')
+      const targetNode = functionNode || matchedNodes[0]
 
-      const queryResult = queryNode(result.nodes, matchedNodes[0], { depth: 10 })
+      const queryResult = queryNode(result.nodes, targetNode, { depth: 10 })
 
       // Should traverse full chain
       const names = queryResult.callees.map(c => c.name)
       expect(names).toContain('b')
+    })
+
+    it('should distinguish module and function nodes by full ID', async () => {
+      await createFile('src/a.ts', `
+export function a() {
+  return 'a'
+}
+`)
+
+      const result = await runAnalysis()
+
+      // Short name query matches both module and function
+      const matchedByName = findMatchingNodes(result.nodes, 'a')
+      expect(matchedByName.length).toBe(2)
+
+      // Full ID query matches exactly one node
+      const matchedModuleById = findMatchingNodes(result.nodes, 'src/a')
+      expect(matchedModuleById.length).toBe(1)
+      expect(matchedModuleById[0].componentType).toBe('module')
+
+      const matchedFunctionById = findMatchingNodes(result.nodes, 'src/a.a')
+      expect(matchedFunctionById.length).toBe(1)
+      expect(matchedFunctionById[0].componentType).toBe('function')
     })
 
     it('should handle multiple files with same function names', async () => {

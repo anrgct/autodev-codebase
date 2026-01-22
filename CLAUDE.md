@@ -9,6 +9,7 @@
 - MCP HTTP 服务器（http-streamable/stdio 支持）
 - LLM 重排序
 - 代码结构大纲提取（带 AI 摘要）
+- 函数调用图分析（依赖追踪、路径分析）
 - 40+ 语言的 Tree-sitter 解析
 - Qdrant 向量数据库后端
 
@@ -21,6 +22,7 @@ src/
 ├── abstractions/       # 核心接口定义
 ├── adapters/nodejs/    # Node.js 平台适配
 ├── cli-tools/          # CLI 工具（outline, search 等）
+├── commands/           # 命令实现（call, outline 等）
 ├── config/             # 配置管理
 ├── glob/               # 文件匹配
 ├── mcp/                # MCP 服务器
@@ -107,6 +109,14 @@ codebase outline "src/**/*.ts"
 codebase outline "src/**/*.ts" --summarize      # 生成 AI 摘要
 codebase outline "src/**/*.ts" --dry-run        # 预览匹配的文件
 codebase outline --clear-cache                  # 清除摘要缓存
+
+# 调用图分析
+codebase call --query="functionA,functionB"     # 查询函数调用关系
+codebase call src/commands                      # 分析指定目录
+codebase call --output=graph.json               # 导出分析结果
+codebase call --open                            # 打开可视化图表查看器
+codebase call --depth=3                         # 设置分析深度
+codebase call --path=/workspace                 # 指定工作空间路径
 
 # stdio 适配器
 codebase stdio --server-url=http://localhost:3001/mcp

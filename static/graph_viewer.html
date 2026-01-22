@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>代码依赖关系可视化</title>
+    <title>Code Dependency Visualization</title>
     <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
@@ -676,6 +676,24 @@
             display: block;
         }
 
+        /* 语言切换按钮 */
+        .lang-switch {
+            background: rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 20px;
+            color: white;
+            backdrop-filter: blur(10px);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+            font-size: 14px;
+        }
+
+        .lang-switch:hover {
+            background: rgba(255,255,255,0.3);
+            border-color: rgba(255,255,255,0.5);
+        }
+
         /* 响应式设计 */
         @media (max-width: 1400px) {
             .info-panel {
@@ -756,18 +774,18 @@
     <div class="loading-overlay" id="loading">
         <div class="loading-content" id="drop-zone" style="text-align: center; padding: 40px; border: 3px dashed #e9ecef; border-radius: 12px; margin: 40px; transition: all 0.3s ease;">
             <h2 style="color: #4a90d9; margin-bottom: 20px;">
-                <i class="bi bi-diagram-3"></i> 代码依赖关系可视化
+                <i class="bi bi-diagram-3"></i> <span data-i18n="title">Code Dependency Visualization</span>
             </h2>
             <div style="margin-bottom: 20px;">
-                <p style="color: #6c757d; margin-bottom: 15px;">选择或拖拽 JSON 数据文件：</p>
+                <p style="color: #6c757d; margin-bottom: 15px;"><span data-i18n="selectFile">Select or drag JSON data file:</span></p>
                 <input type="file" id="json-file-input" accept=".json"
                        style="padding: 10px; border: 2px solid #e9ecef; border-radius: 8px; width: 80%;">
                 <div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px;">
                     <p style="font-size: 13px; color: #495057; margin: 0;">
-                        <i class="bi bi-arrow-down-up" style="color: #4a90d9;"></i> 拖拽 .json 文件到这里
+                        <i class="bi bi-arrow-down-up" style="color: #4a90d9;"></i> <span data-i18n="dragFile">Drag .json file here</span>
                     </p>
                     <p style="font-size: 12px; color: #adb5bd; margin-top: 8px; margin-bottom: 0;">
-                        提示：通过 generate_visualization.py 生成
+                        <span data-i18n="fileTip">Tip: Generated via --output call-graph.json</span>
                     </p>
                 </div>
             </div>
@@ -780,19 +798,22 @@
     <!-- 顶部导航栏 -->
     <div class="navbar">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h1><i class="bi bi-diagram-3"></i> 代码依赖关系可视化</h1>
+            <h1><i class="bi bi-diagram-3"></i> <span data-i18n="title">Code Dependency Visualization</span></h1>
             <div class="stats-bar">
+                <button class="lang-switch" onclick="toggleLanguage()" id="lang-btn">
+                    <i class="bi bi-globe"></i> <span id="lang-text">EN</span>
+                </button>
                 <div class="stat-item">
                     <div class="value" id="node-count">-</div>
-                    <div class="label">节点</div>
+                    <div class="label" data-i18n="nodes">Nodes</div>
                 </div>
                 <div class="stat-item">
                     <div class="value" id="edge-count">-</div>
-                    <div class="label">关系</div>
+                    <div class="label" data-i18n="edges">Edges</div>
                 </div>
                 <div class="stat-item">
                     <div class="value" id="depth-count">-</div>
-                    <div class="label">层级</div>
+                    <div class="label" data-i18n="depth">Depth</div>
                 </div>
             </div>
         </div>
@@ -805,11 +826,11 @@
             <div class="panel-section">
                 <div class="section-title">
                     <i class="bi bi-search"></i>
-                    搜索节点
+                    <span data-i18n="searchNodes">Search Nodes</span>
                 </div>
                 <div class="search-box">
-                    <textarea id="search-input" placeholder="输入节点名称搜索（支持逗号分隔多个词）" rows="1"></textarea>
-                    <button class="clear-btn" id="search-clear-btn" title="清空搜索">
+                    <textarea id="search-input" data-i18n-placeholder="searchPlaceholder" placeholder="Enter node name (comma-separated for multiple)" rows="1"></textarea>
+                    <button class="clear-btn" id="search-clear-btn" data-i18n-title="clearSearch" title="Clear search">
                         <i class="bi bi-x"></i>
                     </button>
                     <i class="bi bi-search search-icon"></i>
@@ -819,23 +840,23 @@
             <div class="panel-section">
                 <div class="section-title">
                     <i class="bi bi-funnel"></i>
-                    筛选类型
+                    <span data-i18n="filterType">Filter Type</span>
                 </div>
                 <div class="filter-group" id="filter-group">
                     <div class="filter-btn active" data-filter="all">
-                        <span>全部</span>
+                        <span data-i18n="all">All</span>
                         <span class="count" id="count-all">0</span>
                     </div>
                     <div class="filter-btn" data-filter="class">
-                        <span>类</span>
+                        <span data-i18n="class">Class</span>
                         <span class="count" id="count-class">0</span>
                     </div>
                     <div class="filter-btn" data-filter="function">
-                        <span>函数</span>
+                        <span data-i18n="function">Function</span>
                         <span class="count" id="count-function">0</span>
                     </div>
                     <div class="filter-btn" data-filter="module">
-                        <span>模块</span>
+                        <span data-i18n="module">Module</span>
                         <span class="count" id="count-module">0</span>
                     </div>
                 </div>
@@ -844,24 +865,24 @@
             <div class="panel-section">
                 <div class="section-title">
                     <i class="bi bi-grid-3x3"></i>
-                    布局方式
+                    <span data-i18n="layoutMode">Layout Mode</span>
                 </div>
                 <div class="layout-grid">
                     <div class="layout-btn active" data-layout="cose">
                         <i class="bi bi-bounding-box"></i>
-                        <div>力导向</div>
+                        <div data-i18n="forceDirected">Force</div>
                     </div>
                     <div class="layout-btn" data-layout="circle">
                         <i class="bi bi-circle"></i>
-                        <div>圆形</div>
+                        <div data-i18n="circle">Circle</div>
                     </div>
                     <div class="layout-btn" data-layout="concentric">
                         <i class="bi bi-bullseye"></i>
-                        <div>同心圆</div>
+                        <div data-i18n="concentric">Concentric</div>
                     </div>
                     <div class="layout-btn" data-layout="breadthfirst">
                         <i class="bi bi-list-nested"></i>
-                        <div>层级</div>
+                        <div data-i18n="hierarchical">Hierarchical</div>
                     </div>
                 </div>
             </div>
@@ -869,39 +890,39 @@
             <div class="panel-section">
                 <div class="section-title">
                     <i class="bi bi-palette"></i>
-                    图例
+                    <span data-i18n="legend">Legend</span>
                 </div>
                 <div class="legend-item">
                     <div class="legend-color" style="background: #4a90d9;">C</div>
-                    <div class="legend-label">类 (Class)</div>
+                    <div class="legend-label" data-i18n="classLegend">Class</div>
                 </div>
                 <div class="legend-item">
                     <div class="legend-color" style="background: #28a745;">F</div>
-                    <div class="legend-label">函数 (Function)</div>
+                    <div class="legend-label" data-i18n="functionLegend">Function</div>
                 </div>
                 <div class="legend-item">
                     <div class="legend-color" style="background: #ffc107;">M</div>
-                    <div class="legend-label">模块 (Module)</div>
+                    <div class="legend-label" data-i18n="moduleLegend">Module</div>
                 </div>
             </div>
 
             <div class="panel-section">
                 <div class="section-title">
                     <i class="bi bi-tools"></i>
-                    工具
+                    <span data-i18n="tools">Tools</span>
                 </div>
                 <div class="tool-buttons">
                     <button class="tool-btn" onclick="exportImage()">
                         <i class="bi bi-download"></i>
-                        <span>导出图片</span>
+                        <span data-i18n="exportImage">Export</span>
                     </button>
                     <button class="tool-btn" onclick="resetView()">
                         <i class="bi bi-arrow-counterclockwise"></i>
-                        <span>重置视图</span>
+                        <span data-i18n="resetView">Reset</span>
                     </button>
                     <button class="tool-btn" onclick="fitGraph()">
                         <i class="bi bi-aspect-ratio"></i>
-                        <span>适应窗口</span>
+                        <span data-i18n="fitWindow">Fit</span>
                     </button>
                 </div>
             </div>
@@ -912,29 +933,29 @@
             <div id="cy"></div>
 
             <!-- 边缘恢复按钮 -->
-            <button class="edge-toggle-btn left-edge expanded" onclick="togglePanel('control-panel')" title="隐藏控制面板">
+            <button class="edge-toggle-btn left-edge expanded" onclick="togglePanel('control-panel')" data-i18n-title="hideControlPanel" title="Hide control panel">
                 <i class="bi bi-chevron-left"></i>
             </button>
-            <button class="edge-toggle-btn right-edge expanded" onclick="togglePanel('info-panel')" title="隐藏信息面板">
+            <button class="edge-toggle-btn right-edge expanded" onclick="togglePanel('info-panel')" data-i18n-title="hideInfoPanel" title="Hide info panel">
                 <i class="bi bi-chevron-right"></i>
             </button>
 
             <!-- 控制按钮组 - 仅缩放按钮 -->
             <div class="control-buttons">
-                <button class="ctrl-btn" onclick="zoomIn()" title="放大">
+                <button class="ctrl-btn" onclick="zoomIn()" data-i18n-title="zoomIn" title="Zoom in">
                     <i class="bi bi-plus-lg"></i>
                 </button>
-                <button class="ctrl-btn" onclick="zoomOut()" title="缩小">
+                <button class="ctrl-btn" onclick="zoomOut()" data-i18n-title="zoomOut" title="Zoom out">
                     <i class="bi bi-dash-lg"></i>
                 </button>
             </div>
 
             <!-- 导航按钮组 - 右下角 -->
             <div class="nav-buttons">
-                <button class="nav-btn" onclick="navigateBack()" title="后退" id="btn-back" disabled>
+                <button class="nav-btn" onclick="navigateBack()" data-i18n-title="back" title="Back" id="btn-back" disabled>
                     <i class="bi bi-arrow-left"></i>
                 </button>
-                <button class="nav-btn" onclick="navigateForward()" title="前进" id="btn-forward" disabled>
+                <button class="nav-btn" onclick="navigateForward()" data-i18n-title="forward" title="Forward" id="btn-forward" disabled>
                     <i class="bi bi-arrow-right"></i>
                 </button>
             </div>
@@ -944,41 +965,41 @@
         <div class="info-panel" id="info-panel">
             <div class="info-header">
                 <i class="bi bi-info-circle" style="font-size: 24px; color: var(--primary-color);"></i>
-                <h3>节点详情</h3>
+                <h3 data-i18n="nodeDetails">Node Details</h3>
             </div>
 
             <div class="no-selection" id="no-selection">
                 <i class="bi bi-hand-index-thumb"></i>
-                <p>点击节点查看详细信息</p>
+                <p data-i18n="clickNode">Click a node to view details</p>
             </div>
 
             <div class="info-content" id="info-content">
                 <div class="info-row">
-                    <div class="info-label">ID:</div>
+                    <div class="info-label" data-i18n="idLabel">ID:</div>
                     <div class="info-value" id="info-id">-</div>
                 </div>
                 <div class="info-row">
-                    <div class="info-label">名称:</div>
+                    <div class="info-label" data-i18n="nameLabel">Name:</div>
                     <div class="info-value" id="info-label">-</div>
                 </div>
                 <div class="info-row">
-                    <div class="info-label">类型:</div>
+                    <div class="info-label" data-i18n="typeLabel">Type:</div>
                     <div class="info-value" id="info-type">-</div>
                 </div>
                 <div class="info-row">
-                    <div class="info-label">文件:</div>
+                    <div class="info-label" data-i18n="fileLabel">File:</div>
                     <div class="info-value" id="info-file">-</div>
                 </div>
                 <div class="info-row">
-                    <div class="info-label">起始行:</div>
+                    <div class="info-label" data-i18n="startLineLabel">Start:</div>
                     <div class="info-value" id="info-start-line">-</div>
                 </div>
                 <div class="info-row">
-                    <div class="info-label">结束行:</div>
+                    <div class="info-label" data-i18n="endLineLabel">End:</div>
                     <div class="info-value" id="info-end-line">-</div>
                 </div>
                 <div class="info-row">
-                    <div class="info-label">连接数:</div>
+                    <div class="info-label" data-i18n="connectionsLabel">Connections:</div>
                     <div class="info-value" id="info-connections">-</div>
                 </div>
 
@@ -986,11 +1007,11 @@
                 <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #e9ecef;">
                     <div style="font-weight: 600; color: #495057; margin-bottom: 10px; font-size: 18px;">
                         <i class="bi bi-diagram-3" style="color: var(--primary-color);"></i>
-                        连接节点
+                        <span data-i18n="connectedNodes">Connected Nodes</span>
                     </div>
                     <div id="connections-container" style="max-height: 300px; overflow-y: auto;">
                         <div style="text-align: center; padding: 20px; color: #adb5bd; font-size: 12px;">
-                            点击节点查看连接关系
+                            <span data-i18n="clickNodeConnections">Click a node to see connections</span>
                         </div>
                     </div>
                 </div>
@@ -1002,6 +1023,230 @@
         let cy;
         let currentFilter = 'all';
         let currentLayout = 'cose';
+
+        // 语言设置
+        let currentLang = localStorage.getItem('app-language') || 'en'; // 默认英文
+
+        // 语言字典
+        const translations = {
+            en: {
+                title: 'Code Dependency Visualization',
+                selectFile: 'Select or drag JSON data file:',
+                dragFile: 'Drag .json file here',
+                fileTip: 'Tip: Generated via --output call-graph.json',
+                nodes: 'Nodes',
+                edges: 'Edges',
+                depth: 'Depth',
+                searchNodes: 'Search Nodes',
+                searchPlaceholder: 'Enter node name (comma-separated for multiple)',
+                clearSearch: 'Clear search',
+                filterType: 'Filter Type',
+                all: 'All',
+                class: 'Class',
+                function: 'Function',
+                module: 'Module',
+                layoutMode: 'Layout Mode',
+                forceDirected: 'Force',
+                circle: 'Circle',
+                concentric: 'Concentric',
+                hierarchical: 'Hierarchical',
+                legend: 'Legend',
+                classLegend: 'Class',
+                functionLegend: 'Function',
+                moduleLegend: 'Module',
+                tools: 'Tools',
+                exportImage: 'Export',
+                resetView: 'Reset',
+                fitWindow: 'Fit',
+                hideControlPanel: 'Hide control panel',
+                showControlPanel: 'Show control panel',
+                hideInfoPanel: 'Hide info panel',
+                showInfoPanel: 'Show info panel',
+                zoomIn: 'Zoom in',
+                zoomOut: 'Zoom out',
+                back: 'Back',
+                forward: 'Forward',
+                nodeDetails: 'Node Details',
+                clickNode: 'Click a node to view details',
+                idLabel: 'ID:',
+                nameLabel: 'Name:',
+                typeLabel: 'Type:',
+                fileLabel: 'File:',
+                startLineLabel: 'Start:',
+                endLineLabel: 'End:',
+                connectionsLabel: 'Connections:',
+                connectedNodes: 'Connected Nodes',
+                clickNodeConnections: 'Click a node to see connections',
+                loading: 'Loading data...',
+                loadingFailed: 'Loading failed',
+                reload: 'Reload',
+                largeDataset: `Dataset is large ({count} nodes), loading may take a few seconds...`,
+                veryLargeDataset: `Dataset is very large ({count} nodes), may cause browser lag. Continue? Suggestions:\n1. Reduce analysis scope\n2. Use filter function\n\nContinue loading?`,
+                foundNodes: 'Found {count} matching nodes',
+                foundNodesLimited: 'Found {count} matching nodes, showing first {max}',
+                noMatchingNodes: 'No matching nodes found',
+                typeFiltered: 'Showing {count} {type} nodes',
+                viewReset: 'View reset',
+                windowFitted: 'Fitted to window',
+                imageExported: 'Image exported',
+                panelHidden: '{panel} hidden',
+                panelShown: '{panel} shown',
+                selected: 'Selected: {label}',
+                navigatingBack: 'Back ({index}/{total}): {label}',
+                navigatingForward: 'Forward ({index}/{total}): {label}',
+                layoutUpdated: 'Layout updated',
+                applyingLayout: 'Applying new layout, please wait...',
+                noConnections: 'No connections',
+                dependents: 'Dependents',
+                dependencies: 'Dependencies',
+                connections: 'connections',
+                initializeError: 'Initialization failed: {error}',
+                showNodeInfoError: 'Failed to show node info: {error}',
+                loadFileError: 'File loading failed: {error}',
+                pleaseSelectJson: 'Please select .json file',
+                searchCleared: 'Search cleared, showing all nodes',
+                showAllNodes: 'Show all nodes',
+                showClassNodes: 'Show class nodes',
+                showFunctionNodes: 'Show function nodes',
+                showModuleNodes: 'Show module nodes'
+            },
+            zh: {
+                title: '代码依赖关系可视化',
+                selectFile: '选择或拖拽 JSON 数据文件：',
+                dragFile: '拖拽 .json 文件到这里',
+                fileTip: '提示：通过 --output call-graph.json 生成',
+                nodes: '节点',
+                edges: '关系',
+                depth: '层级',
+                searchNodes: '搜索节点',
+                searchPlaceholder: '输入节点名称搜索（支持逗号分隔多个词）',
+                clearSearch: '清空搜索',
+                filterType: '筛选类型',
+                all: '全部',
+                class: '类',
+                function: '函数',
+                module: '模块',
+                layoutMode: '布局方式',
+                forceDirected: '力导向',
+                circle: '圆形',
+                concentric: '同心圆',
+                hierarchical: '层级',
+                legend: '图例',
+                classLegend: '类',
+                functionLegend: '函数',
+                moduleLegend: '模块',
+                tools: '工具',
+                exportImage: '导出图片',
+                resetView: '重置视图',
+                fitWindow: '适应窗口',
+                hideControlPanel: '隐藏控制面板',
+                showControlPanel: '显示控制面板',
+                hideInfoPanel: '隐藏信息面板',
+                showInfoPanel: '显示信息面板',
+                zoomIn: '放大',
+                zoomOut: '缩小',
+                back: '后退',
+                forward: '前进',
+                nodeDetails: '节点详情',
+                clickNode: '点击节点查看详细信息',
+                idLabel: 'ID：',
+                nameLabel: '名称：',
+                typeLabel: '类型：',
+                fileLabel: '文件：',
+                startLineLabel: '起始行：',
+                endLineLabel: '结束行：',
+                connectionsLabel: '连接数：',
+                connectedNodes: '连接节点',
+                clickNodeConnections: '点击节点查看连接关系',
+                loading: '正在加载数据...',
+                loadingFailed: '加载失败',
+                reload: '重新选择文件',
+                largeDataset: '数据量较大（{count}个节点），加载可能需要几秒钟...',
+                veryLargeDataset: '数据量非常大（{count}个节点），可能导致浏览器卡顿。是否继续？建议：\n1. 减少分析范围\n2. 使用筛选功能\n\n是否继续加载？',
+                foundNodes: '找到 {count} 个匹配节点',
+                foundNodesLimited: '找到 {count} 个匹配节点，仅显示前 {max} 个',
+                noMatchingNodes: '未找到匹配节点',
+                typeFiltered: '已显示 {count} 个{type}类型的节点',
+                viewReset: '视图已重置',
+                windowFitted: '已适应窗口',
+                imageExported: '图片已导出',
+                panelHidden: '{panel}已隐藏',
+                panelShown: '{panel}已显示',
+                selected: '已选中: {label}',
+                navigatingBack: '后退 ({index}/{total}): {label}',
+                navigatingForward: '前进 ({index}/{total}): {label}',
+                layoutUpdated: '布局已更新',
+                applyingLayout: '正在应用新布局，请稍候...',
+                noConnections: '暂无连接节点',
+                dependents: '被依赖',
+                dependencies: '依赖',
+                connections: ' 连接',
+                initializeError: '初始化失败: {error}',
+                showNodeInfoError: '显示节点信息失败: {error}',
+                loadFileError: '文件加载失败：{error}',
+                pleaseSelectJson: '请选择 .json 文件',
+                searchCleared: '搜索已清空，恢复显示所有节点',
+                showAllNodes: '显示所有节点',
+                showClassNodes: '显示类节点',
+                showFunctionNodes: '显示函数节点',
+                showModuleNodes: '显示模块节点'
+            }
+        };
+
+        // 获取翻译文本
+        function t(key, params = {}) {
+            const text = translations[currentLang][key] || translations.en[key] || key;
+            // 支持参数替换
+            if (typeof text === 'string') {
+                return text.replace(/\{(\w+)\}/g, (match, paramKey) => params[paramKey] || match);
+            }
+            return text;
+        }
+
+        // 切换语言
+        function toggleLanguage() {
+            currentLang = currentLang === 'en' ? 'zh' : 'en';
+            localStorage.setItem('app-language', currentLang);
+            updateLanguage();
+        }
+
+        // 更新界面语言
+        function updateLanguage() {
+            // 更新语言按钮
+            const langText = document.getElementById('lang-text');
+            if (langText) {
+                langText.textContent = currentLang === 'en' ? 'EN' : '中文';
+            }
+
+            // 更新所有带有 data-i18n 属性的元素
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                el.textContent = t(key);
+            });
+
+            // 更新所有带有 data-i18n-placeholder 属性的元素
+            document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
+                const key = el.getAttribute('data-i18n-placeholder');
+                el.placeholder = t(key);
+            });
+
+            // 更新所有带有 data-i18n-title 属性的元素
+            document.querySelectorAll('[data-i18n-title]').forEach(el => {
+                const key = el.getAttribute('data-i18n-title');
+                el.title = t(key);
+            });
+
+            // 更新 HTML lang 属性
+            document.documentElement.lang = currentLang;
+
+            // 如果有选中的节点，重新显示其信息（包括连接列表）
+            if (cy && cy.$(':selected').length > 0) {
+                const selectedNode = cy.$(':selected').first();
+                if (selectedNode && selectedNode.isNode()) {
+                    displayConnectionList(selectedNode);
+                }
+            }
+        }
 
         // 历史记录管理
         let nodeHistory = [];
@@ -1015,6 +1260,9 @@
 
         // 初始化 - 等待用户选择文件或拖拽
         document.addEventListener('DOMContentLoaded', function() {
+            // 初始化语言
+            updateLanguage();
+
             const fileInput = document.getElementById('json-file-input');
             const dropZone = document.getElementById('drop-zone');
 
@@ -1051,7 +1299,7 @@
 
                 const file = files[0];
                 if (!file.name.endsWith('.json')) {
-                    alert('请选择 .json 文件');
+                    alert(t('pleaseSelectJson'));
                     return;
                 }
 
@@ -1064,7 +1312,7 @@
             try {
                 // 显示加载动画
                 document.getElementById('loading').querySelector('.loading-content').innerHTML =
-                    '<div class="loading-spinner"></div><p style="margin-top: 20px; color: #6c757d;">正在加载数据...</p>';
+                    '<div class="loading-spinner"></div><p style="margin-top: 20px; color: #6c757d;">' + t('loading') + '</p>';
 
                 // 读取文件
                 const text = await file.text();
@@ -1076,11 +1324,11 @@
                 // 初始化图表
                 await initVisualization(elements);
             } catch (error) {
-                alert('文件加载失败：' + error.message);
+                alert(t('loadFileError', { error: error.message }));
                 document.getElementById('loading').querySelector('.loading-content').innerHTML =
-                    '<h2 style="color: #dc3545;">加载失败</h2>' +
+                    '<h2 style="color: #dc3545;">' + t('loadingFailed') + '</h2>' +
                     '<p>' + error.message + '</p>' +
-                    '<button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #4a90d9; color: white; border: none; border-radius: 8px; cursor: pointer;">重新选择文件</button>';
+                    '<button onclick="location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #4a90d9; color: white; border: none; border-radius: 8px; cursor: pointer;">' + t('reload') + '</button>';
             }
         }
 
@@ -1093,10 +1341,10 @@
                 // 检查数据量，对大数据量给出提示
                 const nodeCount = elements.filter(e => e.group === 'nodes').length;
                 if (nodeCount > 500) {
-                    showToast(`数据量较大(${nodeCount}个节点)，加载可能需要几秒钟...`);
+                    showToast(t('largeDataset', { count: nodeCount }));
                 }
                 if (nodeCount > 1000) {
-                    const confirmed = confirm(`数据量非常大(${nodeCount}个节点)，可能导致浏览器卡顿。是否继续？建议：\n1. 减少分析范围\n2. 使用筛选功能\n\n是否继续加载？`);
+                    const confirmed = confirm(t('veryLargeDataset', { count: nodeCount }));
                     if (!confirmed) {
                         return;
                     }
@@ -1113,7 +1361,7 @@
                 }, 100);
             } catch (error) {
                 console.error('初始化错误:', error);
-                showToast('初始化失败: ' + error.message);
+                showToast(t('initializeError', { error: error.message }));
             }
         }
 
@@ -1444,7 +1692,7 @@
             } catch (error) {
                 console.error('显示节点信息时出错:', error);
                 console.error('错误堆栈:', error.stack);
-                showToast('显示节点信息失败: ' + error.message);
+                showToast(t('showNodeInfoError', { error: error.message }));
             }
         }
 
@@ -1459,7 +1707,7 @@
                 const edges = node.connectedEdges();
 
                 if (neighborhood.length === 0) {
-                    container.innerHTML = '<div style="text-align: center; padding: 20px; color: #adb5bd; font-size: 12px;">暂无连接节点</div>';
+                    container.innerHTML = '<div style="text-align: center; padding: 20px; color: #adb5bd; font-size: 12px;">' + t('noConnections') + '</div>';
                     return;
                 }
 
@@ -1496,7 +1744,7 @@
                 // Incoming连接
                 if (incomingNodes.length > 0) {
                     html += '<div class="connections-header">';
-                    html += '<i class="bi bi-arrow-left"></i> 被依赖';
+                    html += '<i class="bi bi-arrow-left"></i> ' + t('dependents');
                     html += '<span class="count">' + incomingNodes.length + '</span>';
                     html += '</div>';
                     html += '<ul class="connection-list">';
@@ -1508,10 +1756,10 @@
 
                         html += '<li class="connection-item incoming" data-node-id="' + connNode.id() + '">';
                         html += '<div class="connection-main">';
-                        html += '<span class="connection-type-badge incoming">被依赖</span>';
+                        html += '<span class="connection-type-badge incoming">' + t('dependents') + '</span>';
                         html += '<span class="connection-node-type ' + nodeType + '">' + typeLabel + '</span>';
                         html += '<span class="connection-name">' + connNode.data('label') + '</span>';
-                        html += '<span class="connection-connections">' + connNode.degree() + ' 连接</span>';
+                        html += '<span class="connection-connections">' + connNode.degree() + t('connections') + '</span>';
                         html += '</div>';
                         html += '<div class="connection-id">ID: ' + connNode.id() + '</div>';
                         html += '</li>';
@@ -1523,7 +1771,7 @@
                 // Outgoing连接
                 if (outgoingNodes.length > 0) {
                     html += '<div class="connections-header" style="margin-top: 15px;">';
-                    html += '<i class="bi bi-arrow-right"></i> 依赖';
+                    html += '<i class="bi bi-arrow-right"></i> ' + t('dependencies');
                     html += '<span class="count">' + outgoingNodes.length + '</span>';
                     html += '</div>';
                     html += '<ul class="connection-list">';
@@ -1535,10 +1783,10 @@
 
                         html += '<li class="connection-item outgoing" data-node-id="' + connNode.id() + '">';
                         html += '<div class="connection-main">';
-                        html += '<span class="connection-type-badge outgoing">依赖</span>';
+                        html += '<span class="connection-type-badge outgoing">' + t('dependencies') + '</span>';
                         html += '<span class="connection-node-type ' + nodeType + '">' + typeLabel + '</span>';
                         html += '<span class="connection-name">' + connNode.data('label') + '</span>';
-                        html += '<span class="connection-connections">' + connNode.degree() + ' 连接</span>';
+                        html += '<span class="connection-connections">' + connNode.degree() + t('connections') + '</span>';
                         html += '</div>';
                         html += '<div class="connection-id">ID: ' + connNode.id() + '</div>';
                         html += '</li>';
@@ -1556,9 +1804,9 @@
         // 获取类型标签
         function getTypeLabel(type) {
             const labels = {
-                'class': '类',
-                'function': '函数',
-                'module': '模块'
+                'class': currentLang === 'en' ? 'Class' : '类',
+                'function': currentLang === 'en' ? 'Func' : '函数',
+                'module': currentLang === 'en' ? 'Mod' : '模块'
             };
             return labels[type] || type.substring(0, 1).toUpperCase();
         }
@@ -1589,7 +1837,7 @@
                     showNodeInfo(node);
                     highlightConnections(node);
 
-                    showToast('已选中: ' + node.data('label'));
+                    showToast(t('selected', { label: node.data('label') }));
                 }
             } catch (error) {
                 console.error('选中节点时出错:', error);
@@ -1660,7 +1908,7 @@
                     showNodeInfo(node);
                     highlightConnections(node);
 
-                    showToast(`后退 (${historyIndex + 1}/${nodeHistory.length}): ${historyItem.label}`);
+                    showToast(t('navigatingBack', { index: historyIndex + 1, total: nodeHistory.length, label: historyItem.label }));
                 }
 
                 updateNavigationButtons();
@@ -1694,7 +1942,7 @@
                     showNodeInfo(node);
                     highlightConnections(node);
 
-                    showToast(`前进 (${historyIndex + 1}/${nodeHistory.length}): ${historyItem.label}`);
+                    showToast(t('navigatingForward', { index: historyIndex + 1, total: nodeHistory.length, label: historyItem.label }));
                 }
 
                 updateNavigationButtons();
@@ -1794,7 +2042,8 @@
                 nodesToHide.connectedEdges().show();
                 nodesToHide.hide();
 
-                showToast(`已显示 ${nodesToShow.length} 个${filter}类型的节点`);
+                const typeMap = { class: t('class'), function: t('function'), module: t('module') };
+                showToast(t('typeFiltered', { count: nodesToShow.length, type: typeMap[filter] || filter }));
             }
         }
 
@@ -1921,9 +2170,9 @@
                         });
 
                         if (matchingNodes.length > maxResults) {
-                            showToast(`找到 ${matchingNodes.length} 个匹配节点，仅显示前 ${maxResults} 个`);
+                            showToast(t('foundNodesLimited', { count: matchingNodes.length, max: maxResults }));
                         } else {
-                            showToast(`找到 ${matchingNodes.length} 个匹配节点`);
+                            showToast(t('foundNodes', { count: matchingNodes.length }));
                         }
 
                         console.log(`搜索完成：显示 ${matchingNodes.length} 个节点`);
@@ -1931,7 +2180,7 @@
                         isSearchActive = true;
                         searchFilteredNodes = $();
                         cy.elements().hide();
-                        showToast('未找到匹配节点');
+                        showToast(t('noMatchingNodes'));
                     }
                 }, 300);
             });
@@ -1956,7 +2205,7 @@
             const nodeCount = cy.nodes().length;
 
             if (nodeCount > 500) {
-                showToast('正在应用新布局，请稍候...');
+                showToast(t('applyingLayout'));
             }
 
             const layout = cy.layout(getLayoutOptions(layoutName));
@@ -1970,7 +2219,7 @@
             layout.on('layoutstop', function() {
                 document.body.style.cursor = 'default';
                 if (nodeCount > 500) {
-                    showToast('布局已更新');
+                    showToast(t('layoutUpdated'));
                 }
             });
 
@@ -2003,13 +2252,13 @@
         function resetView() {
             cy.fit();
             cy.center();
-            showToast('视图已重置');
+            showToast(t('viewReset'));
         }
 
         // 适应窗口
         function fitGraph() {
             cy.fit();
-            showToast('已适应窗口');
+            showToast(t('windowFitted'));
         }
 
         // 导出图片
@@ -2019,7 +2268,7 @@
             link.href = png;
             link.download = 'dependency-graph.png';
             link.click();
-            showToast('图片已导出');
+            showToast(t('imageExported'));
         }
 
         // 切换面板
@@ -2048,7 +2297,8 @@
                     }
                 }
 
-                showToast(`${panelId === 'control-panel' ? '控制面板' : '信息面板'}已显示`);
+                const panelName = panelId === 'control-panel' ? (currentLang === 'en' ? 'Control panel' : '控制面板') : (currentLang === 'en' ? 'Info panel' : '信息面板');
+                showToast(t('panelShown', { panel: panelName }));
             } else {
                 // 隐藏面板
                 panel.classList.add('collapsed');
@@ -2070,7 +2320,8 @@
                     }
                 }
 
-                showToast(`${panelId === 'control-panel' ? '控制面板' : '信息面板'}已隐藏`);
+                const panelName = panelId === 'control-panel' ? (currentLang === 'en' ? 'Control panel' : '控制面板') : (currentLang === 'en' ? 'Info panel' : '信息面板');
+                showToast(t('panelHidden', { panel: panelName }));
             }
         }
 
