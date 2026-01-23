@@ -111,11 +111,13 @@ codebase outline "src/**/*.ts" --dry-run        # 预览匹配的文件
 codebase outline --clear-cache                  # 清除摘要缓存
 
 # 调用图分析
-codebase call --query="functionA,functionB"     # 查询函数调用关系
+codebase call --query="functionA,functionB"     # 查询函数调用关系（多函数连接分析，默认深度10）
+codebase call --query="main"                    # 查询单个函数的调用树（默认深度3）
 codebase call src/commands                      # 分析指定目录
 codebase call --output=graph.json               # 导出分析结果
 codebase call --open                            # 打开可视化图表查看器
-codebase call --depth=3                         # 设置分析深度
+codebase call --query="main" --depth=5          # 自定义调用树深度
+codebase call --query="app,addUser" --depth=15  # 自定义路径搜索深度
 codebase call --path=/workspace                 # 指定工作空间路径
 
 # stdio 适配器

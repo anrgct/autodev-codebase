@@ -1011,4 +1011,67 @@ analyzeConnections(result.nodes, 'functionA,functionB', 10)
 **总结：**
 本次修订实现了 depth 参数在单函数和多函数查询中的统一控制，同时根据不同查询类型的特点设置了合理的默认值。提升了 CLI 的灵活性和易用性。
 
+### 修订6：Summary 模式支持 JSON 输出（2026-01-23）
+
+**问题：**
+用户执行 `npx tsx src/cli.ts call --demo --json` 时，`--json` 参数未生效，仍然输出格式化文本而非 JSON。
+
+**原因：**
+- Summary 模式（默认模式）的 `displaySummary` 函数未实现 JSON 输出
+- `--json` 参数仅在 Query 模式（需要 `--query` 参数）下工作
+- 命令进入 Summary 模式时忽略了 `--json` 参数
+
+**修复：**
+
+1. 修改 `displaySummary` 函数签名，添加 `asJson` 参数：
+```typescript
+function displaySummary(result: AnalysisResult, asJson: boolean = false): void
+```
+
+2. 添加 JSON 输出逻辑（src/commands/call.ts:114-158）：
+```typescript
+if (asJson) {
+  const componentTypesObj: Record<string, any> = {};
+  for (const [type, count] of componentTypes.entries()) {
+    const examples = Array.from(nodes.entries())
+      .filter(([_, node]) => node.componentType === type)
+      .slice(0, MAX_EXAMPLES)
+      .map(([id, _]) => id);
+    componentTypesObj[type] = { count, examples };
+  }
+
+  const jsonOutput = {
+    summary: {
+      totalFiles: summary.totalFiles,
+      totalNodes: summary.totalNodes,
+      totalRelationships: summary.totalRelationships,
+      languages: summary.languages,
+      cycleCount: cycles.length,
+    },
+    componentTypes: componentTypesObj,
+    topModules: topModules.map(([module, count]) => ({ module, dependencies: count })),
+    relationships: {
+      resolved: { count, examples: [...] },
+      unresolved: { count, examples: [...] }
+    },
+  };
+
+  console.log(JSON.stringify(jsonOutput, null, 2));
+  return;
+}
+```
+
+3. 修改 `callHandler` 传递 `options.json` 参数（src/commands/call.ts:513）：
+```typescript
+displaySummary(result, options.json);
+```
+
+**验证：**
+- ✅ `npx tsx src/cli.ts call --demo --json` - 输出 JSON 格式
+- ✅ `npx tsx src/cli.ts call --demo` - 输出格式化文本（保持兼容）
+- ✅ `npx tsx src/cli.ts call --demo --json --query="greetUser"` - Query 模式 JSON 输出正常
+
+**总结：**
+本次修订使 `--json` 参数在所有模式下保持一致，提升了 CLI 的用户体验和可预测性。JSON 输出格式与现有的格式化文本输出保持了信息对等。
+
 ## 总结

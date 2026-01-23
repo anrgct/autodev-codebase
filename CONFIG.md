@@ -90,7 +90,7 @@ codebase --force index
 - `--json` - Output search results in JSON format
 - `call [path]` - Analyze code dependencies (file or directory)
 - `--query <names>` - Query dependencies for specific names (comma-separated, for call command)
-- `--depth <number>` - Query depth for dependency traversal (default: 10, for call command)
+- `--depth <number>` - Query depth for dependency traversal (default: 3 for single query, 10 for multi-query, for call command)
 - `--output <file>` - Export dependency data to JSON file (for call command)
 - `--open` - Open HTML visualization in browser (for call command)
 - `--clear-cache` - Clear dependency analysis cache (for call command)

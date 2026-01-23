@@ -69,7 +69,7 @@ async function openGraphViewer(fileSystem: any): Promise<void> {
 /**
  * Format and display dependency analysis summary
  */
-function displaySummary(result: AnalysisResult): void {
+function displaySummary(result: AnalysisResult, asJson: boolean = false): void {
   const { summary, nodes, relationships, cycles } = result;
 
   // Maximum number of examples to display for each category
@@ -110,7 +110,52 @@ function displaySummary(result: AnalysisResult): void {
     .slice(0, MAX_EXAMPLES)
     .filter(([_, count]) => count > 0);
 
-  // Output summary
+  // JSON output mode
+  if (asJson) {
+    const componentTypesObj: Record<string, any> = {};
+    for (const [type, count] of componentTypes.entries()) {
+      const examples = Array.from(nodes.entries())
+        .filter(([_, node]) => node.componentType === type)
+        .slice(0, MAX_EXAMPLES)
+        .map(([id, _]) => id);
+      componentTypesObj[type] = { count, examples };
+    }
+
+    const jsonOutput = {
+      summary: {
+        totalFiles: summary.totalFiles,
+        totalNodes: summary.totalNodes,
+        totalRelationships: summary.totalRelationships,
+        languages: summary.languages,
+        cycleCount: cycles.length,
+      },
+      componentTypes: componentTypesObj,
+      topModules: topModules.map(([module, count]) => ({ module, dependencies: count })),
+      relationships: {
+        resolved: {
+          count: resolvedEdges.length,
+          examples: resolvedEdges.slice(0, MAX_EXAMPLES).map(edge => ({
+            caller: edge.caller,
+            callee: edge.callee,
+            callLine: edge.callLine,
+          })),
+        },
+        unresolved: {
+          count: unresolvedEdges.length,
+          examples: unresolvedEdges.slice(0, MAX_EXAMPLES).map(edge => ({
+            caller: edge.caller,
+            callee: edge.callee,
+            callLine: edge.callLine,
+          })),
+        },
+      },
+    };
+
+    console.log(JSON.stringify(jsonOutput, null, 2));
+    return;
+  }
+
+  // Text output mode (original)
   console.log('\nDependency Analysis Summary');
   console.log('==========================');
   console.log(`Files:         ${summary.totalFiles}`);
@@ -466,7 +511,7 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
       }
     } else {
       // Summary mode (default) - Task 2
-      displaySummary(result);
+      displaySummary(result, options.json);
     }
 
     // Display errors if any

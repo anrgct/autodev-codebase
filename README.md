@@ -164,9 +164,9 @@ codebase call --path=/my/project
 - **Wildcards**: `*` (any characters), `?` (single character)
   - Examples: `--query="get*"`, `--query="*User*"`, `--query="*.*.get*"`
 - **Single pattern**: `--query="main"` - Shows dependency tree (what it calls, who calls it)
-  - Use `--depth` to control tree depth (default: 10)
+  - Use `--depth` to control tree depth (default: 3)
 - **Multiple patterns**: `--query="main,helper"` - Analyzes connections between functions
-  - Connection search depth is fixed at 10 (--depth is ignored)
+  - Use `--depth` to control path search depth (default: 10)
 
 **Supported Languages:**
 - **TypeScript/JavaScript** (.ts, .tsx, .js, .jsx)
