@@ -870,4 +870,145 @@ analyzers/base.BaseAnalyzer:L53-639
 **总结：**
 本次修订通过添加结束行号到显示格式，提供了更完整的函数位置信息。用户可以直观地看到函数的范围和复杂度，提升了代码审查和重构时的效率。
 
+### 修订5：depth 参数统一与动态默认值（2026-01-23）
+
+**问题描述：**
+1. BFS 路径查找的最大深度硬编码为 10，无法通过 CLI 参数控制
+2. 多函数查询（连接分析）模式忽略了 `--depth` 参数
+3. 单函数查询和多函数查询使用相同的默认深度不合理
+
+**修改内容：**
+
+**1. 提取 BFS 深度参数（`src/dependency/query.ts`）**
+
+将硬编码的深度 10 改为显式参数传递：
+
+```typescript
+// 修改前：硬编码默认值
+function findShortestPath(
+  adj: Map<string, Set<string>>,
+  startId: string,
+  endId: string,
+  maxLength: number = 10  // ❌ 硬编码
+): string[] | null
+
+// 修改后：必须传入
+function findShortestPath(
+  adj: Map<string, Set<string>>,
+  startId: string,
+  endId: string,
+  maxLength: number  // ✅ 必须显式传入
+): string[] | null
+```
+
+**2. 参数链路打通**
+
+```typescript
+// findChains 接收并传递 maxDepth
+function findChains(
+  matchedNodes: DependencyNode[],
+  adj: Map<string, Set<string>>,
+  maxDepth: number  // 新增参数
+): Chain[] {
+  const path = findShortestPath(adj, start, end, maxDepth)  // 传递给 BFS
+}
+
+// analyzeConnections 接收并传递 maxDepth
+export function analyzeConnections(
+  nodes: Map<string, DependencyNode>,
+  query: string,
+  maxDepth: number  // 新增参数，无默认值
+): ConnectionAnalysisResult {
+  const chains = findChains(matchedNodes, adj, maxDepth)
+}
+```
+
+**3. CLI 层支持（`src/commands/call.ts`）**
+
+```typescript
+// queryMultipleFunctions 接收 depth 参数
+function queryMultipleFunctions(
+  result: AnalysisResult,
+  query: string,
+  depth: number,  // 新增参数
+  asJson: boolean
+): void {
+  const analysisResult = analyzeConnections(result.nodes, query, depth)
+}
+```
+
+**4. 动态默认值策略**
+
+在 `queryMode` 中根据查询类型使用不同的默认深度：
+
+```typescript
+function queryMode(
+  result: AnalysisResult,
+  query: string,
+  depthStr: string,
+  asJson: boolean
+): void {
+  const patterns = query.split(',').map(p => p.trim()).filter(p => p.length > 0)
+
+  // 动态决定默认深度
+  let depth: number
+  if (depthStr) {
+    // 用户显式指定
+    depth = parseInt(depthStr, 10)
+  } else {
+    // 根据查询类型使用不同默认值
+    depth = patterns.length > 1 ? 10 : 3
+    //      多函数查询（路径查找） → 10（需要更深搜索）
+    //      单函数查询（调用树）   → 3（避免过多输出）
+  }
+
+  if (patterns.length > 1) {
+    queryMultipleFunctions(result, query, depth, asJson)
+  } else {
+    querySingleFunction(result, query, depth, asJson)
+  }
+}
+```
+
+**5. 更新 CLI 帮助文本**
+
+```typescript
+.option('--depth <number>', 'Query depth for dependency traversal (default: 3 for single query, 10 for multi-query)')
+```
+
+**修改后的行为：**
+
+| 命令 | 查询类型 | depth 来源 | depth 值 | 说明 |
+|------|----------|-----------|----------|------|
+| `--query="app"` | 单函数 | 默认 | 3 | 调用树浅层展示 |
+| `--query="app,addUser"` | 多函数 | 默认 | 10 | 路径查找需要更深 |
+| `--query="app" --depth=5` | 单函数 | 用户指定 | 5 | 用户覆盖默认值 |
+| `--query="app,addUser" --depth=5` | 多函数 | 用户指定 | 5 | 用户覆盖默认值 |
+
+**设计理由：**
+
+1. **单函数查询默认 3**：
+   - 调用树展开层级过深会导致输出过多
+   - 大多数情况下 3 层足够理解直接依赖关系
+   
+2. **多函数查询默认 10**：
+   - BFS 路径查找需要更深的搜索才能找到间接连接
+   - 如果深度太浅，可能找不到存在的调用链
+
+3. **参数传递无默认值**：
+   - 所有中间函数（`findShortestPath`, `findChains`, `analyzeConnections`）都不设默认值
+   - 只在最顶层 `queryMode` 根据业务逻辑决定默认值
+   - 提高代码可维护性，避免多处默认值不一致
+
+**测试修改：**
+
+```typescript
+// src/commands/__tests__/call.test.ts
+// 所有 analyzeConnections 调用都添加 depth 参数
+analyzeConnections(result.nodes, 'functionA,functionB', 10)
+```
+
+**总结：**
+本次修订实现了 depth 参数在单函数和多函数查询中的统一控制，同时根据不同查询类型的特点设置了合理的默认值。提升了 CLI 的灵活性和易用性。
+
 ## 总结

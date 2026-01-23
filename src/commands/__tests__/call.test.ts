@@ -373,7 +373,7 @@ export function functionC() {
       const result = await runAnalysis()
 
       // Query multiple functions
-      const analysisResult = analyzeConnections(result.nodes, 'functionA,functionB')
+      const analysisResult = analyzeConnections(result.nodes, 'functionA,functionB', 10)
 
       // Verify structure
       expect(analysisResult.queryNames).toEqual(['functionA', 'functionB'])
@@ -409,7 +409,7 @@ export function functionC() {
 
       const result = await runAnalysis()
 
-      const analysisResult = analyzeConnections(result.nodes, 'functionA,functionC')
+      const analysisResult = analyzeConnections(result.nodes, 'functionA,functionC', 10)
 
       // Should find both functions
       expect(analysisResult.matchedNodes.length).toBe(2)

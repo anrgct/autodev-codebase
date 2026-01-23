@@ -248,9 +248,10 @@ function querySingleFunction(
 function queryMultipleFunctions(
   result: AnalysisResult,
   query: string,
+  depth: number,
   asJson: boolean
 ): void {
-  const analysisResult = analyzeConnections(result.nodes, query);
+  const analysisResult = analyzeConnections(result.nodes, query, depth);
 
   if (asJson) {
     console.log(JSON.stringify(analysisResult, null, 2));
@@ -269,7 +270,6 @@ function queryMode(
   depthStr: string,
   asJson: boolean
 ): void {
-  const depth = parseInt(depthStr, 10) || 10;
   const patterns = query.split(',').map(p => p.trim()).filter(p => p.length > 0);
 
   if (patterns.length === 0) {
@@ -277,14 +277,22 @@ function queryMode(
     return;
   }
 
-  // Single pattern or wildcard pattern -> single function query
-  // Multiple patterns -> connection analysis
-  const hasWildcard = patterns.some(p => p.includes('*') || p.includes('?'));
-
-  if (patterns.length === 1 || hasWildcard) {
-    querySingleFunction(result, query, depth, asJson);
+  // Determine depth based on query type
+  let depth: number;
+  if (depthStr) {
+    // User explicitly provided depth
+    depth = parseInt(depthStr, 10);
   } else {
-    queryMultipleFunctions(result, query, asJson);
+    // Use different defaults based on query type
+    depth = patterns.length > 1 ? 10 : 3;
+  }
+
+  // Multiple patterns (comma-separated) -> connection analysis
+  // Single pattern -> single function query with depth
+  if (patterns.length > 1) {
+    queryMultipleFunctions(result, query, depth, asJson);
+  } else {
+    querySingleFunction(result, query, depth, asJson);
   }
 }
 
@@ -520,7 +528,7 @@ export function createCallCommand(): Command {
       '  - Multiple patterns (comma-separated): --query="main,helper"',
       '    → Analyzes connections: how "main" connects to "helper"'
     ].join('\n                       '))
-    .option('--depth <number>', 'Query depth for dependency traversal', '10')
+    .option('--depth <number>', 'Query depth for dependency traversal (default: 3 for single query, 10 for multi-query)')
     .option('--json', 'Output query results in JSON format')
     .option('--clear-cache', 'Clear dependency analysis cache')
     .option('--log-level <level>', 'Log level: debug|info|warn|error', 'error')

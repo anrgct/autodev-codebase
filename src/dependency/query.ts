@@ -333,7 +333,7 @@ function findShortestPath(
   adj: Map<string, Set<string>>,
   startId: string,
   endId: string,
-  maxLength: number = 10
+  maxLength: number
 ): string[] | null {
   if (startId === endId) {
     return [startId]
@@ -370,7 +370,8 @@ function findShortestPath(
  */
 function findChains(
   matchedNodes: DependencyNode[],
-  adj: Map<string, Set<string>>
+  adj: Map<string, Set<string>>,
+  maxDepth: number
 ): Chain[] {
   const chains: Chain[] = []
   const n = matchedNodes.length
@@ -378,7 +379,7 @@ function findChains(
   // Find paths between all pairs
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      const path = findShortestPath(adj, matchedNodes[i].id, matchedNodes[j].id)
+      const path = findShortestPath(adj, matchedNodes[i].id, matchedNodes[j].id, maxDepth)
       if (path && path.length > 1) {
         chains.push({
           path,
@@ -397,11 +398,13 @@ function findChains(
  *
  * @param nodes - Node map
  * @param query - Comma-separated function names/patterns
+ * @param maxDepth - Maximum depth for path finding
  * @returns Connection analysis result
  */
 export function analyzeConnections(
   nodes: Map<string, DependencyNode>,
-  query: string
+  query: string,
+  maxDepth: number
 ): ConnectionAnalysisResult {
   // Find matching nodes
   const matchedNodes = findMatchingNodes(nodes, query)
@@ -423,7 +426,7 @@ export function analyzeConnections(
   const directConnections = findDirectConnections(matchedNodes, adj)
 
   // Find chains
-  const chains = findChains(matchedNodes, adj)
+  const chains = findChains(matchedNodes, adj, maxDepth)
 
   // Collect all involved nodes
   const involvedIds = new Set<string>()
