@@ -139,9 +139,6 @@ export abstract class BaseAnalyzer {
 
   async analyze(): Promise<ParseOutput> {
     try {
-      // 0. Create module node for tracking top-level calls
-      this.createModuleNode()
-
       const tree = this.parser.parse(this.content)
       const root = tree.rootNode
 
@@ -225,8 +222,8 @@ export abstract class BaseAnalyzer {
       if (calleeInfo) {
         // 使用 CallInfo 进行过滤判断
         if (!this.shouldFilterCall(node, calleeInfo)) {
-          // Use currentFunc if inside a function, otherwise use module node ID
-          const caller = currentFunc || this.getModuleNodeId()
+          // Use currentFunc if inside a function, otherwise ensure module node exists
+          const caller = currentFunc || this.ensureModuleNode()
           
           // 根据调用类型决定如何传递 callee 参数
           if (calleeInfo.isGlobalCall) {
@@ -351,6 +348,27 @@ export abstract class BaseAnalyzer {
    */
   protected getModuleNodeId(): string {
     return this.getModulePath()
+  }
+
+  /**
+   * Ensure module node exists, creating it lazily if needed.
+   * Returns the module node ID.
+   * 
+   * This method is called when a top-level call is detected.
+   * By creating module nodes on-demand, we avoid creating nodes for files
+   * that don't have any top-level calls, reducing graph noise.
+   */
+  protected ensureModuleNode(): string {
+    const moduleId = this.getModuleNodeId()
+    
+    // If module node already exists, return its ID
+    if (this.nodes.has(moduleId)) {
+      return moduleId
+    }
+    
+    // Otherwise, create the module node now
+    this.createModuleNode()
+    return moduleId
   }
 
   protected addEdge(caller: string, calleeName: string, line: number): void {

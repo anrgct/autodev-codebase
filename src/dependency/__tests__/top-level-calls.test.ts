@@ -29,25 +29,31 @@ describe('Top-level calls tracking', () => {
   })
 
   describe('Module node creation', () => {
-    it('should create a module node for each file', async () => {
+    it('should create module node WITH edges when there are top-level calls', async () => {
       const code = `
         const { greetUser } = require('./hello');
-        greetUser('Alice');
+        greetUser('Alice');  // Top-level call
       `
       const result = await analyze(code)
 
-      // Find the module node
-      const moduleNode = result.nodes.find(node => node.componentType === 'module')
-
       // Verify module node exists
+      const moduleNode = result.nodes.find(node => node.componentType === 'module')
       expect(moduleNode).toBeDefined()
       expect(moduleNode?.componentType).toBe('module')
       expect(moduleNode?.name).toBe('app')  // Name without extension for consistency
       expect(moduleNode?.id).toBe('src/app')
       expect(moduleNode?.startLine).toBe(1)
+      
+      // Verify module node has edges (has dependencies)
+      const moduleEdges = result.edges.filter(edge => edge.caller === moduleNode?.id)
+      expect(moduleEdges.length).toBeGreaterThan(0)
+      
+      // Verify the edge points to greetUser
+      const greetUserEdge = moduleEdges.find(edge => edge.callee.includes('greetUser'))
+      expect(greetUserEdge).toBeDefined()
     })
 
-    it('should create module node with correct file name', async () => {
+    it('should NOT create module node when there are no top-level calls', async () => {
       const code = `
         function main() {
           console.log('test');
@@ -55,8 +61,33 @@ describe('Top-level calls tracking', () => {
       `
       const result = await analyze(code)
 
+      // Module node should NOT be created (no top-level calls)
       const moduleNode = result.nodes.find(node => node.componentType === 'module')
-      expect(moduleNode?.name).toBe('app')  // Name without extension for consistency
+      expect(moduleNode).toBeUndefined()
+      
+      // Only the function node should exist
+      expect(result.nodes.length).toBe(1)
+      expect(result.nodes[0].componentType).toBe('function')
+      expect(result.nodes[0].name).toBe('main')
+      
+      // No edges at all (console.log is filtered)
+      expect(result.edges.length).toBe(0)
+    })
+
+    it('should NOT create module node for files with no calls at all', async () => {
+      const code = `
+        const x = 1;
+        const y = 2;
+      `
+      const result = await analyze(code)
+
+      // Module node should NOT be created (no calls at all)
+      const moduleNode = result.nodes.find(node => node.componentType === 'module')
+      expect(moduleNode).toBeUndefined()
+
+      // Should have no nodes and no edges
+      expect(result.nodes.length).toBe(0)
+      expect(result.edges.length).toBe(0)
     })
   })
 
@@ -239,24 +270,6 @@ describe('Top-level calls tracking', () => {
       // Should track the init call
       const moduleEdges = result.edges.filter(edge => edge.caller === moduleNode?.id)
       expect(moduleEdges.length).toBeGreaterThan(0)
-    })
-
-    it('should handle files with no calls at all', async () => {
-      const code = `
-        const x = 1;
-        const y = 2;
-      `
-      const result = await analyze(code)
-
-      const moduleNode = result.nodes.find(node => node.componentType === 'module')
-      expect(moduleNode).toBeDefined()
-
-      // Should still create module node
-      expect(result.nodes.length).toBe(1)
-      
-      // Should have no edges
-      const moduleEdges = result.edges.filter(edge => edge.caller === moduleNode?.id)
-      expect(moduleEdges.length).toBe(0)
     })
 
     it('should handle mixed top-level and function-level calls', async () => {

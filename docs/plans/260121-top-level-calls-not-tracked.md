@@ -523,6 +523,97 @@ if (node.type === 'new_expression') {
 
 ## 修订记录
 
+### 2026-01-23：优化 module 节点创建策略（按需创建）
+
+**问题：**
+- 每个文件都创建 module 节点，导致大量没有边的 module 节点
+- 图中冗余节点过多，影响可读性和性能
+- 例如：4 个文件创建 4 个 module 节点，但只有 1 个有实际依赖关系
+
+**解决方案：** 按需创建 module 节点
+
+**实施修改：**
+
+1. **删除预创建逻辑**（`src/dependency/analyzers/base.ts:141`）
+   ```typescript
+   // ❌ 删除：在 analyze() 开始时创建 module 节点
+   async analyze(): Promise<ParseOutput> {
+     // this.createModuleNode()  // ← 删除这一行
+     
+     const tree = this.parser.parse(this.content)
+     // ...
+   }
+   ```
+
+2. **修改顶层调用追踪**（`src/dependency/analyzers/base.ts:221-241`）
+   ```typescript
+   // 将 getModuleNodeId() 改为 ensureModuleNode()
+   const caller = currentFunc || this.ensureModuleNode()
+   ```
+
+3. **添加懒加载方法**（`src/dependency/analyzers/base.ts:351-371`）
+   ```typescript
+   protected ensureModuleNode(): string {
+     const moduleId = this.getModuleNodeId()
+     
+     // 如果已存在，直接返回 ID
+     if (this.nodes.has(moduleId)) {
+       return moduleId
+     }
+     
+     // 否则创建新节点
+     this.createModuleNode()
+     return moduleId
+   }
+   ```
+
+**测试更新：**
+
+更新 2 个测试用例以反映新的按需创建行为：
+
+1. `should NOT create module node when there are no top-level calls`
+   - 旧行为：总是创建 module 节点
+   - 新行为：无顶层调用时不创建
+
+2. `should NOT create module node for files with no calls at all`
+   - 旧行为：空文件也创建 module 节点
+   - 新行为：无调用时不创建
+
+**测试结果：** ✅ 12/12 测试通过
+
+**集成测试验证（demo 目录）：**
+
+- 文件数：4（`demo/app.js`、`demo/hello.js`、`demo/model.py`、`demo/utils.py`）
+- **优化前**：应该有 4 个 module 节点
+- **优化后**：只有 1 个 module 节点（`demo/app`）
+- **减少节点数**：3 个无边节点（75% 减少）
+- **依赖边验证**：`demo/app` 有 5 条依赖边，功能正常
+
+**效果对比：**
+
+| 指标 | 优化前 | 优化后 | 改进 |
+|------|--------|--------|------|
+| Module 节点总数 | 4 | 1 | ↓ 75% |
+| 有边的 module 节点 | 1 | 1 | - |
+| 无边的 module 节点 | 3 | 0 | ↓ 100% |
+| 总节点数 | 46 | 43 | ↓ 6.5% |
+| 功能完整性 | ✅ | ✅ | - |
+
+**优势：**
+
+1. ✅ **自动优化** - 无需配置，自动过滤无用节点
+2. ✅ **向后兼容** - 不影响现有功能和 API
+3. ✅ **性能提升** - 减少节点数量，图更清晰
+4. ✅ **符合直觉** - "有依赖才显示" 是合理的默认行为
+5. ✅ **实施简单** - 只需修改 3 处代码
+
+**影响范围：**
+
+- 核心逻辑：`src/dependency/analyzers/base.ts`（3 处修改）
+- 测试文件：`src/dependency/__tests__/top-level-calls.test.ts`（2 个测试用例更新）
+- API 保持不变：对外接口无变化
+- 行为变化：仅影响内部节点创建时机
+
 ### 2026-01-21：改进 `--clear-cache` 的用户反馈
 
 **问题：**
