@@ -33,7 +33,7 @@ export interface CommandOptions {
   serve?: boolean;
   global?: boolean;
   // Call command options
-  output?: string;
+  viz?: string;
   query?: string;
   open?: boolean;
   depth?: string;

@@ -111,14 +111,21 @@ codebase outline "src/**/*.ts" --dry-run        # 预览匹配的文件
 codebase outline --clear-cache                  # 清除摘要缓存
 
 # 调用图分析
-codebase call --query="functionA,functionB"     # 查询函数调用关系（多函数连接分析，默认深度10）
-codebase call --query="main"                    # 查询单个函数的调用树（默认深度3）
+# 完整数据模式（无 --query）
+codebase call                                   # 显示统计概览
+codebase call --json                            # 显示统计概览（JSON 格式，包含示例节点）
+codebase call --viz graph.json                  # 导出完整可视化数据
+codebase call --open                            # 打开可视化查看器
+codebase call --viz graph.json --open           # 导出并打开
 codebase call src/commands                      # 分析指定目录
-codebase call --output=graph.json               # 导出分析结果
-codebase call --open                            # 打开可视化图表查看器
+
+# 查询模式（有 --query）
+codebase call --query="main"                    # 查询单个函数的调用树（默认深度3）
+codebase call --query="functionA,functionB"     # 多函数连接分析（默认深度10）
+codebase call --query="main" --json             # 显示查询结果（JSON 格式）
 codebase call --query="main" --depth=5          # 自定义调用树深度
 codebase call --query="app,addUser" --depth=15  # 自定义路径搜索深度
-codebase call --path=/workspace                 # 指定工作空间路径
+codebase call --path=/workspace --query="main"  # 指定工作空间路径
 
 # stdio 适配器
 codebase stdio --server-url=http://localhost:3001/mcp

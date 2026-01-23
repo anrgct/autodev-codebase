@@ -155,7 +155,7 @@ function displaySummary(result: AnalysisResult, asJson: boolean = false): void {
     return;
   }
 
-  // Text output mode (original)
+  // Text output
   console.log('\nDependency Analysis Summary');
   console.log('==========================');
   console.log(`Files:         ${summary.totalFiles}`);
@@ -215,7 +215,27 @@ function displaySummary(result: AnalysisResult, asJson: boolean = false): void {
 /**
  * Export dependency data to JSON file
  */
-async function exportData(
+function validateOptions(hasQuery: boolean, hasJson: boolean, hasViz: boolean, hasOpen: boolean): void {
+  if (hasQuery && hasViz) {
+    console.error('\n❌ Error: --viz cannot be used with --query\n');
+    console.error('   Query results are for quick inspection, not visualization.\n');
+    console.error('   To export full dependency data:\n');
+    console.error('     codebase call --viz graph.json\n');
+    console.error('   To query dependencies:\n');
+    console.error('     codebase call --query "functionName"\n');
+    process.exit(1);
+  }
+  
+  if (hasQuery && hasOpen) {
+    console.error('\n❌ Error: --open cannot be used with --query\n');
+    console.error('   Use --open without --query to visualize the full dependency graph.\n');
+    console.error('   To open the viewer:\n');
+    console.error('     codebase call --open\n');
+    process.exit(1);
+  }
+}
+
+async function exportViz(
   result: AnalysisResult,
   outputPath: string,
   openInBrowser: boolean,
@@ -230,7 +250,7 @@ async function exportData(
   // Write to file
   await fs.writeFile(resolvedPath, JSON.stringify(viz.cytoscape.elements, null, 2), 'utf-8');
 
-  console.log(`\nDependency data exported to: ${resolvedPath}`);
+  console.log(`\n✓ Visualization data exported to: ${resolvedPath}`);
   console.log(`  Nodes: ${viz.summary.total_nodes}`);
   console.log(`  Edges: ${viz.summary.total_edges}`);
   console.log(`  Languages: ${viz.summary.languages.join(', ')}`);
@@ -344,11 +364,21 @@ function queryMode(
 /**
  * Call command handler
  *
- * Provides dependency analysis with multiple output modes:
- * - Summary mode (default): Display statistics overview
- * - Export mode (--output): Export data to JSON file
- * - Query mode (--query): Query specific dependencies
- * - Open mode (--open): Open HTML visualization
+ * Provides dependency analysis with two modes:
+ * 
+ * 1. Full Data Mode (no --query):
+ *    - Summary mode (default): Display statistics overview
+ *    - JSON mode (--json): Display statistics in JSON format
+ *    - Export mode (--viz): Export visualization data to file
+ *    - Open mode (--open): Open HTML visualization viewer
+ * 
+ * 2. Query Mode (with --query):
+ *    - Tree format (default): Display dependency tree
+ *    - JSON format (--json): Output query results in JSON
+ * 
+ * Option constraints:
+ *    - --viz/--open cannot be used with --query
+ *    - --json works in both summary and query modes
  */
 async function callHandler(targetPath: string | undefined, options: CommandOptions): Promise<void> {
   // Initialize logger
@@ -476,9 +506,13 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
   };
 
   // Determine output mode
-  const hasOutput = !!options.output;
+  const hasViz = !!options.viz;
   const hasQuery = !!options.query;
+  const hasJson = !!options.json;
   const hasOpen = !!options.open;
+
+  // Validate option combinations
+  validateOptions(hasQuery, hasJson, hasViz, hasOpen);
 
   try {
     // Perform analysis
@@ -489,12 +523,12 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
     });
 
     // Mode selection
-    if (hasOutput) {
-      // Export mode - Task 3
-      await exportData(result, options.output!, hasOpen, fullDeps.fileSystem);
-    } else if (hasQuery) {
+    if (hasQuery) {
       // Query mode - Task 4
-      queryMode(result, options.query!, options.depth || '10', options.json);
+      queryMode(result, options.query!, options.depth || '10', hasJson);
+    } else if (hasViz) {
+      // Export mode - Task 3
+      await exportViz(result, options.viz!, hasOpen, fullDeps.fileSystem);
     } else if (hasOpen) {
       // Open mode - directly open viewer without exporting
       try {
@@ -557,8 +591,8 @@ export function createCallCommand(): Command {
     .option('-p, --path <path>', 'Working directory path', '.')
     .option('-c, --config <path>', 'Configuration file path')
     .option('--demo', 'Use demo workspace')
-    .option('--output <file>', 'Export dependency data to JSON file')
-    .option('--open', 'Open HTML visualization in browser')
+    .option('--viz <file>', 'Export full dependency data for visualization (cannot use with --query)')
+    .option('--open', 'Open HTML visualization viewer (cannot use with --query)')
     .option('--query <names>', [
       'Query dependencies for specific names',
       '',
@@ -574,7 +608,7 @@ export function createCallCommand(): Command {
       '    → Analyzes connections: how "main" connects to "helper"'
     ].join('\n                       '))
     .option('--depth <number>', 'Query depth for dependency traversal (default: 3 for single query, 10 for multi-query)')
-    .option('--json', 'Output query results in JSON format')
+    .option('--json', 'Output in JSON format (works in both summary and query modes)')
     .option('--clear-cache', 'Clear dependency analysis cache')
     .option('--log-level <level>', 'Log level: debug|info|warn|error', 'error')
     .option('--storage <path>', 'Custom storage path')

@@ -713,27 +713,17 @@ analyzers/typescript.TypeScriptAnalyzer.getMemberBuiltins:L242-244
 ### 修订4：显示格式优化 - 添加行号范围（2026-01-18）
 
 **问题：**
-当前显示格式使用 `id:行号` 格式，只显示函数的起始行，无法体现函数的完整范围：
-```
-analyzers/base.BaseAnalyzer.getMemberBuiltins:496
-```
-
-用户无法通过行号判断：
-- 函数有多长（单行 vs 多行）
-- 函数的复杂度（3行 vs 587行）
-- 精确的位置信息（需要跳转才能看到结束位置）
+当前显示格式使用 `id:行号` 只显示起始行，无法体现函数的完整范围和复杂度。
 
 **解决方案：**
-将显示格式从 `id:行号` 改为 `id:L{startLine}-{endLine}`，支持智能显示：
-- 单行函数：`id:L100`
-- 多行函数：`id:L100-105`
+改为 `id:L{startLine}-{endLine}` 格式，单行函数显示 `L100`，多行显示 `L100-105`。
 
-**代码变更：**
+**实施记录：**
 
 ```typescript
 // src/dependency/query.ts
 
-// 1. TreeNode 接口 - 添加 endLine 字段
+// 1. TreeNode 接口添加 endLine 字段
 export interface TreeNode {
   id: string
   name: string
@@ -744,131 +734,28 @@ export interface TreeNode {
   children: TreeNode[]
 }
 
-// 2. buildCalleeTree - 传递 endLine
-const treeNode: TreeNode = {
-  id: depNode.id,
-  name: depNode.name,
-  filePath: depNode.filePath,
-  line: depNode.startLine,
-  endLine: depNode.endLine,      // ✅ 新增
-  depth: currentDepth,
-  children: buildCalleeTree(...)
-}
-
-// 3. buildCallerTree - 传递 endLine
-const treeNode: TreeNode = {
-  id: node.id,
-  name: node.name,
-  filePath: node.filePath,
-  line: node.startLine,
-  endLine: node.endLine,          // ✅ 新增
-  depth: currentDepth,
-  children: buildCallerTree(...)
-}
-
-// 4. formatTreeNode - 格式化行号范围
-function formatTreeNode(node: TreeNode, prefix: string, isLast: boolean, output: string[]): void {
-  const connector = isLast ? '└──' : '├──'
-  const lineRange = node.line === node.endLine 
-    ? `L${node.line}` 
-    : `L${node.line}-${node.endLine}`
-  output.push(`${prefix}${connector} ${node.id}:${lineRange}`)
-  // ...
-}
-
-// 5. formatNodeQueryResult - 格式化行号范围
-const lineRange = result.node.startLine === result.node.endLine
-  ? `L${result.node.startLine}`
-  : `L${result.node.startLine}-${result.node.endLine}`
-output.push(`${result.node.id}:${lineRange}`)
-
-// 6. formatConnectionAnalysisResult - 格式化行号范围
-for (const node of result.matchedNodes) {
-  const lineRange = node.startLine === node.endLine
-    ? `L${node.startLine}`
-    : `L${node.startLine}-${node.endLine}`
-  output.push(`  - ${node.id}:${lineRange}`)
-}
+// 2. 格式化逻辑更新（3处）
+const lineRange = node.line === node.endLine 
+  ? `L${node.line}` 
+  : `L${node.line}-${node.endLine}`
 ```
 
-**效果对比：**
-
-| 场景 | 修改前 | 修改后 | 优势 |
-|------|--------|--------|------|
-| 单行函数 | `id:100` | `id:L100` | ✅ 明确标记为行号 |
-| 多行函数 | `id:100` | `id:L100-105` | ✅ 显示完整范围 |
-| 大函数 | `id:53` | `id:L53-639` | ✅ 一眼看出大小 |
-
-**实际输出示例：**
+**效果示例：**
 
 ```bash
-# 场景1：重名函数区分
 $ codebase call src/dependency --query="getMemberBuiltins"
 
 analyzers/base.BaseAnalyzer.getMemberBuiltins:L496-498  ← 3行函数
-  ↓ calls (callee)
-    (none)
   ↑ called by (caller)
-  └── analyzers/base.BaseAnalyzer:L53-639  ← 587行的大类！
-
-────────────────────────────────────────────────────────────
-
-analyzers/typescript.TypeScriptAnalyzer.getMemberBuiltins:L242-244  ← 3行函数
-  ↓ calls (callee)
-    (none)
-  ↑ called by (caller)
-    (none)
-
-# 场景2：连接分析模式
-$ codebase call src --query="BaseAnalyzer,getMemberBuiltins"
-
-Connections between BaseAnalyzer, getMemberBuiltins:
-
-Found 3 matching node(s):
-  - dependency/analyzers/base.BaseAnalyzer:L53-639
-  - dependency/analyzers/base.BaseAnalyzer.getMemberBuiltins:L496-498
-  - dependency/analyzers/typescript.TypeScriptAnalyzer.getMemberBuiltins:L242-244
-
-Direct connections:
-  - dependency/analyzers/base.BaseAnalyzer:L53-639 → dependency/analyzers/base.BaseAnalyzer.getMemberBuiltins:L496-498
-
-Chains found:
-  - dependency/analyzers/base.BaseAnalyzer:L53-639 → dependency/analyzers/base.BaseAnalyzer.getMemberBuiltins:L496-498
-
-# 场景3：双向依赖树
-$ codebase call src/dependency --query="BaseAnalyzer"
-
-analyzers/base.BaseAnalyzer:L53-639
-  ↓ calls (callee)
-  ├── analyzers/c.CAnalyzer.getNodeTypes:L25-35      ← 11行
-  ├── analyzers/c.CAnalyzer.extractImports:L68-70    ← 3行
-  ├── analyzers/base.BaseAnalyzer.traverseForNodes:L168-203  ← 36行
-  ├── analyzers/base.BaseAnalyzer.traverseForCalls:L205-241  ← 37行
-  ├── analyzers/c.CAnalyzer.extractClassName:L46-49  ← 4行
-  ├── analyzers/base.BaseAnalyzer.shouldSkipNode:L118-120  ← 3行
-  ├── analyzers/base.BaseAnalyzer.addClassNode:L247-263  ← 17行
-  ├── analyzers/base.BaseAnalyzer.addMethodNode:L284-306  ← 23行
-  ├── analyzers/base.BaseAnalyzer.addEdge:L308-345  ← 38行
-  └── analyzers/base.BaseAnalyzer.getMemberBuiltins:L496-498  ← 3行
+  └── analyzers/base.BaseAnalyzer:L53-639  ← 587行的大类
 ```
 
-**优势总结：**
-1. ✅ **信息完整** - 起始和结束行都显示，可以精确定位
-2. ✅ **大小感知** - 通过行号范围可以直观判断函数复杂度
-3. ✅ **格式统一** - 所有输出（树、连接、链）都使用相同格式
-4. ✅ **L 前缀** - 明确表示这是行号，避免混淆
-5. ✅ **智能显示** - 单行函数自动简化为 `L100`
+**优势：**
+1. ✅ **信息完整** - 起始和结束行都显示，可精确定位
+2. ✅ **大小感知** - 直观判断函数复杂度（如 `L53-639` 一眼看出是大类）
+3. ✅ **格式统一** - 树、连接、链所有输出使用相同格式
 
-**测试验证：**
-```bash
-✓ 所有现有测试通过（19/19）
-✓ TreeNode 正确传递 endLine
-✓ 格式化逻辑正确处理单行和多行函数
-✓ 连接分析和双向树都显示行号范围
-```
-
-**总结：**
-本次修订通过添加结束行号到显示格式，提供了更完整的函数位置信息。用户可以直观地看到函数的范围和复杂度，提升了代码审查和重构时的效率。
+**测试验证：** ✓ 所有现有测试通过（19/19）
 
 ### 修订5：depth 参数统一与动态默认值（2026-01-23）
 
@@ -1074,4 +961,93 @@ displaySummary(result, options.json);
 **总结：**
 本次修订使 `--json` 参数在所有模式下保持一致，提升了 CLI 的用户体验和可预测性。JSON 输出格式与现有的格式化文本输出保持了信息对等。
 
-## 总结
+### 修订7：重新设计输出选项（--output 改为 --viz）（2026-01-23）
+
+**问题：**
+`--output` 语义不明确，与 `--json` 职责混淆，且用户期望 `--query "xxx" --output result.json` 导出查询数据，但实际导出全部数据。
+
+**解决方案：**
+将 `--output` 重命名为 `--viz`，明确其用途为"导出可视化数据"，并添加严格的选项组合验证。
+
+**实施记录：**
+
+```typescript
+// src/commands/call.ts
+
+// 1. 选项重命名
+.option('--viz <file>', 'Export full dependency data for visualization (cannot use with --query)')
+.option('--open', 'Open HTML visualization viewer (cannot use with --query)')
+
+// 2. 类型定义更新
+export interface CommandOptions {
+  viz?: string;  // 原 output?: string
+  // ...
+}
+
+// 3. 添加选项验证
+function validateOptions(hasQuery: boolean, hasJson: boolean, hasViz: boolean, hasOpen: boolean): void {
+  if (hasQuery && hasViz) {
+    console.error('\n❌ Error: --viz cannot be used with --query\n');
+    console.error('   To export full dependency data:\n     codebase call --viz graph.json\n');
+    console.error('   To query dependencies:\n     codebase call --query "functionName"\n');
+    process.exit(1);
+  }
+  if (hasQuery && hasOpen) {
+    console.error('\n❌ Error: --open cannot be used with --query\n');
+    process.exit(1);
+  }
+}
+
+// 4. Handler 逻辑重构
+validateOptions(hasQuery, hasJson, hasViz, hasOpen);
+
+if (hasQuery) {
+  queryMode(result, options.query!, options.depth || '10', hasJson);
+} else if (hasViz) {
+  await exportViz(result, options.viz!, hasOpen, fullDeps.fileSystem);
+} else if (hasOpen) {
+  // Open mode
+} else {
+  displaySummary(result);
+}
+
+// 5. 函数重命名
+async function exportViz(...) { /* 原 exportMode */ }
+```
+
+**效果示例：**
+
+完整数据模式（无 `--query`）：
+```bash
+✅ codebase call                          # 显示统计概览（tree 格式）
+✅ codebase call --json                   # 显示统计概览（JSON 格式，包含示例节点）
+✅ codebase call --viz graph.json         # 导出完整可视化数据（Cytoscape.js 格式）
+✅ codebase call --open                   # 打开可视化查看器
+✅ codebase call --viz graph.json --open  # 导出并打开
+```
+
+查询模式（有 `--query`）：
+```bash
+✅ codebase call --query "getUser"              # 显示依赖树（tree 格式）
+✅ codebase call --query "getUser" --json       # 显示依赖树（JSON 格式）
+✅ codebase call --query "getUser,validateUser" # 多函数连接分析
+```
+
+错误提示示例：
+ ```bash
+ $ codebase call --query "getUser" --viz graph.json
+ 
+ ❌ Error: --viz cannot be used with --query
+ 
+    To export full dependency data:
+      codebase call --viz graph.json
+ 
+    To query dependencies:
+      codebase call --query "functionName"
+ ```
+
+**使用说明：**
+- **无 --query**：`--viz` 导出可视化数据，`--json` 输出统计 JSON
+- **有 --query**：`--json` 输出查询结果 JSON，`--viz/--open` 不可用
+
+**测试验证：** ✓ 所有选项组合验证通过

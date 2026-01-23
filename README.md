@@ -140,33 +140,33 @@ codebase outline --clear-summarize-cache
 
 ### 🔗 Call Graph Analysis
 ```bash
-# Analyze function call relationships
-codebase call --query="functionA,functionB"
+# 📊 Statistics Overview (no --query)
+codebase call                           # Show statistics overview
+codebase call --json                    # JSON format
+codebase call src/commands              # Analyze specific directory
 
-# Analyze specific directory
-codebase call src/commands
+# 🔍 Function Query (with --query)
+codebase call --query="getUser"         # Single function call tree (default depth: 3)
+codebase call --query="main" --depth=5  # Custom depth
+codebase call --query="getUser,validateUser"  # Multi-function connections (default depth: 10)
 
-# Export analysis results
-codebase call --output=graph.json
+# 🎨 Visualization
+codebase call --viz graph.json          # Export Cytoscape.js format
+codebase call --open                    # Open interactive viewer
+codebase call --viz graph.json --open   # Export and open
 
-# Open interactive graph viewer
-codebase call --open
-
-# Set analysis depth
-codebase call --query="main" --depth=3
-
-# Specify workspace path
-codebase call --path=/my/project
+# Specify workspace (works for both modes)
+codebase call --path=/my/project --query="main"
 ```
 
 **Query Patterns:**
-- **Exact match**: `--query="functionName"` or `--query="ClassName.methodName"`
+- **Exact match**: `--query="functionName"` or `--query="*ClassName.methodName"`
 - **Wildcards**: `*` (any characters), `?` (single character)
   - Examples: `--query="get*"`, `--query="*User*"`, `--query="*.*.get*"`
-- **Single pattern**: `--query="main"` - Shows dependency tree (what it calls, who calls it)
-  - Use `--depth` to control tree depth (default: 3)
-- **Multiple patterns**: `--query="main,helper"` - Analyzes connections between functions
-  - Use `--depth` to control path search depth (default: 10)
+- **Single function**: `--query="main"` - Shows call tree (upward + downward)
+  - Default depth: **3** (avoids excessive output)
+- **Multiple functions**: `--query="main,helper"` - Analyzes connection paths between functions
+  - Default depth: **10** (deeper search needed for path finding)
 
 **Supported Languages:**
 - **TypeScript/JavaScript** (.ts, .tsx, .js, .jsx)
@@ -327,7 +327,7 @@ codebase search "auth" --json
 - `--limit` / `-l <number>` - Maximum number of search results (default: from config, max 50)
 - `--min-score` / `-S <number>` - Minimum similarity score for search results (0-1, default: from config)
 - `--query <patterns>` - Query patterns for call graph analysis (comma-separated)
-- `--output <file>` - Export analysis results to JSON file
+- `--viz <file>` - Export full dependency data for visualization (cannot use with --query)
 - `--open` - Open interactive graph viewer
 - `--depth <number>` - Set analysis depth for call graphs
 - `--help` - Show all available options
