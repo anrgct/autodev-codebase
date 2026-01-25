@@ -48,9 +48,9 @@ export function parsePathFilters(filtersString: string): string[] {
 }
 
 /**
- * Check whether a string contains glob pattern characters.
+ * Check whether a string contains glob pattern characters or comma-separated patterns.
  */
 export function isGlobPattern(input: string): boolean {
-  return /[*?{}\[\]]/.test(input)
+  return /[*?{}\[\],]/.test(input)
 }
 

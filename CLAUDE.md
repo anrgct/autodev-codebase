@@ -105,10 +105,12 @@ codebase index --serve --port=3001      # 启动 MCP HTTP 服务器
 codebase index --clear-cache            # 清除索引缓存
 
 # 代码大纲提取
-codebase outline "src/**/*.ts"
-codebase outline "src/**/*.ts" --summarize      # 生成 AI 摘要
-codebase outline "src/**/*.ts" --dry-run        # 预览匹配的文件
-codebase outline --clear-cache                  # 清除摘要缓存
+codebase outline "src/**/*.ts"                                      # 单个 glob 模式
+codebase outline "src/cli.ts,src/index.ts"                          # 逗号分隔多个文件
+codebase outline "src/**/*.ts,lib/**/*.js,!**/*.test.ts"            # 混合 glob 和排除模式
+codebase outline "src/**/*.ts" --summarize                          # 生成 AI 摘要
+codebase outline "src/**/*.ts" --dry-run                            # 预览匹配的文件
+codebase outline --clear-cache                                      # 清除摘要缓存
 
 # 调用图分析
 # 完整数据模式（无 --query）
@@ -181,7 +183,7 @@ codebase config --set key=value --global        # 设置全局配置
 5. **实施记录** - 记录实施过程中的具体操作、遇到的问题及解决方案
 6. **修订记录** - 记录计划和实施后的修复、调整、bug修复和优化工作（简洁包括修改日期、问题描述、实施记录）
 7. **总结** - 总结经验教训、后续优化建议和参考资源
-
+CRITICAL: Never provide level of effort time estimates(e.g., hours, days, weeks) for tasks. Focus solely on breaking down the work into clear, actionable steps without estimating how long they will take.
 
 <skills_system priority="1">
 
