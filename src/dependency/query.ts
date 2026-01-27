@@ -203,14 +203,15 @@ function buildCalleeTree(
     const depNode = nodes.get(depId)
     if (!depNode) continue
 
+    const childDepth = currentDepth + 1
     const treeNode: TreeNode = {
       id: depNode.id,
       name: depNode.name,
       filePath: depNode.filePath,
       line: depNode.startLine,
       endLine: depNode.endLine,
-      depth: currentDepth,
-      children: buildCalleeTree(nodes, depNode, visited, currentDepth + 1, maxDepth)
+      depth: childDepth,
+      children: buildCalleeTree(nodes, depNode, visited, childDepth, maxDepth)
     }
 
     children.push(treeNode)
@@ -239,14 +240,15 @@ function buildCallerTree(
   // Find all nodes that depend on the target node
   for (const node of nodes.values()) {
     if (node.dependsOn.has(targetNodeId)) {
+      const childDepth = currentDepth + 1
       const treeNode: TreeNode = {
         id: node.id,
         name: node.name,
         filePath: node.filePath,
         line: node.startLine,
         endLine: node.endLine,
-        depth: currentDepth,
-        children: buildCallerTree(nodes, node.id, visited, currentDepth + 1, maxDepth)
+        depth: childDepth,
+        children: buildCallerTree(nodes, node.id, visited, childDepth, maxDepth)
       }
 
       children.push(treeNode)

@@ -332,7 +332,7 @@ function queryMultipleFunctions(
 function queryMode(
   result: AnalysisResult,
   query: string,
-  depthStr: string,
+  depthStr: string | undefined,
   asJson: boolean
 ): void {
   const patterns = query.split(',').map(p => p.trim()).filter(p => p.length > 0);
@@ -525,7 +525,7 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
     // Mode selection
     if (hasQuery) {
       // Query mode - Task 4
-      queryMode(result, options.query!, options.depth || '10', hasJson);
+      queryMode(result, options.query!, options.depth, hasJson);
     } else if (hasViz) {
       // Export mode - Task 3
       await exportViz(result, options.viz!, hasOpen, fullDeps.fileSystem);

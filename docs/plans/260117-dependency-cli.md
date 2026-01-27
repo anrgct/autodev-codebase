@@ -898,6 +898,153 @@ analyzeConnections(result.nodes, 'functionA,functionB', 10)
 **总结：**
 本次修订实现了 depth 参数在单函数和多函数查询中的统一控制，同时根据不同查询类型的特点设置了合理的默认值。提升了 CLI 的灵活性和易用性。
 
+---
+
+### 修订5补充：修复 depth 默认值被覆盖和子节点深度记录错误（2026-01-27）
+
+**问题发现：**
+
+在实际使用中发现单函数查询时，树的深度远超预期的默认值 3，JSON 输出显示深度达到了 4、5、6 甚至更高。
+
+**根本原因分析：**
+
+1. **默认值覆盖问题**：
+   ```typescript
+   // ❌ src/commands/call.ts:528（修改前）
+   queryMode(result, options.query!, options.depth || '10', hasJson);
+   ```
+   - 当用户不提供 `--depth` 时，`options.depth` 为 `undefined`
+   - `undefined || '10'` 的结果是 `'10'`
+   - 导致 `queryMode` 内部的判断 `if (depthStr)` 为 true
+   - 直接使用 `parseInt('10', 10) = 10`，跳过了根据 query 类型选择默认值的逻辑
+   - **结果**：单函数查询使用了 depth=10 而不是预期的 depth=3
+
+2. **子节点深度记录错误**：
+   ```typescript
+   // ❌ src/dependency/query.ts:212（修改前）
+   const treeNode: TreeNode = {
+     // ...
+     depth: currentDepth,  // 错误：应该是子节点的深度，而非父节点的深度
+     children: buildCalleeTree(nodes, depNode, visited, currentDepth + 1, maxDepth)
+   }
+   ```
+   - 子节点的 `depth` 字段被设置为父节点的深度 `currentDepth`
+   - 但递归调用时传入的是 `currentDepth + 1`
+   - 导致每个节点的 `depth` 值比实际深度少 1
+
+**修复内容：**
+
+**1. 移除调用处的默认值（src/commands/call.ts:528）**
+
+```typescript
+// 修改前
+queryMode(result, options.query!, options.depth || '10', hasJson);
+
+// 修改后
+queryMode(result, options.query!, options.depth, hasJson);
+```
+
+**2. 更新 queryMode 类型签名（src/commands/call.ts:335）**
+
+```typescript
+// 修改前
+function queryMode(
+  result: AnalysisResult,
+  query: string,
+  depthStr: string,
+  asJson: boolean
+): void
+
+// 修改后
+function queryMode(
+  result: AnalysisResult,
+  query: string,
+  depthStr: string | undefined,  // 允许 undefined
+  asJson: boolean
+): void
+```
+
+**3. 修复子节点深度记录（src/dependency/query.ts:205-213, 242-250）**
+
+```typescript
+// 修改前 - buildCalleeTree
+const treeNode: TreeNode = {
+  id: depNode.id,
+  name: depNode.name,
+  filePath: depNode.filePath,
+  line: depNode.startLine,
+  endLine: depNode.endLine,
+  depth: currentDepth,  // ❌ 错误
+  children: buildCalleeTree(nodes, depNode, visited, currentDepth + 1, maxDepth)
+}
+
+// 修改后 - buildCalleeTree
+const childDepth = currentDepth + 1
+const treeNode: TreeNode = {
+  id: depNode.id,
+  name: depNode.name,
+  filePath: depNode.filePath,
+  line: depNode.startLine,
+  endLine: depNode.endLine,
+  depth: childDepth,  // ✅ 正确
+  children: buildCalleeTree(nodes, depNode, visited, childDepth, maxDepth)
+}
+
+// buildCallerTree 同样修复
+```
+
+**修复后的行为：**
+
+| 命令 | maxDepth | 实际显示深度 | 说明 |
+|------|----------|-------------|------|
+| `--query="indexHandler"` | 3 | 1, 2, 3 | ✅ 符合预期 |
+| `--query="indexHandler" --depth=2` | 2 | 1, 2 | ✅ 符合预期 |
+| `--query="indexHandler" --depth=1` | 1 | 1 | ✅ 符合预期 |
+| `--query="app,user"` | 10 | 最多 1-10 | ✅ 路径查找可用 |
+
+**深度语义说明：**
+
+```
+根节点（indexHandler）                     # 不在 callees 数组中，单独显示
+├── 子节点 A (depth=1)                     # currentDepth=0 时创建
+│   ├── 子节点 B (depth=2)                 # currentDepth=1 时创建
+│   │   └── 子节点 C (depth=3)             # currentDepth=2 时创建
+│   │       └── (停止，3 >= 3)             # currentDepth=3 时检查返回 []
+```
+
+- `maxDepth=3` 时，递归在 `currentDepth=3` 时停止
+- 实际创建的节点深度为 1, 2, 3
+- 根节点（查询目标）的信息在查询结果的 header 中单独显示
+
+**测试验证：**
+
+```bash
+# 单函数查询（默认 depth=3）
+$ npx tsx src/cli.ts call --query="indexHandler" --json | grep '"depth":'
+        "depth": 1,
+            "depth": 2,
+                "depth": 3,
+
+# 自定义深度
+$ npx tsx src/cli.ts call --query="indexHandler" --depth=2 --json | grep '"depth":'
+        "depth": 1,
+            "depth": 2,
+
+# 多函数查询（默认 depth=10，找到路径）
+$ npx tsx src/cli.ts call --query="indexHandler,createSampleFiles"
+Chains found:
+  - src/commands/index.indexHandler:L232-385 → ... → src/examples/create-sample-files.createSampleFiles:L2-1328
+```
+
+**总结：**
+本次补充修复了两个关键 bug：
+1. 调用处的硬编码默认值覆盖了动态默认值逻辑
+2. 子节点的深度字段记录错误导致深度检查失效
+
+修复后，depth 参数的行为完全符合设计文档的预期。
+
+---
+
 ### 修订6：Summary 模式支持 JSON 输出（2026-01-23）
 
 **问题：**
