@@ -13,7 +13,7 @@ export interface TreeSitterDependencies {
 }
 
 // Private constant
-const DEFAULT_MIN_COMPONENT_LINES_VALUE = 4
+const DEFAULT_MIN_COMPONENT_LINES_VALUE = 2
 
 // Getter function for MIN_COMPONENT_LINES (for easier testing)
 let currentMinComponentLines = DEFAULT_MIN_COMPONENT_LINES_VALUE
