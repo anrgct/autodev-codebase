@@ -159,32 +159,6 @@ codebase config --set key=value --global        # 设置全局配置
 - **项目配置**：`./autodev-config.json`
 - **全局配置**：`~/.autodev-cache/autodev-config.json`
 
-## 任务文档命名规则
-
-**文档位置**：`docs/plans` 目录
-
-**命名规则**：`YYMMDD-<主题>.md`
-
-- **YYMMDD**：6位日期前缀（YY=年，MM=月，DD=日）
-- **主题**：描述性的英文名称，使用连字符分隔多个单词
-
-**示例**：
-- `260116-mcp-integration.md` - 2026年1月16日创建的MCP集成文档
-- `260120-embedder-guide.md` - 2026年1月20日创建的嵌入器指南
-
-**章节组织规则**：
-
-所有说明文档应按照以下标准章节组织：
-
-1. **主题/需求** - 明确说明文档要解决的问题或需要实现的功能
-2. **代码背景** - 描述与问题相关的已有代码、代码结构和依赖关系
-3. **关键决策** - 记录技术选型、设计方案等关键决策及理由
-4. **实施计划** - 列出具体的实施步骤、时间线和资源需求（可选，复杂实施可单独文件）
-5. **实施记录** - 记录实施过程中的具体操作、遇到的问题及解决方案
-6. **修订记录** - 记录计划和实施后的修复、调整、bug修复和优化工作（简洁包括修改日期、问题描述、实施记录）
-7. **总结** - 总结经验教训、后续优化建议和参考资源
-CRITICAL: Never provide level of effort time estimates(e.g., hours, days, weeks) for tasks. Focus solely on breaking down the work into clear, actionable steps without estimating how long they will take.
-
 <skills_system priority="1">
 
 ## Available Skills
@@ -194,7 +168,8 @@ CRITICAL: Never provide level of effort time estimates(e.g., hours, days, weeks)
 When users ask you to perform tasks, check if any of the available skills below can help complete the task more effectively. Skills provide specialized capabilities and domain knowledge.
 
 How to use skills:
-- Invoke: Bash("openskills read <skill-name>")
+- Invoke: `npx openskills read <skill-name>` (run in your shell)
+  - For multiple: `npx openskills read skill-one,skill-two`
 - The skill content will load with detailed instructions on how to complete the task
 - Base directory provided in output for resolving bundled resources (references/, scripts/, assets/)
 
@@ -207,26 +182,20 @@ Usage notes:
 <available_skills>
 
 <skill>
-<name>chatting-ai-skill</name>
-<description>与本地AI助手（codex/claude code）交互式对话，自动管理多轮对话状态。当你需要分析代码、重构优化、编写新功能、调试问题或技术咨询时使用。支持多种输入方式（直接输入、Here document、文件、管道）。</description>
+<name>analyzing-codebase</name>
+<description>Semantic search, structure extraction, and call graph analysis for codebases using vector embeddings and tree-sitter. Use when working with code search, understanding code structure, or analyzing function call relationships.</description>
 <location>project</location>
 </skill>
 
 <skill>
-<name>create-agent-skills</name>
-<description>Expert guidance for creating, writing, and refining Claude Code Skills. Use when working with SKILL.md files, authoring new skills, improving existing skills, or understanding skill structure and best practices.</description>
+<name>chatting-ai</name>
+<description>Interact with local AI assistants for conversational dialogue, automatically managing multi-turn conversation state. Use when you need to analyze code, refactor and optimize, write new features, debug issues, or seek technical consultation. Supports multiple input methods (direct input, files, pipes).</description>
 <location>project</location>
 </skill>
 
 <skill>
-<name>planning-with-files</name>
-<description>Transforms workflow to use Manus-style persistent markdown files for planning, progress tracking, and knowledge storage. Use when starting complex tasks, multi-step projects, research tasks, or when the user mentions planning, organizing work, tracking progress, or wants structured output.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>searching-codebase-skill</name>
-<description>基于向量嵌入的代码库语义搜索与大纲提取工具。当你需要快速定位代码功能、理解代码结构、进行代码审查或重构分析时使用。支持智能语义搜索（理解代码意图）和代码结构分析（AI摘要）。</description>
+<name>creating-smart-docs</name>
+<description>Creates code docs (with smart references and text charts) and task docs for development tracking. Use for architecture docs, flow diagrams, implementation planning, or when users mention code documentation, task docs, ASCII diagrams, smart references, or code flow visualization.</description>
 <location>project</location>
 </skill>
 
