@@ -87,6 +87,24 @@ async function runEmbeddingTest() {
     // ollamaModelId: 'hf.co/nomic-ai/nomic-embed-code-GGUF:Q4_K_M', // dimension 3584
     // ollamaModelId: 'hf.co/taylor-jones/bge-code-v1-Q8_0-GGUF', // lmstudio dimension 1536,
     // ollamaModelId: 'dengcao/bge-reranker-v2-m3', // dimension 1024
+    // "embedderModelId": "hf.co/lmstudio-community/embeddinggemma-300m-qat-GGUF",
+    "embedderModelDimension": 768,
+    // "embedderModelId": "hf.co/mradermacher/F2LLM-v2-330M-GGUF",
+    // "embedderModelDimension": 896,
+    // "embedderModelId": "hf.co/mradermacher/F2LLM-v2-0.6B-GGUF",
+    // "embedderModelDimension": 1024,
+    // "embedderModelId": "hf.co/mradermacher/F2LLM-v2-1.7B-GGUF",
+    // "embedderModelDimension": 2048,
+    // "embedderModelId": "qwen3-embedding:0.6b",
+    // "embedderModelDimension": 1024,
+    // "embedderModelId": "qwen3-embedding:4b",
+    // "embedderModelDimension": 2048,
+    // "embedderModelId": "qwen3-embedding:8b",
+    // "embedderModelDimension": 4096,
+    // "embedderModelId": "jina-embeddings-v5-nano",
+    // "embedderModelDimension": 768,
+    // "embedderModelId": "jina-embeddings-v5-small",
+    // "embedderModelDimension": 1024,
     type: 'ollama'
   }
   const openaiModelList = {
