@@ -5,6 +5,7 @@ import {
 	MAX_BATCH_RETRIES as MAX_RETRIES,
 	INITIAL_RETRY_DELAY_MS as INITIAL_DELAY_MS,
 } from "../constants"
+import { fetch, ProxyAgent } from "undici"
 
 interface JinaEmbeddingResponse {
 	model: string
@@ -29,16 +30,39 @@ export class JinaEmbedder implements IEmbedder {
 	private readonly modelId: string
 	private readonly _optimalBatchSize: number
 
-	constructor(apiKey: string, modelId: string = 'jina-embeddings-v2-base-code', options?: { jinaBatchSize?: number }) {
+	constructor(apiKey: string, modelId: string = 'jina-embeddings-v2-base-code', options?: { jinaBatchSize?: number, jinaBaseUrl?: string }) {
 		if (!apiKey) {
 			throw new Error("API key is required for Jina embedder")
 		}
 
-		this.baseUrl = 'https://api.jina.ai/v1'
+		this.baseUrl = options?.jinaBaseUrl || 'https://api.jina.ai/v1'
 		this.apiKey = apiKey
 		this.modelId = modelId
 		// Initialize optimal batch size for Jina (can be customized via options)
 		this._optimalBatchSize = options?.jinaBatchSize || 30
+	}
+
+	/**
+	 * Creates a ProxyAgent from environment variables if configured.
+	 * Follows the same pattern as Ollama embedder's proxy support.
+	 */
+	private _createProxyDispatcher(targetUrl: string): any | undefined {
+		const httpsProxy = process.env['HTTPS_PROXY'] || process.env['https_proxy']
+		const httpProxy = process.env['HTTP_PROXY'] || process.env['http_proxy']
+
+		// 根据目标 URL 协议选择合适的代理
+		const proxyUrl = targetUrl.startsWith('https:') ? httpsProxy : httpProxy
+
+		if (proxyUrl) {
+			try {
+				console.log('✓ Jina Embedding using undici ProxyAgent:', proxyUrl)
+				return new ProxyAgent(proxyUrl)
+			} catch (error) {
+				console.error('✗ Failed to create undici ProxyAgent for Jina:', error)
+			}
+		}
+
+		return undefined
 	}
 
 	/**
@@ -118,6 +142,7 @@ export class JinaEmbedder implements IEmbedder {
 						'Authorization': `Bearer ${this.apiKey}`,
 					},
 					body: JSON.stringify(requestData),
+					dispatcher: this._createProxyDispatcher(this.baseUrl),
 				})
 
 				if (!response.ok) {
@@ -125,7 +150,7 @@ export class JinaEmbedder implements IEmbedder {
 					throw new Error(`HTTP ${response.status}: ${errorText}`)
 				}
 
-				const result: JinaEmbeddingResponse = await response.json()
+				const result = await response.json() as JinaEmbeddingResponse
 				const embeddings = result.data.map(item => item.embedding)
 
 				return {
@@ -177,6 +202,7 @@ export class JinaEmbedder implements IEmbedder {
 					model: this.modelId,
 					input: [testText],
 				}),
+				dispatcher: this._createProxyDispatcher(this.baseUrl),
 			})
 
 			if (!response.ok) {
@@ -187,7 +213,7 @@ export class JinaEmbedder implements IEmbedder {
 				}
 			}
 
-			const result = await response.json()
+			const result = await response.json() as JinaEmbeddingResponse
 			if (!result.data || !Array.isArray(result.data) || result.data.length === 0) {
 				return {
 					valid: false,

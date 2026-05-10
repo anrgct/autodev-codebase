@@ -47,6 +47,7 @@ export interface OpenAICompatibleEmbedderConfig {
 export interface JinaEmbedderConfig {
 	provider: "jina"
 	apiKey: string
+	baseUrl?: string
 	model: string
 	dimension: number
 }
@@ -113,6 +114,11 @@ export interface CodeIndexConfig {
 	embedderProvider: EmbedderProvider
 	embedderModelId?: string
 	embedderModelDimension?: number
+
+	// Embedder - Jina 特定参数
+	embedderJinaApiKey?: string
+	embedderJinaBaseUrl?: string
+	embedderJinaBatchSize?: number
 
 	// Embedder - Ollama 特定参数
 	embedderOllamaBaseUrl?: string
@@ -187,6 +193,9 @@ export type PreviousConfigSnapshot = {
 	embedderProvider: EmbedderProvider
 	embedderModelId?: string
 	embedderModelDimension?: number
+	embedderJinaApiKey?: string
+	embedderJinaBaseUrl?: string
+	embedderJinaBatchSize?: number
 	embedderOllamaBaseUrl?: string
 	embedderOllamaBatchSize?: number
 	embedderOpenAiApiKey?: string
@@ -256,6 +265,9 @@ export interface ConfigSnapshot {
 	embedderProvider: EmbedderProvider
 	embedderModelId?: string
 	embedderModelDimension?: number
+	embedderJinaApiKey?: string
+	embedderJinaBaseUrl?: string
+	embedderJinaBatchSize?: number
 	embedderOllamaBaseUrl?: string
 	embedderOllamaBatchSize?: number
 	embedderOpenAiApiKey?: string

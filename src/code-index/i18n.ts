@@ -6,6 +6,7 @@ const translations: Record<string, string> = {
 	"embeddings:serviceFactory.mistralConfigMissing": "Mistral API key missing for embedder creation",
 	"embeddings:serviceFactory.vercelAiGatewayConfigMissing": "Vercel AI Gateway API key missing for embedder creation",
 	"embeddings:serviceFactory.openRouterConfigMissing": "OpenRouter API key missing for embedder creation",
+	"embeddings:serviceFactory.jinaConfigMissing": "Jina API key missing for embedder creation",
 	"embeddings:serviceFactory.invalidEmbedderType": "Invalid embedder type configured: {embedderProvider}",
 	"embeddings:serviceFactory.vectorDimensionNotDetermined": "Could not determine vector dimension for model '{modelId}' with provider '{provider}'. Check model profiles or configuration.",
 	"embeddings:serviceFactory.vectorDimensionNotDeterminedOpenAiCompatible": "Could not determine vector dimension for model '{modelId}' with provider '{provider}'. Please ensure the 'Embedding Dimension' is correctly set in the OpenAI-Compatible provider settings.",

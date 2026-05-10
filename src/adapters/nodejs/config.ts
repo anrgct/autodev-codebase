@@ -66,6 +66,14 @@ export class NodeConfigProvider implements IConfigProvider {
         baseUrl: config.embedderOpenAiCompatibleBaseUrl || "",
         apiKey: config.embedderOpenAiCompatibleApiKey || ""
       }
+    } else if (config.embedderProvider === "jina") {
+      return {
+        provider: "jina",
+        model: config.embedderModelId || "jina-embeddings-v2-base-code",
+        dimension: config.embedderModelDimension || 768,
+        apiKey: config.embedderJinaApiKey || "",
+        baseUrl: config.embedderJinaBaseUrl || "https://api.jina.ai/v1"
+      }
     }
 
     // Fallback
@@ -278,6 +286,10 @@ export class NodeConfigProvider implements IConfigProvider {
           !this.config.embedderModelId) {
         return false
       }
+    } else if (embedderProvider === "jina") {
+      if (!this.config.embedderJinaApiKey || !this.config.embedderModelId) {
+        return false
+      }
     }
 
     // Check Qdrant configuration
@@ -336,6 +348,17 @@ export class NodeConfigProvider implements IConfigProvider {
         }
         if (!config.embedderModelDimension || config.embedderModelDimension <= 0) {
           errors.push('OpenAI Compatible model dimension is required and must be positive')
+        }
+        break
+      case "jina":
+        if (!config.embedderJinaApiKey) {
+          errors.push('Jina API key is required')
+        }
+        if (!config.embedderModelId) {
+          errors.push('Jina model is required')
+        }
+        if (!config.embedderModelDimension || config.embedderModelDimension <= 0) {
+          errors.push('Jina model dimension is required and must be positive')
         }
         break
     }

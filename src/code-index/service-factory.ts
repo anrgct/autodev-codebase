@@ -5,6 +5,7 @@ import { GeminiEmbedder } from "./embedders/gemini"
 import { MistralEmbedder } from "./embedders/mistral"
 import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
+import { JinaEmbedder } from "./embedders/jina-embedder"
 import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { OllamaSummarizer } from "./summarizers/ollama"
@@ -89,17 +90,27 @@ export class CodeIndexServiceFactory {
 				config.embedderOpenAiCompatibleApiKey,
 				config.embedderModelId,
 			)
-		} else if (provider === "gemini") {
-			if (!config.embedderGeminiApiKey) {
-				throw new Error(t("embeddings:serviceFactory.geminiConfigMissing"))
-			}
-			return new GeminiEmbedder(config.embedderGeminiApiKey, config.embedderModelId)
-		} else if (provider === "mistral") {
-			if (!config.embedderMistralApiKey) {
-				throw new Error(t("embeddings:serviceFactory.mistralConfigMissing"))
-			}
-			return new MistralEmbedder(config.embedderMistralApiKey, config.embedderModelId)
-		} else if (provider === "vercel-ai-gateway") {
+	} else if (provider === "jina") {
+		const apiKey = config.embedderJinaApiKey
+		if (!apiKey) {
+			throw new Error(t("embeddings:serviceFactory.jinaConfigMissing"))
+		}
+		return new JinaEmbedder(
+			apiKey,
+			config.embedderModelId,
+			{ jinaBatchSize: config.embedderJinaBatchSize, jinaBaseUrl: config.embedderJinaBaseUrl },
+		)
+	} else if (provider === "gemini") {
+		if (!config.embedderGeminiApiKey) {
+			throw new Error(t("embeddings:serviceFactory.geminiConfigMissing"))
+		}
+		return new GeminiEmbedder(config.embedderGeminiApiKey, config.embedderModelId)
+	} else if (provider === "mistral") {
+		if (!config.embedderMistralApiKey) {
+			throw new Error(t("embeddings:serviceFactory.mistralConfigMissing"))
+		}
+		return new MistralEmbedder(config.embedderMistralApiKey, config.embedderModelId)
+	} else if (provider === "vercel-ai-gateway") {
 			if (!config.embedderVercelAiGatewayApiKey) {
 				throw new Error(t("embeddings:serviceFactory.vercelAiGatewayConfigMissing"))
 			}

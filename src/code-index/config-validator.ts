@@ -114,14 +114,14 @@ export class ConfigValidator {
 				break
 
 			case 'jina':
-				if (!config.embedderGeminiApiKey) {
-					issues.push({
-						path: 'embedderJinaApiKey',
-						code: 'required',
-						message: 'Jina API key is required for Jina embedder'
-					})
-				}
-				break
+					if (!config.embedderJinaApiKey) {
+						issues.push({
+							path: 'embedderJinaApiKey',
+							code: 'required',
+							message: 'Jina API key is required for Jina embedder'
+						})
+					}
+					break
 
 			case 'gemini':
 				if (!config.embedderGeminiApiKey) {
@@ -427,6 +427,14 @@ export class ConfigValidator {
 				path: 'embedderOpenRouterBatchSize',
 				code: 'invalid_range',
 				message: 'Embedder OpenRouter batch size must be positive'
+			})
+		}
+
+		if (config.embedderJinaBatchSize !== undefined && config.embedderJinaBatchSize <= 0) {
+			issues.push({
+				path: 'embedderJinaBatchSize',
+				code: 'invalid_range',
+				message: 'Embedder Jina batch size must be positive'
 			})
 		}
 	}

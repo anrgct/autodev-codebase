@@ -47,6 +47,11 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	embedderModelId: { type: 'string', description: 'Model identifier for embeddings' },
 	embedderModelDimension: { type: 'integer', minValue: 1, description: 'Dimension of embedding vectors' },
 
+	// Embedder - Jina
+	embedderJinaApiKey: { type: 'string', description: 'Jina API key' },
+	embedderJinaBaseUrl: { type: 'string', description: 'Jina API base URL (defaults to https://api.jina.ai/v1)' },
+	embedderJinaBatchSize: { type: 'integer', minValue: 1, description: 'Batch size for Jina embeddings' },
+
 	// Embedder - Ollama
 	embedderOllamaBaseUrl: { type: 'string', description: 'Ollama server base URL' },
 	embedderOllamaBatchSize: { type: 'integer', minValue: 1, description: 'Batch size for Ollama embeddings' },

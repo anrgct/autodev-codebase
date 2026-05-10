@@ -167,6 +167,9 @@ export class CodeIndexConfigManager {
 		} else if (embedderProvider === "openrouter") {
 			const apiKey = this.config.embedderOpenRouterApiKey
 			return !!(apiKey && qdrantUrl)
+		} else if (embedderProvider === "jina") {
+			const apiKey = this.config.embedderJinaApiKey
+			return !!(apiKey && qdrantUrl)
 		}
 		return false
 	}
@@ -188,6 +191,9 @@ export class CodeIndexConfigManager {
 			embedderProvider: config.embedderProvider,
 			embedderModelId: config.embedderModelId,
 			embedderModelDimension: config.embedderModelDimension,
+			embedderJinaApiKey: config.embedderJinaApiKey,
+			embedderJinaBaseUrl: config.embedderJinaBaseUrl,
+			embedderJinaBatchSize: config.embedderJinaBatchSize,
 			embedderOllamaBaseUrl: config.embedderOllamaBaseUrl,
 			embedderOllamaBatchSize: config.embedderOllamaBatchSize,
 			embedderOpenAiApiKey: config.embedderOpenAiApiKey,
@@ -276,6 +282,8 @@ export class CodeIndexConfigManager {
 		const currentMistralApiKey = this.config.embedderMistralApiKey ?? ""
 		const currentVercelAiGatewayApiKey = this.config.embedderVercelAiGatewayApiKey ?? ""
 		const currentOpenRouterApiKey = this.config.embedderOpenRouterApiKey ?? ""
+		const currentJinaApiKey = this.config.embedderJinaApiKey ?? ""
+		const currentJinaBaseUrl = this.config.embedderJinaBaseUrl ?? ""
 		const currentQdrantUrl = this.config.qdrantUrl ?? ""
 		const currentQdrantApiKey = this.config.qdrantApiKey ?? ""
 
@@ -303,6 +311,14 @@ export class CodeIndexConfigManager {
 		}
 
 		if ((prev?.embedderVercelAiGatewayApiKey ?? "") !== currentVercelAiGatewayApiKey) {
+			return true
+		}
+
+		if ((prev?.embedderJinaApiKey ?? "") !== currentJinaApiKey) {
+			return true
+		}
+
+		if ((prev?.embedderJinaBaseUrl ?? "") !== currentJinaBaseUrl) {
 			return true
 		}
 
