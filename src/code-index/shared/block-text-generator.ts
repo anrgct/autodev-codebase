@@ -8,10 +8,16 @@ import { generateRelativeFilePath } from "./get-relative-path"
  *
  * @param block 代码块对象
  * @param workspaceRootPath 工作区根路径（用于转换为相对路径）
+ * @param prefix 可选的文本前缀（如 "Document: "），用于 jina retrieval 等模型
  * @returns 增强后的文本（包含上下文和代码内容）
  */
-export function generateBlockEmbeddingText(block: CodeBlock, workspaceRootPath: string): string {
+export function generateBlockEmbeddingText(block: CodeBlock, workspaceRootPath: string, prefix?: string): string {
   const parts: string[] = []
+
+  // 0. 可选的文档前缀（如 "Document: " for jina retrieval models）
+  if (prefix) {
+    parts.push(prefix)
+  }
 
   // 1. 文件路径（转换为相对路径）
   const relativePath = generateRelativeFilePath(block.file_path, workspaceRootPath)

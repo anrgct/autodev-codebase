@@ -427,7 +427,7 @@ export class CodeIndexManager implements ICodeIndexManager {
 		// Create reranker (optional)
 		let reranker: IReranker | undefined
 		if (this._configManager!.isRerankerEnabled) {
-			reranker = this._serviceFactory.createReranker()
+			reranker = await this._serviceFactory.createReranker()
 			if (reranker) {
 				const rerankerValidation = await this._serviceFactory.validateReranker(reranker)
 				if (!rerankerValidation.valid) {

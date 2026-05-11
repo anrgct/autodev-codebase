@@ -10,6 +10,7 @@ const translations: Record<string, string> = {
 	"embeddings:serviceFactory.invalidEmbedderType": "Invalid embedder type configured: {embedderProvider}",
 	"embeddings:serviceFactory.vectorDimensionNotDetermined": "Could not determine vector dimension for model '{modelId}' with provider '{provider}'. Check model profiles or configuration.",
 	"embeddings:serviceFactory.vectorDimensionNotDeterminedOpenAiCompatible": "Could not determine vector dimension for model '{modelId}' with provider '{provider}'. Please ensure the 'Embedding Dimension' is correctly set in the OpenAI-Compatible provider settings.",
+	"embeddings:serviceFactory.vectorDimensionConflict": "Vector dimension mismatch: existing collection has dimension {existingSize}, but the current model produces dimension {newSize}. Please use --force to rebuild the index.",
 	"embeddings:serviceFactory.qdrantUrlMissing": "Qdrant URL missing for vector store creation",
 	"embeddings:serviceFactory.codeIndexingNotConfigured": "Cannot create services: Code indexing is not properly configured",
 	"embeddings:validation.configurationError": "Embedder configuration validation failed",

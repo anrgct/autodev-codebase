@@ -6,14 +6,22 @@ import { MistralEmbedder } from "./embedders/mistral"
 import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
 import { JinaEmbedder } from "./embedders/jina-embedder"
+import { LlamaCppEmbedder } from "./embedders/llamacpp"
 import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
+import { LlamaCppReranker } from "./rerankers/llamacpp-rerank"
+import { LlamaCppLLMReranker } from "./rerankers/llamacpp-llm-rerank"
 import { OllamaSummarizer } from "./summarizers/ollama"
 import { OpenAICompatibleSummarizer } from "./summarizers/openai-compatible"
+import { LlamaCppSummarizer } from "./summarizers/llamacpp"
+import { createHash } from "crypto"
+import { QdrantClient } from "@qdrant/js-client-rest"
+import { getLlama, LlamaModel, LlamaLogLevel } from "node-llama-cpp"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
 import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
 import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker, ISummarizer } from "./interfaces"
+import { CodeIndexConfig } from "./interfaces/config"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CacheManager } from "./cache-manager"
 import { IEventBus, IFileSystem } from "../abstractions/core"
@@ -34,6 +42,19 @@ export class CodeIndexServiceFactory {
 		private readonly cacheManager: CacheManager,
 		private readonly logger?: LoggerLike,
 	) {}
+
+	/**
+	 * Shared LlamaCPP LLM model instance for reranker and summarizer.
+	 * Lazily loaded on first access, reused across the factory lifetime.
+	 */
+	private _llamaCppLlmModel: LlamaModel | null = null
+
+	private async _getOrCreateLlamaCppLlmModel(modelPath: string): Promise<LlamaModel> {
+		if (this._llamaCppLlmModel) return this._llamaCppLlmModel
+		const llama = await getLlama({ logLevel: LlamaLogLevel.error })
+		this._llamaCppLlmModel = await llama.loadModel({ modelPath })
+		return this._llamaCppLlmModel
+	}
 
 	/**
 	 * Logging helper methods - only log if logger is available
@@ -120,6 +141,15 @@ export class CodeIndexServiceFactory {
 				throw new Error(t("embeddings:serviceFactory.openRouterConfigMissing"))
 			}
 			return new OpenRouterEmbedder(config.embedderOpenRouterApiKey, config.embedderModelId)
+		} else if (provider === "llamacpp") {
+			if (!config.embedderLlamaCppModelPath) {
+				throw new Error("LlamaCPP model path missing for embedder creation")
+			}
+			return new LlamaCppEmbedder(
+				config.embedderLlamaCppModelPath,
+				config.embedderLlamaCppGpuLayers,
+				this.logger,
+			)
 		}
 
 		throw new Error(
@@ -146,20 +176,48 @@ export class CodeIndexServiceFactory {
 
 	/**
 	 * Creates a vector store instance using the current configuration.
+	 * Vector dimension is determined via 3-layer fallback:
+	 * 1. Profile: EMBEDDING_MODEL_PROFILES
+	 * 2. Historical: existing Qdrant collection vector_size
+	 * 3. Auto-detect: embedder.createEmbeddings(["test"]) → length
 	 */
-	public createVectorStore(): IVectorStore {
+	public async createVectorStore(): Promise<IVectorStore> {
 		const config = this.configManager.getConfig()
 		this.debug(`Debug createVectorStore config:`, JSON.stringify(config, null, 2))
 
 		const provider = config.embedderProvider as EmbedderProvider
 		const modelId = config.embedderModelId ?? getDefaultModelId(provider)
 
-		let vectorSize: number | undefined
+		// Layer 1: Profile (zero overhead, from EMBEDDING_MODEL_PROFILES)
+		let vectorSize = getModelDimension(provider, modelId)
 
-		// First try to get the model-specific dimension from profiles
-		vectorSize = getModelDimension(provider, modelId)
+		if (vectorSize === undefined || vectorSize <= 0) {
+			// Get existing collection info once (used for Layer 2 and conflict check)
+			const existingVectorSize = await this._getExistingVectorSize(config)
 
-		// Only use manual dimension if model doesn't have a built-in dimension
+			// Layer 2: Historical from existing Qdrant collection
+			if (existingVectorSize && existingVectorSize > 0) {
+				vectorSize = existingVectorSize
+				this.info(`[VectorStore] Using existing collection vector size: ${vectorSize}`)
+			} else {
+				// Layer 3: Auto-detect via embedder
+				const embedder = this.createEmbedder()
+				vectorSize = await this._detectVectorDimension(embedder)
+
+				// Check for dimension conflict if collection exists with different size
+				if (vectorSize && vectorSize > 0 && existingVectorSize && existingVectorSize > 0
+					&& existingVectorSize !== vectorSize) {
+					throw new Error(
+						t("embeddings:serviceFactory.vectorDimensionConflict", {
+							existingSize: String(existingVectorSize),
+							newSize: String(vectorSize),
+						}),
+					)
+				}
+			}
+		}
+
+		// Manual override (kept for backward compatibility)
 		if (!vectorSize && config.embedderModelDimension && config.embedderModelDimension > 0) {
 			vectorSize = config.embedderModelDimension
 		}
@@ -175,12 +233,62 @@ export class CodeIndexServiceFactory {
 		}
 
 		if (!config.qdrantUrl) {
-			// This check remains important
 			throw new Error(t("embeddings:serviceFactory.qdrantUrlMissing"))
 		}
 
-		// Assuming constructor is updated: new QdrantVectorStore(workspacePath, url, vectorSize, apiKey?)
 		return new QdrantVectorStore(this.workspacePath, config.qdrantUrl, vectorSize, config.qdrantApiKey)
+	}
+
+	/**
+	 * Layer 2: Check existing Qdrant collection for vector dimension.
+	 */
+	private async _getExistingVectorSize(config: CodeIndexConfig): Promise<number | undefined> {
+		if (!config.qdrantUrl) return undefined
+
+		try {
+			const client = new QdrantClient({ url: config.qdrantUrl, apiKey: config.qdrantApiKey })
+			const hash = createHash("sha256").update(this.workspacePath).digest("hex")
+			const collectionName = `ws-${hash.substring(0, 16)}`
+
+			const collectionInfo = await client.getCollection(collectionName)
+			if (!collectionInfo) return undefined
+
+			const vectorsConfig = collectionInfo.config?.params?.vectors
+			let existingSize: number | undefined
+
+			if (typeof vectorsConfig === "number") {
+				existingSize = vectorsConfig
+			} else if (vectorsConfig && typeof vectorsConfig === "object" && "size" in vectorsConfig) {
+				existingSize = (vectorsConfig as any).size as number
+			}
+
+			return existingSize && existingSize > 0 ? existingSize : undefined
+		} catch (error) {
+			this.debug(`[VectorStore] Could not get existing collection info:`, error)
+			return undefined
+		}
+	}
+
+	/**
+	 * Layer 3: Auto-detect vector dimension by embedding a test text.
+	 */
+	private async _detectVectorDimension(embedder: IEmbedder): Promise<number | undefined> {
+		try {
+			this.info(`[VectorStore] Auto-detecting vector dimension...`)
+			const response = await embedder.createEmbeddings(["test dimension detection"])
+			if (!response) return undefined
+			const embeddings = response.embeddings
+
+			if (embeddings && embeddings.length > 0 && embeddings[0].length > 0) {
+				const dimension = embeddings[0].length
+				this.info(`[VectorStore] Auto-detected vector dimension: ${dimension}`)
+				return dimension
+			}
+		} catch (error) {
+			this.warn(`[VectorStore] Could not auto-detect vector dimension:`, error)
+		}
+
+		return undefined
 	}
 
 	/**
@@ -242,8 +350,8 @@ export class CodeIndexServiceFactory {
 			throw new Error(t("embeddings:serviceFactory.codeIndexingNotConfigured"))
 		}
 
+		const vectorStore = await this.createVectorStore()
 		const embedder = this.createEmbedder()
-		const vectorStore = this.createVectorStore()
 		const parser = codeParser
 		const scanner = this.createDirectoryScanner(embedder, vectorStore, parser, fileSystem, workspace, pathUtils)
 		const fileWatcher = this.createFileWatcher(fileSystem, eventBus, workspace, pathUtils, embedder, vectorStore, cacheManager)
@@ -261,7 +369,7 @@ export class CodeIndexServiceFactory {
 	 * Creates a reranker instance based on the current configuration.
 	 * @returns IReranker instance or undefined if reranker is disabled
 	 */
-	public createReranker(): IReranker | undefined {
+	public async createReranker(): Promise<IReranker | undefined> {
 		const config = this.configManager.rerankerConfig
 		if (!config || !config.enabled) {
 			return undefined
@@ -290,6 +398,26 @@ export class CodeIndexServiceFactory {
 			)
 		}
 
+		if (config.provider === 'llamacpp') {
+			// Dedicated reranker model path → cross-encoder rerank mode
+			if (config.llamaCppRerankerModelPath) {
+				return new LlamaCppReranker(config.llamaCppRerankerModelPath, this.logger)
+			}
+
+			// LLM model path → chat-based rerank mode (shares the lazy-loaded model)
+			if (config.llamaCppModelPath) {
+				const model = await this._getOrCreateLlamaCppLlmModel(config.llamaCppModelPath)
+				return new LlamaCppLLMReranker(
+					model,
+					this.logger,
+					config.batchSize || 10,
+					config.concurrency || 3,
+					config.maxRetries || 3,
+					config.retryDelayMs || 1000
+				)
+			}
+		}
+
 		// If provider is undefined or unknown, return undefined
 		return undefined
 	}
@@ -315,7 +443,7 @@ export class CodeIndexServiceFactory {
 	 * Creates a summarizer instance based on the current configuration.
 	 * @returns ISummarizer instance (always returns an instance, configuration is validated when used)
 	 */
-	public createSummarizer(): ISummarizer {
+	public async createSummarizer(): Promise<ISummarizer> {
 		const config = this.configManager.summarizerConfig;
 
 		if (config.provider === 'ollama') {
@@ -334,6 +462,19 @@ export class CodeIndexServiceFactory {
 				config.openAiCompatibleApiKey || '',
 				config.language || 'English',
 				config.temperature ?? 0
+			)
+		}
+
+		if (config.provider === 'llamacpp') {
+			if (!config.llamaCppModelPath) {
+				throw new Error("LlamaCPP model path missing for summarizer creation")
+			}
+			const model = await this._getOrCreateLlamaCppLlmModel(config.llamaCppModelPath)
+			return new LlamaCppSummarizer(
+				model,
+				config.language || 'English',
+				config.temperature ?? 0,
+				this.logger,
 			)
 		}
 

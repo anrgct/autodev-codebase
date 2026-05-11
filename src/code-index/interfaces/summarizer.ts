@@ -71,7 +71,7 @@ export interface SummarizerConfig {
 	/**
 	 * Provider type ('ollama' or 'openai-compatible')
 	 */
-	provider: 'ollama' | 'openai-compatible'
+	provider: 'ollama' | 'openai-compatible' | 'llamacpp'
 
 	/**
 	 * Ollama base URL (for ollama provider)
@@ -97,6 +97,11 @@ export interface SummarizerConfig {
 	 * OpenAI-compatible API key (for openai-compatible provider)
 	 */
 	openAiCompatibleApiKey?: string
+
+	/**
+	 * LlamaCPP model path (for llamacpp provider)
+	 */
+	llamaCppModelPath?: string
 
 	/**
 	 * Language for summaries

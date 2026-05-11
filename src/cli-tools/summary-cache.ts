@@ -23,7 +23,7 @@ import type { SummarizerConfig } from '../code-index/interfaces';
  * Configuration fingerprint - used to detect configuration changes
  */
 export interface CacheFingerprint {
-	provider: 'ollama' | 'openai-compatible';
+	provider: 'ollama' | 'openai-compatible' | 'llamacpp';
 	modelId: string;
 	language: 'English' | 'Chinese';
 	promptVersion: string;
@@ -171,7 +171,9 @@ export class SummaryCacheManager {
 			provider: config.provider,
 			modelId: config.provider === 'ollama'
 				? (config.ollamaModelId || '')
-				: (config.openAiCompatibleModelId || ''),
+				: config.provider === 'llamacpp'
+					? (config.llamaCppModelPath || '')
+					: (config.openAiCompatibleModelId || ''),
 			language: config.language || 'English',
 			promptVersion: '1.0',
 			temperature: config.temperature

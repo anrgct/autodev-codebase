@@ -162,4 +162,48 @@ describe('generateBlockEmbeddingText', () => {
     // Check format (should have double newline between context and code)
     expect(result).toMatch(/Parent: \[class_declaration\]AuthService\n\nfunction login/)
   })
+
+  describe('prefix parameter', () => {
+    const baseBlock: CodeBlock = {
+      file_path: '/Users/test/project/src/index.ts',
+      identifier: 'main',
+      type: 'function_definition',
+      parentChain: [],
+      content: 'function main() {}',
+      start_line: 1,
+      end_line: 1,
+      fileHash: 'abc123',
+      segmentHash: 'def456',
+      chunkSource: 'tree-sitter',
+      hierarchyDisplay: null
+    }
+
+    it('should prepend prefix when provided', () => {
+      const result = generateBlockEmbeddingText(baseBlock, '/Users/test/project', 'Document: ')
+      expect(result.startsWith('Document: ')).toBe(true)
+    })
+
+    it('should still include file path and code after prefix', () => {
+      const result = generateBlockEmbeddingText(baseBlock, '/Users/test/project', 'Document: ')
+      expect(result).toContain('File: src/index.ts')
+      expect(result).toContain('function main() {}')
+    })
+
+    it('should not add prefix when not provided', () => {
+      const result = generateBlockEmbeddingText(baseBlock, '/Users/test/project')
+      expect(result.startsWith('Document: ')).toBe(false)
+      expect(result.startsWith('File:')).toBe(true)
+    })
+
+    it('should work with "Query: " prefix as well', () => {
+      const result = generateBlockEmbeddingText(baseBlock, '/Users/test/project', 'Query: ')
+      expect(result.startsWith('Query: ')).toBe(true)
+      expect(result).toContain('File: src/index.ts')
+    })
+
+    it('should work with custom arbitrary prefix', () => {
+      const result = generateBlockEmbeddingText(baseBlock, '/Users/test/project', 'search_document: ')
+      expect(result.startsWith('search_document: ')).toBe(true)
+    })
+  })
 })

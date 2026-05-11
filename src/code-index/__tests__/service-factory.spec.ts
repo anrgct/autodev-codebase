@@ -206,11 +206,27 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 	})
 
 	describe("createVectorStore", () => {
+		// Helper to set up embedder mock for auto-detect fallback
+		function setupEmbedderMockForAutoDetect(): void {
+			const mockEmbedder = {
+				createEmbeddings: vi.fn().mockResolvedValue({ embeddings: [[0.1]] }),
+				validateConfiguration: vi.fn().mockResolvedValue({ valid: true }),
+				embedderInfo: { name: "test" },
+				optimalBatchSize: 10,
+			}
+			// Make embedder constructors return our mock
+			const { OpenAiEmbedder } = require("../embedders/openai")
+			OpenAiEmbedder.mockImplementation(() => mockEmbedder)
+			const { CodeIndexOllamaEmbedder } = require("../embedders/ollama")
+			CodeIndexOllamaEmbedder.mockImplementation(() => mockEmbedder)
+			const { OpenAICompatibleEmbedder } = require("../embedders/openai-compatible")
+			OpenAICompatibleEmbedder.mockImplementation(() => mockEmbedder)
+		}
 		beforeEach(() => {
 			vi.clearAllMocks()
 		})
 
-		it("should use model profile dimension when available", () => {
+		it("should use model profile dimension when available", async () => {
 			const config = {
 				embedderProvider: "openai",
 				embedderModelId: "text-embedding-3-small",
@@ -222,7 +238,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 
 			const expectedDimension = getModelDimension("openai", "text-embedding-3-small")!
 
-			factory.createVectorStore()
+			await factory.createVectorStore()
 
 			expect(MockedQdrantVectorStore).toHaveBeenCalledWith(
 				"/test/workspace",
@@ -232,7 +248,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 			)
 		})
 
-		it("should fall back to manual modelDimension when model has no profile", () => {
+		it("should fall back to manual modelDimension when model has no profile", async () => {
 			const config = {
 				embedderProvider: "openai-compatible",
 				embedderModelId: "custom-model",
@@ -244,7 +260,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
 
-			factory.createVectorStore()
+			await factory.createVectorStore()
 
 			expect(MockedQdrantVectorStore).toHaveBeenCalledWith(
 				"/test/workspace",
@@ -254,7 +270,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 			)
 		})
 
-		it("should throw specialized error when OpenAI Compatible dimension cannot be determined", () => {
+		it("should throw specialized error when OpenAI Compatible dimension cannot be determined", async () => {
 			const config = {
 				embedderProvider: "openai-compatible",
 				embedderModelId: "custom-model",
@@ -266,12 +282,12 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
 
-			expect(() => factory.createVectorStore()).toThrow(
+			await expect(factory.createVectorStore()).rejects.toThrow(
 				"Could not determine vector dimension for model 'custom-model' with provider 'openai-compatible'. Please ensure the 'Embedding Dimension' is correctly set in the OpenAI-Compatible provider settings.",
 			)
 		})
 
-		it("should throw generic error when dimension cannot be determined for OpenAI", () => {
+		it("should throw generic error when dimension cannot be determined for OpenAI", async () => {
 			const config = {
 				embedderProvider: "openai",
 				embedderModelId: "unknown-model",
@@ -282,12 +298,12 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
 
-			expect(() => factory.createVectorStore()).toThrow(
+			await expect(factory.createVectorStore()).rejects.toThrow(
 				"Could not determine vector dimension for model 'unknown-model' with provider 'openai'. Check model profiles or configuration.",
 			)
 		})
 
-		it("should throw when Qdrant URL is missing", () => {
+		it("should throw when Qdrant URL is missing", async () => {
 			const config = {
 				embedderProvider: "openai",
 				embedderModelId: "text-embedding-3-small",
@@ -298,7 +314,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
 			}
 			mockConfigManager.getConfig.mockReturnValue(config)
 
-			expect(() => factory.createVectorStore()).toThrow("Qdrant URL missing for vector store creation")
+			await expect(factory.createVectorStore()).rejects.toThrow("Qdrant URL missing for vector store creation")
 		})
 	})
 

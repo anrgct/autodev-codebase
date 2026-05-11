@@ -163,6 +163,16 @@ export class ConfigValidator {
 				}
 				break
 
+			case 'llamacpp':
+				if (!config.embedderLlamaCppModelPath) {
+					issues.push({
+						path: 'embedderLlamaCppModelPath',
+						code: 'required',
+						message: 'LlamaCPP model path is required for LlamaCPP embedder'
+					})
+				}
+				break
+
 			default:
 				// Type safety: should never happen with TypeScript
 				issues.push({
@@ -237,6 +247,13 @@ export class ConfigValidator {
 				return
 			}
 
+			if (config.rerankerProvider === 'llamacpp') {
+				// ConfigValidator only checks provider validity for llamacpp reranker.
+				// Model path validation (at least one of llamaCppModelPath or llamaCppRerankerModelPath)
+				// is handled at creation time in service-factory.
+				return
+			}
+
 			// Unknown provider
 			issues.push({
 				path: 'rerankerProvider',
@@ -258,11 +275,11 @@ export class ConfigValidator {
 		}
 
 		// Validate provider is supported
-		if (config.summarizerProvider !== 'ollama' && config.summarizerProvider !== 'openai-compatible') {
+		if (config.summarizerProvider !== 'ollama' && config.summarizerProvider !== 'openai-compatible' && config.summarizerProvider !== 'llamacpp') {
 			issues.push({
 				path: 'summarizerProvider',
 				code: 'invalid_value',
-				message: `Unsupported summarizer provider: ${config.summarizerProvider}. Supported: 'ollama', 'openai-compatible'.`
+				message: `Unsupported summarizer provider: ${config.summarizerProvider}. Supported: 'ollama', 'openai-compatible', 'llamacpp'.`
 			})
 			return
 		}

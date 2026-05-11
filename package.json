@@ -53,5 +53,8 @@
     "uuid": "^10.0.0",
     "vitest": "^3.2.4",
     "web-tree-sitter": "^0.23.0"
+  },
+  "dependencies": {
+    "node-llama-cpp": "^3.18.1"
   }
 }

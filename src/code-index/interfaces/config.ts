@@ -9,6 +9,7 @@ export type EmbedderProvider =
 	| "mistral"
 	| "vercel-ai-gateway"
 	| "openrouter"
+	| "llamacpp"
 
 /**
  * Ollama embedder configuration
@@ -148,6 +149,10 @@ export interface CodeIndexConfig {
 	embedderOpenRouterApiKey?: string
 	embedderOpenRouterBatchSize?: number
 
+	// Embedder - LlamaCPP 特定参数
+	embedderLlamaCppModelPath?: string
+	embedderLlamaCppGpuLayers?: number
+
 	// Vector Store
 	qdrantUrl?: string
 	qdrantApiKey?: string
@@ -158,12 +163,14 @@ export interface CodeIndexConfig {
 
 	// Reranker configuration
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama' | 'openai-compatible'
+	rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerOpenAiCompatibleBaseUrl?: string
 	rerankerOpenAiCompatibleModelId?: string
 	rerankerOpenAiCompatibleApiKey?: string
+	rerankerLlamaCppModelPath?: string
+	rerankerLlamaCppRerankerModelPath?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 	rerankerConcurrency?: number
@@ -171,12 +178,13 @@ export interface CodeIndexConfig {
 	rerankerRetryDelayMs?: number
 
 	// Summarizer configuration
-	summarizerProvider?: 'ollama' | 'openai-compatible'
+	summarizerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	summarizerOllamaBaseUrl?: string
 	summarizerOllamaModelId?: string
 	summarizerOpenAiCompatibleBaseUrl?: string
 	summarizerOpenAiCompatibleModelId?: string
 	summarizerOpenAiCompatibleApiKey?: string
+	summarizerLlamaCppModelPath?: string
 	summarizerLanguage?: 'English' | 'Chinese'
 	summarizerTemperature?: number
 	summarizerBatchSize?: number
@@ -210,28 +218,33 @@ export type PreviousConfigSnapshot = {
 	embedderVercelAiGatewayApiKey?: string
 	embedderOpenRouterApiKey?: string
 	embedderOpenRouterBatchSize?: number
+	embedderLlamaCppModelPath?: string
+	embedderLlamaCppGpuLayers?: number
 	qdrantUrl?: string
 	qdrantApiKey?: string
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama' | 'openai-compatible'
+	rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerOpenAiCompatibleBaseUrl?: string
 	rerankerOpenAiCompatibleModelId?: string
 	rerankerOpenAiCompatibleApiKey?: string
+	rerankerLlamaCppModelPath?: string
+	rerankerLlamaCppRerankerModelPath?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 	rerankerConcurrency?: number
 	rerankerMaxRetries?: number
 	rerankerRetryDelayMs?: number
-	summarizerProvider?: 'ollama' | 'openai-compatible'
+	summarizerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	summarizerOllamaBaseUrl?: string
 	summarizerOllamaModelId?: string
 	summarizerOpenAiCompatibleBaseUrl?: string
 	summarizerOpenAiCompatibleModelId?: string
 	summarizerOpenAiCompatibleApiKey?: string
+	summarizerLlamaCppModelPath?: string
 	summarizerLanguage?: 'English' | 'Chinese'
 	summarizerTemperature?: number
 	summarizerBatchSize?: number
@@ -282,28 +295,33 @@ export interface ConfigSnapshot {
 	embedderVercelAiGatewayApiKey?: string
 	embedderOpenRouterApiKey?: string
 	embedderOpenRouterBatchSize?: number
+	embedderLlamaCppModelPath?: string
+	embedderLlamaCppGpuLayers?: number
 	qdrantUrl?: string
 	qdrantApiKey?: string
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 	rerankerEnabled?: boolean
-	rerankerProvider?: 'ollama' | 'openai-compatible'
+	rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	rerankerOllamaBaseUrl?: string
 	rerankerOllamaModelId?: string
 	rerankerOpenAiCompatibleBaseUrl?: string
 	rerankerOpenAiCompatibleModelId?: string
 	rerankerOpenAiCompatibleApiKey?: string
+	rerankerLlamaCppModelPath?: string
+	rerankerLlamaCppRerankerModelPath?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 	rerankerConcurrency?: number
 	rerankerMaxRetries?: number
 	rerankerRetryDelayMs?: number
-	summarizerProvider?: 'ollama' | 'openai-compatible'
+	summarizerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	summarizerOllamaBaseUrl?: string
 	summarizerOllamaModelId?: string
 	summarizerOpenAiCompatibleBaseUrl?: string
 	summarizerOpenAiCompatibleModelId?: string
 	summarizerOpenAiCompatibleApiKey?: string
+	summarizerLlamaCppModelPath?: string
 	summarizerLanguage?: 'English' | 'Chinese'
 	summarizerTemperature?: number
 	summarizerBatchSize?: number

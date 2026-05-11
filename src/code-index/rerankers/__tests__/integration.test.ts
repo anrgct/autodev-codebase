@@ -82,8 +82,8 @@ describe('LLM Reranker Integration Tests', () => {
   })
 
   describe('Reranker Configuration', () => {
-    it('should return undefined reranker when disabled in config', () => {
-      const reranker = serviceFactory.createReranker()
+    it('should return undefined reranker when disabled in config', async () => {
+      const reranker = await serviceFactory.createReranker()
       expect(reranker).toBeUndefined()
     })
 
@@ -114,7 +114,7 @@ describe('LLM Reranker Integration Tests', () => {
   })
 
   describe('Service Factory createReranker', () => {
-    it('should create OllamaLLMReranker with default config', () => {
+    it('should create OllamaLLMReranker with default config', async () => {
       // Create a config manager with mocked reranker config
       const mockConfigManager = {
         rerankerConfig: {
@@ -131,11 +131,11 @@ describe('LLM Reranker Integration Tests', () => {
         cacheManager
       )
 
-      const reranker = factory.createReranker()
+      const reranker = await factory.createReranker()
       expect(reranker).toBeInstanceOf(OllamaLLMReranker)
     })
 
-    it('should create OllamaLLMReranker with concurrency parameters', () => {
+    it('should create OllamaLLMReranker with concurrency parameters', async () => {
       const mockConfigManager = {
         rerankerConfig: {
           enabled: true,
@@ -155,12 +155,12 @@ describe('LLM Reranker Integration Tests', () => {
         cacheManager
       )
 
-      const reranker = factory.createReranker()
+      const reranker = await factory.createReranker()
       expect(reranker).toBeInstanceOf(OllamaLLMReranker)
     })
 
     describe('createReranker', () => {
-      it('should return undefined when reranker config is undefined', () => {
+      it('should return undefined when reranker config is undefined', async () => {
         const mockConfigManager = {
           rerankerConfig: undefined
         }
@@ -171,11 +171,11 @@ describe('LLM Reranker Integration Tests', () => {
           cacheManager
         )
 
-        const reranker = factory.createReranker()
+        const reranker = await factory.createReranker()
         expect(reranker).toBeUndefined()
       })
 
-      it('should return undefined when reranker enabled but no provider specified', () => {
+      it('should return undefined when reranker enabled but no provider specified', async () => {
         const mockConfigManager = {
           rerankerConfig: {
             enabled: true,
@@ -189,7 +189,7 @@ describe('LLM Reranker Integration Tests', () => {
           cacheManager
         )
 
-        const reranker = factory.createReranker()
+        const reranker = await factory.createReranker()
         expect(reranker).toBeUndefined()
       })
     })

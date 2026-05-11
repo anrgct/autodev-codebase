@@ -82,6 +82,7 @@ export type EmbedderProvider =
 	| "mistral"
 	| "vercel-ai-gateway"
 	| "openrouter"
+	| "llamacpp"
 
 export interface IndexProgressUpdate {
 	systemStatus: IndexingState

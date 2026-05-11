@@ -23,12 +23,14 @@ export interface RerankerInfo {
 
 export interface RerankerConfig {
 	enabled: boolean
-	provider: 'ollama' | 'openai-compatible'
+	provider: 'ollama' | 'openai-compatible' | 'llamacpp'
 	ollamaBaseUrl?: string
 	ollamaModelId?: string
 	openAiCompatibleBaseUrl?: string
 	openAiCompatibleModelId?: string
 	openAiCompatibleApiKey?: string
+	llamaCppModelPath?: string
+	llamaCppRerankerModelPath?: string
 	minScore?: number
 	batchSize?: number  // 批次大小，默认10
 	concurrency?: number  // 最大并发批次数，默认3

@@ -2,7 +2,7 @@
  * Defines profiles for different embedding models, including their dimensions.
  */
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway"
+export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway" | "llamacpp"
 
 export interface EmbeddingModelProfile {
 	dimension: number
@@ -61,6 +61,12 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
 		"text-embedding-3-small": { dimension: 1536 },
 		"text-embedding-3-large": { dimension: 3072 },
 		"text-embedding-ada-002": { dimension: 1536 },
+	},
+	llamacpp: {
+		"jina-embeddings-v5-nano-retrieval": { dimension: 1024 },
+		"mxbai-embed-large-v1-f16": { dimension: 1024 },
+		"all-MiniLM-L6-v2-Q4_K_M": { dimension: 384 },
+		"nomic-embed-text-v1.5-Q4_K_M": { dimension: 768 },
 	},
 }
 
@@ -146,8 +152,27 @@ export function getDefaultModelId(provider: EmbedderProvider): string {
  * @returns Query prefix string or null if no prefix is required
  */
 export function getModelQueryPrefix(provider: EmbedderProvider, modelId: string): string | null {
-	// Currently no models require prefixes
-	// This function is kept for future compatibility
+	// Jina retrieval models loaded via LlamaCPP require "Query:" prefix for search queries
+	if (provider === "llamacpp" && modelId.includes("jina-embeddings-v5")) {
+		return "Query: "
+	}
+
+	return null
+}
+
+/**
+ * Gets model-specific document prefix for embedding models that require it
+ * during indexing (e.g., "Document: " for jina retrieval models)
+ * @param provider The embedder provider
+ * @param modelId The model ID
+ * @returns Document prefix string or null if no prefix is required
+ */
+export function getModelDocumentPrefix(provider: EmbedderProvider, modelId: string): string | null {
+	// Jina retrieval models loaded via LlamaCPP require "Document:" prefix for indexed content
+	if (provider === "llamacpp" && modelId.includes("jina-embeddings-v5")) {
+		return "Document: "
+	}
+
 	return null
 }
 

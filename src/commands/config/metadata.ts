@@ -80,6 +80,10 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	embedderOpenRouterApiKey: { type: 'string', description: 'OpenRouter API key' },
 	embedderOpenRouterBatchSize: { type: 'integer', minValue: 1, description: 'Batch size for OpenRouter embeddings' },
 
+	// Embedder - LlamaCPP
+	embedderLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model file for embeddings' },
+	embedderLlamaCppGpuLayers: { type: 'integer', minValue: 0, description: 'Number of GPU layers for LlamaCPP (0 for CPU only)' },
+
 	// Vector Store
 	qdrantUrl: { type: 'string', description: 'Qdrant server URL' },
 	qdrantApiKey: { type: 'string', description: 'Qdrant API key' },
@@ -92,7 +96,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	rerankerEnabled: { type: 'boolean', description: 'Enable LLM reranking for search results' },
 	rerankerProvider: {
 		type: 'enum',
-		enumValues: ['ollama', 'openai-compatible'] as const,
+		enumValues: ['ollama', 'openai-compatible', 'llamacpp'] as const,
 		description: 'Reranker provider to use'
 	},
 	rerankerOllamaBaseUrl: { type: 'string', description: 'Ollama server base URL for reranking' },
@@ -100,6 +104,8 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	rerankerOpenAiCompatibleBaseUrl: { type: 'string', description: 'OpenAI-compatible server base URL for reranking' },
 	rerankerOpenAiCompatibleModelId: { type: 'string', description: 'OpenAI-compatible model ID for reranking' },
 	rerankerOpenAiCompatibleApiKey: { type: 'string', description: 'OpenAI-compatible API key for reranking' },
+	rerankerLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for LLM reranking' },
+	rerankerLlamaCppRerankerModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for dedicated reranking (optional)' },
 	rerankerMinScore: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum score for reranked results' },
 	rerankerBatchSize: { type: 'integer', minValue: 1, description: 'Batch size for reranking' },
 	rerankerConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent reranking requests' },
@@ -109,7 +115,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	// Summarizer
 	summarizerProvider: {
 		type: 'enum',
-		enumValues: ['ollama', 'openai-compatible'] as const,
+		enumValues: ['ollama', 'openai-compatible', 'llamacpp'] as const,
 		description: 'Summarizer provider to use'
 	},
 	summarizerOllamaBaseUrl: { type: 'string', description: 'Ollama server base URL for summarization' },
@@ -117,6 +123,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	summarizerOpenAiCompatibleBaseUrl: { type: 'string', description: 'OpenAI-compatible server base URL for summarization' },
 	summarizerOpenAiCompatibleModelId: { type: 'string', description: 'OpenAI-compatible model ID for summarization' },
 	summarizerOpenAiCompatibleApiKey: { type: 'string', description: 'OpenAI-compatible API key for summarization' },
+	summarizerLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for summarization' },
 	summarizerLanguage: {
 		type: 'enum',
 		enumValues: ['English', 'Chinese'] as const,

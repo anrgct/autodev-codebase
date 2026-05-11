@@ -605,7 +605,7 @@ async function createSummarizerForOutline(
 		);
 
 		// Create and return summarizer
-		return factory.createSummarizer();
+		return await factory.createSummarizer();
 	} catch (error) {
 		// Silently fail - summarization is optional
 		return undefined;
@@ -798,14 +798,12 @@ async function generateSummariesWithRetry(
 	};
 
 	// Process batches with concurrency control
-	const processBatchesWithConcurrency = async () => {
-		for (let i = 0; i < batches.length; i += validatedConcurrency) {
-			const batchGroup = batches.slice(i, i + validatedConcurrency);
-			await Promise.all(batchGroup.map((batch, idx) => processBatch(batch, i + idx)));
-		}
-	};
-
-	await processBatchesWithConcurrency();
+	// createContext on node-llama-cpp is thread-safe (verified experimentally).
+	// Each batch creates its own context so concurrent execution is safe.
+	for (let i = 0; i < batches.length; i += validatedConcurrency) {
+		const batchGroup = batches.slice(i, i + validatedConcurrency);
+		await Promise.all(batchGroup.map((batch, j) => processBatch(batch, i + j)));
+	}
 }
 
 async function applySummaryCache(

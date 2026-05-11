@@ -42,6 +42,7 @@ export type AvailableEmbedders =
 	| "mistral"
 	| "vercel-ai-gateway"
 	| "openrouter"
+	| "llamacpp"
 
 export interface EmbedderInfo {
 	name: AvailableEmbedders

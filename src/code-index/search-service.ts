@@ -5,7 +5,7 @@ import { IVectorStore } from "./interfaces/vector-store"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CodeIndexStateManager } from "./state-manager"
 import { applyQueryPrefill } from "./search/query-prefill"
-import { getDefaultModelId } from "../shared/embeddingModels"
+import { getDefaultModelId, getModelQueryPrefix } from "../shared/embeddingModels"
 import { validateLimit, validateMinScore } from "./validate-search-params"
 
 /**
@@ -50,7 +50,13 @@ export class CodeIndexSearchService {
 			const embedderProvider = this.configManager.currentEmbedderProvider
 			// Get modelId with fallback to default if not configured
 			const modelId = this.configManager.currentModelId ?? getDefaultModelId(embedderProvider)
-			const prefillQuery = applyQueryPrefill(query, embedderProvider, modelId)
+			let prefillQuery = applyQueryPrefill(query, embedderProvider, modelId)
+
+			// Apply model-specific query prefix (e.g., "Query: " for jina retrieval models)
+			const queryPrefix = getModelQueryPrefix(embedderProvider, modelId)
+			if (queryPrefix && !prefillQuery.startsWith(queryPrefix)) {
+				prefillQuery = `${queryPrefix}${prefillQuery}`
+			}
 
 			// Generate embedding for query (with prefill if applicable)
 			const embeddingResponse = await this.embedder.createEmbeddings([prefillQuery])

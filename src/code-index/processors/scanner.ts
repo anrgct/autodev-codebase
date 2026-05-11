@@ -23,6 +23,7 @@ import {
 	BATCH_PROCESSING_CONCURRENCY,
 	MAX_PENDING_BATCHES,
 } from "../constants"
+import { resolveDocumentPrefix } from "../shared/resolve-document-prefix"
 
 // Type-compatible logger interface using Pick to extract only required methods from Logger
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
@@ -371,13 +372,16 @@ export class DirectoryScanner implements IDirectoryScanner {
 	): Promise<void> {
 		if (batchBlocks.length === 0) return
 
+		// Derive document prefix from embedder for models that need it (e.g., "Document: " for jina retrieval)
+		const documentPrefix: string | undefined = resolveDocumentPrefix(this.deps.embedder)
+
 		// Use BatchProcessor for the actual processing
 		const options: BatchProcessorOptions<CodeBlock> = {
 			embedder: this.deps.embedder,
 			vectorStore: this.deps.qdrantClient,
 			cacheManager: this.deps.cacheManager,
 			
-			itemToText: (block) => generateBlockEmbeddingText(block, scanWorkspace),
+			itemToText: (block) => generateBlockEmbeddingText(block, scanWorkspace, documentPrefix),
 			itemToFilePath: (block) => block.file_path,
 			getFileHash: (block) => {
 				// Find the corresponding file info for this block

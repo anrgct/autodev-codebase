@@ -26,6 +26,7 @@ const REQUIRES_RESTART_KEYS: (keyof CodeIndexConfig)[] = [
 	'embedderMistralApiKey',               // Mistral configuration
 	'embedderVercelAiGatewayApiKey',       // Vercel AI Gateway configuration
 	'embedderOpenRouterApiKey',            // OpenRouter configuration
+	'embedderLlamaCppModelPath',           // LlamaCPP configuration
 	'qdrantUrl',                          // Vector store location
 	'qdrantApiKey',                       // Vector store authentication
 ]
@@ -170,6 +171,9 @@ export class CodeIndexConfigManager {
 		} else if (embedderProvider === "jina") {
 			const apiKey = this.config.embedderJinaApiKey
 			return !!(apiKey && qdrantUrl)
+		} else if (embedderProvider === "llamacpp") {
+			const modelPath = this.config.embedderLlamaCppModelPath
+			return !!(modelPath && qdrantUrl)
 		}
 		return false
 	}
@@ -284,6 +288,7 @@ export class CodeIndexConfigManager {
 		const currentOpenRouterApiKey = this.config.embedderOpenRouterApiKey ?? ""
 		const currentJinaApiKey = this.config.embedderJinaApiKey ?? ""
 		const currentJinaBaseUrl = this.config.embedderJinaBaseUrl ?? ""
+		const currentEmbedderLlamaCppModelPath = this.config.embedderLlamaCppModelPath ?? ""
 		const currentQdrantUrl = this.config.qdrantUrl ?? ""
 		const currentQdrantApiKey = this.config.qdrantApiKey ?? ""
 
@@ -319,6 +324,10 @@ export class CodeIndexConfigManager {
 		}
 
 		if ((prev?.embedderJinaBaseUrl ?? "") !== currentJinaBaseUrl) {
+			return true
+		}
+
+		if ((prev?.embedderLlamaCppModelPath ?? "") !== currentEmbedderLlamaCppModelPath) {
 			return true
 		}
 
@@ -486,6 +495,8 @@ export class CodeIndexConfigManager {
 	      openAiCompatibleBaseUrl: this.config.rerankerOpenAiCompatibleBaseUrl,
 	      openAiCompatibleModelId: this.config.rerankerOpenAiCompatibleModelId,
 	      openAiCompatibleApiKey: this.config.rerankerOpenAiCompatibleApiKey,
+	      llamaCppModelPath: this.config.rerankerLlamaCppModelPath,
+	      llamaCppRerankerModelPath: this.config.rerankerLlamaCppRerankerModelPath,
 	      minScore: this.config.rerankerMinScore,
 	      batchSize: this.config.rerankerBatchSize || 10,
 	      concurrency: this.config.rerankerConcurrency ?? DEFAULT_CONFIG.rerankerConcurrency,
@@ -509,6 +520,7 @@ export class CodeIndexConfigManager {
 			openAiCompatibleBaseUrl: this.config?.summarizerOpenAiCompatibleBaseUrl || 'http://localhost:8080/v1',
 			openAiCompatibleModelId: this.config?.summarizerOpenAiCompatibleModelId || 'gpt-4',
 			openAiCompatibleApiKey: this.config?.summarizerOpenAiCompatibleApiKey || '',
+			llamaCppModelPath: this.config?.summarizerLlamaCppModelPath,
 			language: this.config?.summarizerLanguage || 'English',
 			temperature: this.config?.summarizerTemperature,
 			batchSize: this.config?.summarizerBatchSize ?? DEFAULT_CONFIG.summarizerBatchSize,

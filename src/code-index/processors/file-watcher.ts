@@ -25,6 +25,7 @@ import { codeParser } from "./parser"
 import { CacheManager } from "../cache-manager"
 import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
 import { generateBlockEmbeddingText } from "../shared/block-text-generator"
+import { resolveDocumentPrefix } from "../shared/resolve-document-prefix"
 import { IEventBus, IFileSystem } from "../../abstractions/core"
 import { IWorkspace, IPathUtils } from "../../abstractions/workspace"
 
@@ -322,12 +323,15 @@ export class FileWatcher implements ICodeFileWatcher {
 
 			// Process blocks to upsert
 			if (blocksToUpsert.length > 0) {
+				// Derive document prefix from embedder for models that need it (e.g., "Document: " for jina retrieval)
+				const documentPrefix: string | undefined = resolveDocumentPrefix(this.embedder)
+
 				const options: BatchProcessorOptions<CodeBlock> = {
 					embedder: this.embedder,
 					vectorStore: this.vectorStore,
 					cacheManager: this.cacheManager,
 
-					itemToText: (block) => generateBlockEmbeddingText(block, this.workspacePath),
+					itemToText: (block) => generateBlockEmbeddingText(block, this.workspacePath, documentPrefix),
 					itemToFilePath: (block) => block.file_path,
 					getFileHash: (block) => {
 						// Find the corresponding file info for this block
