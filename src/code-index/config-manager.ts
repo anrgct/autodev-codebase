@@ -413,8 +413,12 @@ export class CodeIndexConfigManager {
 
 	/**
 	 * Gets the current model ID being used for embeddings.
+	 * For LlamaCPP, falls back to embedderLlamaCppModelPath since it's the model identifier.
 	 */
 	public get currentModelId(): string | undefined {
+		if (this.config?.embedderProvider === "llamacpp") {
+			return this.config?.embedderLlamaCppModelPath ?? this.config?.embedderModelId
+		}
 		return this.config?.embedderModelId
 	}
 

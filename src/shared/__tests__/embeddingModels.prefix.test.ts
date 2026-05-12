@@ -63,19 +63,19 @@ describe("getModelQueryPrefix", () => {
 
 describe("getModelDocumentPrefix", () => {
 	describe("llamacpp with jina-embeddings-v5 models", () => {
-		it(`returns "Document: " for llamacpp with jina-embeddings-v5-nano-retrieval`, () => {
+		it(`returns "Query: " for llamacpp with jina-embeddings-v5-nano-retrieval (symmetric with query)`, () => {
 			expect(
 				getModelDocumentPrefix("llamacpp", "jina-embeddings-v5-nano-retrieval"),
-			).toBe("Document: ")
+			).toBe("Query: ")
 		})
 
-		it(`returns "Document: " for llamacpp with full GGUF path containing jina-embeddings-v5`, () => {
+		it(`returns "Query: " for llamacpp with full GGUF path containing jina-embeddings-v5`, () => {
 			expect(
 				getModelDocumentPrefix(
 					"llamacpp",
 					"jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-Q8_0",
 				),
-			).toBe("Document: ")
+			).toBe("Query: ")
 		})
 	})
 

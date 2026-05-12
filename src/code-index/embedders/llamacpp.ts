@@ -49,7 +49,13 @@ export class LlamaCppEmbedder implements IEmbedder {
 		const embeddings: number[][] = []
 		for (const text of texts) {
 			const embedding = await this._embeddingContext!.getEmbeddingFor(text)
-			embeddings.push(Array.from(embedding.vector))
+			const vector = Array.from(embedding.vector)
+			// L2 normalize (Jina models output normalized vectors; GGUF inference does not)
+			const norm = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0))
+			if (norm > 0) {
+				for (let i = 0; i < vector.length; i++) vector[i] /= norm
+			}
+			embeddings.push(vector)
 		}
 
 		return { embeddings }

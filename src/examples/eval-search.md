@@ -241,6 +241,10 @@ def _smart_load(self, key: str):
 ---
 
 # 测试结果
+```
+╭─   ~/w/autodev-codebase on   master ⇡3 *4  took  5s  base
+╰─❯ ./src/examples/eval_search.py
+```
 
 ## hf.co/lmstudio-community/embeddinggemma-300m-qat-GGUF
 
@@ -819,6 +823,14 @@ def _smart_load(self, key: str):
   命中结果中位数排名:          1
 
 ## jina-embeddings-v5-nano-mlx
+
+```
+  // jina-grep-cli的jina服务
+  "embedderProvider": "jina",
+  "embedderModelId": "jina-embeddings-v5-nano",
+  "embedderJinaApiKey": "test",
+  "embedderJinaBaseUrl": "http://localhost:8089/v1",
+```
 ╭─   ~/w/autodev-codebase on   master *4 !12 ?6
 ╰─❯ ./src/examples/eval_search.py
 
@@ -881,6 +893,11 @@ def _smart_load(self, key: str):
 
 # /Users/anrgct/llm_models/jinaai/jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-F16.gguf
 
+```
+  // // --- LlamaCPP (纯本地嵌入) ---
+  // "embedderProvider": "llamacpp",
+  // "embedderLlamaCppModelPath": "/Users/anrgct/llm_models/jinaai/jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-F16.gguf",
+```
 ╭─   ~/w/autodev-codebase on   feature/llamacpp-auto-dimension *4 !22 ?6
 ╰─❯ ./src/examples/eval_search.py
 

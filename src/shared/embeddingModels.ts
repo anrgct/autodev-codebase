@@ -137,6 +137,14 @@ export function getDefaultModelId(provider: EmbedderProvider): string {
 			return "openai/text-embedding-3-large"
 		case "vercel-ai-gateway":
 			return "text-embedding-3-small"
+		case "llamacpp": {
+			const llamacppModels = EMBEDDING_MODEL_PROFILES.llamacpp
+			const defaultLlamaCppModel = llamacppModels && Object.keys(llamacppModels)[0]
+			if (defaultLlamaCppModel) {
+				return defaultLlamaCppModel
+			}
+			return "unknown-default"
+		}
 		default:
 			// Fallback for unknown providers
 			console.warn(`Unknown provider for default model ID: ${provider}. Falling back to OpenAI default.`)
@@ -168,9 +176,10 @@ export function getModelQueryPrefix(provider: EmbedderProvider, modelId: string)
  * @returns Document prefix string or null if no prefix is required
  */
 export function getModelDocumentPrefix(provider: EmbedderProvider, modelId: string): string | null {
-	// Jina retrieval models loaded via LlamaCPP require "Document:" prefix for indexed content
+	// Jina retrieval models loaded via LlamaCPP: use same "Query: " prefix
+	// for both query and document to match MLX's symmetric retrieval.query behavior.
 	if (provider === "llamacpp" && modelId.includes("jina-embeddings-v5")) {
-		return "Document: "
+		return "Query: "
 	}
 
 	return null
