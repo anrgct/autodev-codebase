@@ -111,7 +111,7 @@ export class LlamaCppLLMReranker implements IReranker {
 
 	private async rerankSingleBatch(query: string, candidates: RerankerCandidate[], context: import("node-llama-cpp").LlamaContext): Promise<RerankerResult[]> {
 		const prompt = this.buildScoringPrompt(query, candidates)
-		const scores = await this.generateScores(prompt, context)
+		const scores = await this.generateScores(prompt, context, candidates.length)
 
 		const results: RerankerResult[] = candidates.map((candidate, index) => ({
 			id: candidate.id,
@@ -129,41 +129,66 @@ export class LlamaCppLLMReranker implements IReranker {
 
 Scoring criteria:
 
-10 points: Perfect match with query intent, directly includes relevant code
-7-9 points: Highly relevant, includes relevant functions/classes/concepts
-4-6 points: Moderately relevant, mentions related topics but not directly
-1-3 points: Slightly relevant, only indirect connections
+10 points: Directly implements the exact functionality asked about
+7-9 points: Contains the core logic related to the query
+4-6 points: Related helper/utility code, indirectly relevant
+1-3 points: Tangentially mentions related keywords, no direct relevance
 0 points: Completely unrelated
+
+IMPORTANT: Be highly critical. Most snippets are NOT directly relevant to the query. Only 1-2 out of 10-20 snippets should score 7+. Default to low scores (0-3) unless the code directly implements what the query asks for.
 
 Query: ${query}
 
-Snippets:
+<snippets>
 `
 
 		candidates.forEach((candidate, index) => {
 			const contextInfo = this.buildContextInfo(candidate)
-			prompt += `## snippet ${index + 1} ${contextInfo}\`\`\`\n${candidate.content}\`\`\`
----
+			prompt += `<snippet index="${index + 1}"${contextInfo ? " " + contextInfo : ""}>
+<code>
+${candidate.content}
+</code>
+</snippet>
 `
 		})
 
-		prompt += `Respond with ONLY a JSON object with a relevant "scores" array: {"scores": [${Array.from({ length: candidates.length }, (_, i) => `snippet${i + 1}_score`).join(", ")}]}`
+		prompt += `</snippets>
+
+Respond with ONLY scores in XML format, one <score> per snippet with brief reason. Output exactly ${candidates.length} scores. Example:
+<scores>
+${this.buildExampleScores(candidates.length)}
+</scores>`
 
 		return prompt
 	}
 
-	private buildContextInfo(candidate: RerankerCandidate): string {
-		const parts: string[] = []
-		if (candidate.payload?.hierarchyDisplay) {
-			parts.push(`[Context: ${candidate.payload.hierarchyDisplay}]`)
+	private buildExampleScores(count: number): string {
+		const lines: string[] = []
+		if (count === 1) {
+			lines.push(`  <score index="1">2<reason>Callback helper, not train logic</reason></score>`)
+		} else if (count >= 3) {
+			lines.push(`  <score index="1">8<reason>Directly implements train method</reason></score>`)
+			lines.push(`  <score index="2">3<reason>Related helper utility</reason></score>`)
+			lines.push(`  <score index="3">0<reason>README doc, no code</reason></score>`)
+		} else {
+			lines.push(`  <score index="1">8<reason>Directly implements train method</reason></score>`)
+			lines.push(`  <score index="2">0<reason>README doc, no code</reason></score>`)
 		}
-		if (candidate.payload?.filePath) {
-			parts.push(`[File: ${candidate.payload.filePath}]`)
-		}
-		return parts.length > 0 ? parts.join(" ") + "\n" : ""
+		return lines.join("\n")
 	}
 
-	private async generateScores(prompt: string, context: import("node-llama-cpp").LlamaContext): Promise<number[]> {
+			private buildContextInfo(candidate: RerankerCandidate): string {
+		const parts: string[] = []
+		if (candidate.payload?.hierarchyDisplay) {
+			parts.push(`context="${candidate.payload.hierarchyDisplay.replace(/"/g, "&quot;")}"`)
+		}
+		if (candidate.payload?.filePath) {
+			parts.push(`file="${candidate.payload.filePath.replace(/"/g, "&quot;")}"`)
+		}
+		return parts.join(" ")
+	}
+
+	private async generateScores(prompt: string, context: import("node-llama-cpp").LlamaContext, expectedCount: number): Promise<number[]> {
 		const sequence = context.getSequence()
 		const chatWrapper = new QwenChatWrapper({
 			variation: "3.5",
@@ -176,7 +201,7 @@ Snippets:
 			temperature: 0.7,
 		})
 
-		this.logger?.debug(`[LlamaCppLLMReranker] Raw response: ${response.substring(0, 200)}`)
+		this.logger?.debug(`[LlamaCppLLMReranker] Raw response: ${response.replace(/\n/g, '\\n')}`)
 
 		// Strip <think>...</think> tags that Qwen3 models output even in chat mode
 		const cleaned = response.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim()
@@ -185,30 +210,25 @@ Snippets:
 			throw new Error("Empty response after stripping think tags")
 		}
 
-		let parsed: any
-		try {
-			parsed = JSON.parse(cleaned)
-		} catch {
-			const jsonMatch = cleaned.match(/\{[\s\S]*\}/)
-			if (jsonMatch) {
-				try {
-					parsed = JSON.parse(jsonMatch[0])
-				} catch {
-					throw new Error(`Failed to parse LLM response as JSON: ${cleaned}`)
-				}
-			} else {
-				throw new Error(`Failed to parse LLM response as JSON: ${cleaned}`)
+		// Extract scores from XML <score> tags
+		const scoreRegex = /<score\s+index\s*=\s*"(\d+)"\s*>\s*([\d.]+)/g
+		const scoresMap = new Map<number, number>()
+		let match: RegExpExecArray | null
+
+		while ((match = scoreRegex.exec(cleaned)) !== null) {
+			const index = parseInt(match[1], 10) - 1  // Convert to 0-based
+			const score = parseFloat(match[2])
+			if (!isNaN(score) && index >= 0 && index < 100 && !scoresMap.has(index)) {
+				scoresMap.set(index, Math.max(0, Math.min(10, score)))
 			}
 		}
 
-		if (!parsed.scores || !Array.isArray(parsed.scores)) {
-			throw new Error("Invalid response format. Expected object with 'scores' array.")
+		if (scoresMap.size === 0) {
+			throw new Error(`Failed to extract score tags from LLM response: ${cleaned}`)
 		}
 
-		return parsed.scores.map((score: number | string) => {
-			const num = typeof score === "number" ? score : parseFloat(score)
-			return isNaN(num) ? 0 : Math.max(0, Math.min(10, num))
-		})
+		// Build result array, defaulting missing indices to 0
+		return Array.from({ length: expectedCount }, (_, i) => scoresMap.get(i) ?? 0)
 	}
 
 	async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
