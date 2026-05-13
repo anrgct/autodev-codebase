@@ -51,7 +51,7 @@ export class CodeIndexServiceFactory {
 
 	private async _getOrCreateLlamaCppLlmModel(modelPath: string): Promise<LlamaModel> {
 		if (this._llamaCppLlmModel) return this._llamaCppLlmModel
-		const llama = await getLlama({ logLevel: LlamaLogLevel.error })
+		const llama = await getLlama({ logLevel: LlamaLogLevel.disabled })
 		this._llamaCppLlmModel = await llama.loadModel({ modelPath })
 		return this._llamaCppLlmModel
 	}
@@ -399,9 +399,14 @@ export class CodeIndexServiceFactory {
 		}
 
 		if (config.provider === 'llamacpp') {
-			// Dedicated reranker model path → cross-encoder rerank mode
+			// Dedicated reranker model path → cross-encoder rerank mode (or server mode)
 			if (config.llamaCppRerankerModelPath) {
-				return new LlamaCppReranker(config.llamaCppRerankerModelPath, this.logger)
+				return new LlamaCppReranker(
+					config.llamaCppRerankerModelPath,
+					config.llamaCppServer === true,
+					config.llamaCppServerBinPath || "",
+					this.logger
+				)
 			}
 
 			// LLM model path → chat-based rerank mode (shares the lazy-loaded model)

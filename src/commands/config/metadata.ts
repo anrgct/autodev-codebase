@@ -106,6 +106,8 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	rerankerOpenAiCompatibleApiKey: { type: 'string', description: 'OpenAI-compatible API key for reranking' },
 	rerankerLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for LLM reranking' },
 	rerankerLlamaCppRerankerModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for dedicated reranking (optional)' },
+	rerankerLlamaCppServer: { type: 'boolean', description: 'Use llama.cpp server for reranking (auto-starts/stop server)' },
+	rerankerLlamaCppServerBinPath: { type: 'string', description: 'Path to llama-server binary (used when rerankerLlamaCppServer is true)' },
 	rerankerMinScore: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum score for reranked results' },
 	rerankerBatchSize: { type: 'integer', minValue: 1, description: 'Batch size for reranking' },
 	rerankerConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent reranking requests' },

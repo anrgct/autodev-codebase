@@ -1,0 +1,92 @@
+diff --git a/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js b/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js
+index cc77cce..ad794f0 100644
+--- a/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js
++++ b/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js
+@@ -9,11 +9,15 @@ export class LlamaRankingContext {
+     /** @internal */ _llamaContext;
+     /** @internal */ _template;
+     /** @internal */ _sequence;
++    /** @internal */ _relevanceIndex;
++    /** @internal */ _isTwoClassClassifier;
+     /** @internal */ _disposeAggregator = new AsyncDisposeAggregator();
+     onDispose = new EventRelay();
+-    constructor({ _llamaContext, _template }) {
++    constructor({ _llamaContext, _template, _relevanceIndex, _isTwoClassClassifier }) {
+         this._llamaContext = _llamaContext;
+         this._template = _template;
++        this._relevanceIndex = _relevanceIndex ?? 0;
++        this._isTwoClassClassifier = _isTwoClassClassifier ?? false;
+         this._sequence = this._llamaContext.getSequence();
+         this._disposeAggregator.add(this._llamaContext.onDispose.createListener(() => {
+             void this._disposeAggregator.dispose();
+@@ -132,12 +136,29 @@ export class LlamaRankingContext {
+             for await (const token of iterator) {
+                 break; // only generate one token to get embeddings
+             }
+-            const embedding = this._llamaContext._ctx.getEmbedding(input.length, 1);
+-            if (embedding.length === 0)
+-                return 0;
+-            const logit = embedding[0];
+-            const probability = logitToSigmoid(logit);
+-            return probability;
++            // Reranker models come in two architectures:
++            // 1. Two-class classifier (e.g., Qwen3-Reranker): C++ does cls_out projection + softmax,
++            //    producing [P(label_0), P(label_1)] in [0,1] range summing to 1.
++            //    We detect this by the presence of "classifier.output_labels" in GGUF metadata.
++            // 2. Single regression output (e.g., bge-reranker-v2-m3): C++ does cls_out projection
++            //    only, outputting a raw logit (can be negative). We apply sigmoid in JS.
++            if (this._isTwoClassClassifier) {
++                // Two-class classifier path (Qwen3-Reranker style)
++                const nClsOut = 2;
++                const embedding = this._llamaContext._ctx.getEmbedding(input.length, nClsOut);
++                if (embedding.length < 2)
++                    return 0;
++                const probability = embedding[this._relevanceIndex]; // P(yes) = relevance score
++                return Math.max(0, Math.min(1, probability));
++            } else {
++                // Single regression path (bge-reranker style)
++                const embedding = this._llamaContext._ctx.getEmbedding(input.length, 1);
++                if (embedding.length === 0)
++                    return 0;
++                const logit = embedding[0];
++                const probability = logitToSigmoid(logit);
++                return probability;
++            }
+         });
+     }
+     /** @internal */
+@@ -166,9 +187,33 @@ export class LlamaRankingContext {
+             _embeddings: true,
+             _ranking: true
+         });
++
++        // Determine model architecture:
++        // - Two-class classifier (Qwen3-Reranker): has "classifier.output_labels" in GGUF metadata.
++        //   C++ does softmax, output is [P(no), P(yes)]. We find the "yes" index.
++        // - Single regression (bge-reranker): no output_labels, C++ outputs raw logit.
++        //   We apply sigmoid in JS (original behavior).
++        let isTwoClassClassifier = false;
++        let relevanceIndex = 0;
++        try {
++            const metadata = _model.fileInfo.metadata;
++            const arch = metadata?.general?.architecture;
++            const labels = arch ? (metadata)[arch]?.classifier?.output_labels : undefined;
++            if (Array.isArray(labels) && labels.length > 0) {
++                isTwoClassClassifier = true;
++                const yesIdx = labels.indexOf('yes');
++                if (yesIdx !== -1)
++                    relevanceIndex = yesIdx;
++            }
++        } catch (_e) {
++            // Fall back to single-regression mode if metadata is not accessible
++        }
++
+         return new LlamaRankingContext({
+             _llamaContext: llamaContext,
+-            _template: resolvedTemplate
++            _template: resolvedTemplate,
++            _relevanceIndex: relevanceIndex,
++            _isTwoClassClassifier: isTwoClassClassifier
+         });
+     }
+ }

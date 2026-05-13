@@ -25,6 +25,7 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
 	rerankerConcurrency: 3,
 	rerankerMaxRetries: 3,
 	rerankerRetryDelayMs: 1000,
+	rerankerLlamaCppServer: false,
 	summarizerProvider: 'ollama',
 	summarizerOllamaBaseUrl: 'http://localhost:11434',
 	summarizerOllamaModelId: 'qwen3-vl:4b-instruct',

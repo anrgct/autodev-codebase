@@ -171,6 +171,8 @@ export interface CodeIndexConfig {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerLlamaCppModelPath?: string
 	rerankerLlamaCppRerankerModelPath?: string
+	rerankerLlamaCppServer?: boolean
+	rerankerLlamaCppServerBinPath?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 	rerankerConcurrency?: number
@@ -233,6 +235,8 @@ export type PreviousConfigSnapshot = {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerLlamaCppModelPath?: string
 	rerankerLlamaCppRerankerModelPath?: string
+	rerankerLlamaCppServer?: boolean
+	rerankerLlamaCppServerBinPath?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 	rerankerConcurrency?: number
@@ -310,6 +314,8 @@ export interface ConfigSnapshot {
 	rerankerOpenAiCompatibleApiKey?: string
 	rerankerLlamaCppModelPath?: string
 	rerankerLlamaCppRerankerModelPath?: string
+	rerankerLlamaCppServer?: boolean
+	rerankerLlamaCppServerBinPath?: string
 	rerankerMinScore?: number
 	rerankerBatchSize?: number
 	rerankerConcurrency?: number

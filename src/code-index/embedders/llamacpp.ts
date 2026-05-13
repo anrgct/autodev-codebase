@@ -31,7 +31,7 @@ export class LlamaCppEmbedder implements IEmbedder {
 
 		this._loadingPromise = (async () => {
 			this.logger?.debug(`Loading LlamaCPP model: ${this.modelPath}`)
-			const llama = await getLlama({ logLevel: LlamaLogLevel.error })
+			const llama = await getLlama({ logLevel: LlamaLogLevel.disabled })
 			this._model = await llama.loadModel({
 				modelPath: this.modelPath,
 				gpuLayers: this.gpuLayers,

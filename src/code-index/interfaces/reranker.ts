@@ -31,6 +31,8 @@ export interface RerankerConfig {
 	openAiCompatibleApiKey?: string
 	llamaCppModelPath?: string
 	llamaCppRerankerModelPath?: string
+	llamaCppServer?: boolean
+	llamaCppServerBinPath?: string
 	minScore?: number
 	batchSize?: number  // 批次大小，默认10
 	concurrency?: number  // 最大并发批次数，默认3
