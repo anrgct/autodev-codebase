@@ -181,12 +181,28 @@ export class CodeIndexServiceFactory {
 	 * 2. Historical: existing Qdrant collection vector_size
 	 * 3. Auto-detect: embedder.createEmbeddings(["test"]) → length
 	 */
+	/**
+	 * Derives a model ID from a GGUF file path by extracting the filename without extension.
+	 * This allows auto-matching against EMBEDDING_MODEL_PROFILES without manual config.
+	 * Example: "/path/to/bge-m3-Q8_0.gguf" → "bge-m3-Q8_0"
+	 */
+	private _deriveModelIdFromGgufPath(modelPath: string): string | null {
+		const basename = modelPath.split("/").pop() || modelPath
+		const name = basename.replace(/\.gguf$/i, "")
+		return name && name !== basename ? name : null
+	}
+
 	public async createVectorStore(): Promise<IVectorStore> {
 		const config = this.configManager.getConfig()
 		this.debug(`Debug createVectorStore config:`, JSON.stringify(config, null, 2))
 
 		const provider = config.embedderProvider as EmbedderProvider
-		const modelId = config.embedderModelId ?? getDefaultModelId(provider)
+
+		// For llamacpp, derive modelId from GGUF path (it's the source of truth)
+		// This avoids global config leaking embedderModelId from a different provider
+		const modelId = provider === "llamacpp" && config.embedderLlamaCppModelPath
+			? (this._deriveModelIdFromGgufPath(config.embedderLlamaCppModelPath) ?? getDefaultModelId(provider))
+			: (config.embedderModelId ?? getDefaultModelId(provider))
 
 		// Layer 1: Profile (zero overhead, from EMBEDDING_MODEL_PROFILES)
 		let vectorSize = getModelDimension(provider, modelId)
@@ -197,8 +213,22 @@ export class CodeIndexServiceFactory {
 
 			// Layer 2: Historical from existing Qdrant collection
 			if (existingVectorSize && existingVectorSize > 0) {
-				vectorSize = existingVectorSize
-				this.info(`[VectorStore] Using existing collection vector size: ${vectorSize}`)
+				// Verify the existing dimension matches what the embedder actually produces
+				// This catches cases where the model was changed (e.g., different GGUF file)
+				// but the Qdrant collection still has the old dimension
+				const embedder = this.createEmbedder()
+				const detectedSize = await this._detectVectorDimension(embedder)
+
+				if (detectedSize && detectedSize > 0 && detectedSize !== existingVectorSize) {
+					this.warn(
+						`[VectorStore] Existing collection has dimension ${existingVectorSize}, but current model produces ${detectedSize}. ` +
+						`Using ${detectedSize} (collection will be recreated on initialize).`,
+					)
+					vectorSize = detectedSize
+				} else {
+					vectorSize = existingVectorSize
+					this.info(`[VectorStore] Using existing collection vector size: ${vectorSize}`)
+				}
 			} else {
 				// Layer 3: Auto-detect via embedder
 				const embedder = this.createEmbedder()

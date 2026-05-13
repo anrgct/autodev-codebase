@@ -88,12 +88,13 @@ ${codeChunk}`;
 
     return {
       filePath,
+      topScore: deduplicatedResults[0]?.score || 0,
       avgScore,
       formattedText: `${'='.repeat(50)}\nFile: "${filePath}"${snippetInfo}${duplicateInfo}\n${'='.repeat(50)}\n${codeChunks}`
     };
   });
 
-  formattedResults.sort((a, b) => b.avgScore - a.avgScore);
+  formattedResults.sort((a, b) => b.topScore - a.topScore);
 
   const fileCount = resultsByFile.size;
   const summary = `Found ${results.length} result${results.length > 1 ? 's' : ''} in ${fileCount} file${fileCount > 1 ? 's' : ''} for: "${query}"

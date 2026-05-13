@@ -101,6 +101,9 @@ export class CodeIndexSearchService {
 				if (rerankerMinScore !== undefined) {
 					results = results.filter(r => r.score >= rerankerMinScore)
 				}
+
+				// 按 reranker 分数降序重新排序
+				results.sort((a, b) => b.score - a.score)
 			}
 
 			return results

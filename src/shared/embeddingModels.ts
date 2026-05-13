@@ -64,9 +64,11 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
 	},
 	llamacpp: {
 		"jina-embeddings-v5-nano-retrieval": { dimension: 1024 },
+		"v5-nano-retrieval-Q8_0": { dimension: 1024 },
 		"mxbai-embed-large-v1-f16": { dimension: 1024 },
 		"all-MiniLM-L6-v2-Q4_K_M": { dimension: 384 },
 		"nomic-embed-text-v1.5-Q4_K_M": { dimension: 768 },
+		"bge-m3-Q8_0": { dimension: 1024 },
 	},
 }
 

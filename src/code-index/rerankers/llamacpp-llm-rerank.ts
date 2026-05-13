@@ -154,27 +154,27 @@ ${candidate.content}
 
 		prompt += `</snippets>
 
-Respond with ONLY scores in XML format, one <score> per snippet with brief reason. Output exactly ${candidates.length} scores. Example:
-<scores>
-${this.buildExampleScores(candidates.length)}
-</scores>`
+Respond with ONLY JSON Lines, one object per line. For each snippet, first analyze the code relevance in reason, then assign a score. No other text or formatting. Output exactly ${candidates.length} lines. Example:
+${this.buildExampleScores(candidates.length)}`
 
 		return prompt
 	}
 
 	private buildExampleScores(count: number): string {
-		const lines: string[] = []
 		if (count === 1) {
-			lines.push(`  <score index="1">2<reason>Callback helper, not train logic</reason></score>`)
+			return `{"index":1,"reason":"Callback helper, not train logic","score":2}`
 		} else if (count >= 3) {
-			lines.push(`  <score index="1">8<reason>Directly implements train method</reason></score>`)
-			lines.push(`  <score index="2">3<reason>Related helper utility</reason></score>`)
-			lines.push(`  <score index="3">0<reason>README doc, no code</reason></score>`)
+			return [
+				`{"index":1,"reason":"Directly implements train method","score":8}`,
+				`{"index":2,"reason":"Related helper utility","score":3}`,
+				`{"index":3,"reason":"README doc, no code","score":0}`,
+			].join("\n")
 		} else {
-			lines.push(`  <score index="1">8<reason>Directly implements train method</reason></score>`)
-			lines.push(`  <score index="2">0<reason>README doc, no code</reason></score>`)
+			return [
+				`{"index":1,"reason":"Directly implements train method","score":8}`,
+				`{"index":2,"reason":"README doc, no code","score":0}`,
+			].join("\n")
 		}
-		return lines.join("\n")
 	}
 
 			private buildContextInfo(candidate: RerankerCandidate): string {
@@ -210,21 +210,31 @@ ${this.buildExampleScores(candidates.length)}
 			throw new Error("Empty response after stripping think tags")
 		}
 
-		// Extract scores from XML <score> tags
-		const scoreRegex = /<score\s+index\s*=\s*"(\d+)"\s*>\s*([\d.]+)/g
+		// Parse JSON Lines — each line is a JSON object
 		const scoresMap = new Map<number, number>()
-		let match: RegExpExecArray | null
+		const lines = cleaned.split("\n")
 
-		while ((match = scoreRegex.exec(cleaned)) !== null) {
-			const index = parseInt(match[1], 10) - 1  // Convert to 0-based
-			const score = parseFloat(match[2])
-			if (!isNaN(score) && index >= 0 && index < 100 && !scoresMap.has(index)) {
-				scoresMap.set(index, Math.max(0, Math.min(10, score)))
+		for (const line of lines) {
+			const trimmed = line.trim()
+			if (!trimmed.startsWith("{")) continue
+
+			try {
+				const obj = JSON.parse(trimmed)
+				if (typeof obj.index === "number" && typeof obj.score === "number") {
+					const idx = obj.index - 1  // Convert to 0-based
+					const score = Math.max(0, Math.min(10, obj.score))
+					if (idx >= 0 && idx < 100 && !scoresMap.has(idx)) {
+						scoresMap.set(idx, score)
+					}
+				}
+			} catch {
+				// Skip malformed lines
+				continue
 			}
 		}
 
 		if (scoresMap.size === 0) {
-			throw new Error(`Failed to extract score tags from LLM response: ${cleaned}`)
+			throw new Error(`Failed to extract any valid JSON Lines from LLM response: ${cleaned}`)
 		}
 
 		// Build result array, defaulting missing indices to 0

@@ -505,6 +505,26 @@ const embedder = this.createEmbedder()               // 再创建一次供外部
 
 **验证：** 新增 19 个单元测试覆盖各种 provider/modelId 组合的前缀返回逻辑，12 个 block-text-generator 测试覆盖 prefix 参数行为
 
+### 2026-05-13（GGUF 文件名自动推导 + Layer 2 维度验证 + Profile 别名）
+
+**问题：**
+- 全局配置的 `embedderModelId` 泄漏到不同 provider 的合并配置中（如 `ollama` 的 `embeddinggemma` 泄漏到 `llamacpp`），导致 profile 查不到、回退到历史集合维度后与实际 embedder 输出不匹配
+- `llamacpp` 的 `embedderModelId` 未配置时，默认值 `"jina-embeddings-v5-nano-retrieval"` 与真实 GGUF 文件名不一致
+
+**改动文件：**
+
+| 文件 | 改动 |
+|------|------|
+| `src/code-index/service-factory.ts` | `createVectorStore()` 中为 `llamacpp` 提供者从 GGUF 路径自动推导 `modelId`（提取 basename，去掉 `.gguf` 后缀），避免全局配置泄漏；Layer 2 使用历史集合维度时，新增 `_detectVectorDimension()` 验证，发现不一致时自动纠正 |
+| `src/shared/embeddingModels.ts` | `llamacpp` profile 新增 GGUF 文件名别名：`"v5-nano-retrieval-Q8_0"`、`"bge-m3-Q8_0"`，使常见 GGUF 文件名能直接匹配 profile |
+
+**设计决策：**
+- GGUF 文件名提取作为源 truth：实际运行的模型由文件路径决定，`embedderModelId` 配置为次要
+- 仅在 `llamacpp` 提供者生效，其他 provider 不受影响
+- Layer 2 验证仅在现有集合维度与自动检测不一致时才纠正，一致时零开销
+
+**验证：** 376 个 code-index 测试全部通过，类型检查通过，`index --force --demo` 索引 6 文件 58 blocks 成功
+
 ## 总结
 
 本次改动的核心价值：
