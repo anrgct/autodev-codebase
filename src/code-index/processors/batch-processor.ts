@@ -65,7 +65,8 @@ export class BatchProcessor<T> {
 			msg.includes("too long") ||
 			msg.includes("input length") ||
 			msg.includes("invalid input") ||
-			msg.includes("token limit")
+			msg.includes("token limit") ||
+			msg.includes("failed to get embeddings")
 		)
 	}
 

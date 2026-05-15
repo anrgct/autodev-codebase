@@ -45,7 +45,6 @@ export class LlamaCppEmbedder implements IEmbedder {
 
 	async createEmbeddings(texts: string[], _model?: string): Promise<EmbeddingResponse> {
 		await this._ensureModel()
-
 		const embeddings: number[][] = []
 		for (const text of texts) {
 			const embedding = await this._embeddingContext!.getEmbeddingFor(text)
