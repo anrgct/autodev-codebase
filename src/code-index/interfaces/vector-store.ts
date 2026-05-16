@@ -7,6 +7,17 @@ export type PointStruct = {
 	payload: Record<string, any>
 }
 
+export interface HybridSearchOptions {
+	/** Original raw query string for BM25 sparse vector encoding */
+	rawQuery?: string
+	/** Whether hybrid search is enabled */
+	enabled?: boolean
+	/** Weight for dense (semantic) vector scores */
+	denseWeight?: number
+	/** Weight for sparse (BM25 keyword) scores */
+	sparseWeight?: number
+}
+
 export interface IVectorStore {
 	/**
 	 * Initializes the vector store
@@ -24,11 +35,13 @@ export interface IVectorStore {
 	 * Searches for similar vectors
 	 * @param queryVector Vector to search for
 	 * @param filter Optional search filter options
+	 * @param hybridOptions Optional hybrid search options (BM25 sparse vector)
 	 * @returns Promise resolving to search results
 	 */
 	search(
 		queryVector: number[],
 		filter?: SearchFilter,
+		hybridOptions?: HybridSearchOptions,
 	): Promise<VectorStoreSearchResult[]>
 
 	/**

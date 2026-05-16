@@ -92,6 +92,11 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	vectorSearchMinScore: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum similarity score for search results' },
 	vectorSearchMaxResults: { type: 'integer', minValue: 1, description: 'Maximum number of search results to return' },
 
+	// Hybrid Search (Dense + Sparse BM25)
+	hybridSearchEnabled: { type: 'boolean', description: 'Enable hybrid search (dense + sparse BM25)' },
+	hybridSearchDenseWeight: { type: 'number', minValue: 0, description: 'Weight for dense (semantic) vector scores in hybrid search' },
+	hybridSearchSparseWeight: { type: 'number', minValue: 0, description: 'Weight for sparse (BM25 keyword) scores in hybrid search' },
+
 	// Reranker
 	rerankerEnabled: { type: 'boolean', description: 'Enable LLM reranking for search results' },
 	rerankerProvider: {

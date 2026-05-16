@@ -68,12 +68,20 @@ export class CodeIndexSearchService {
 			// Perform search - 防止调用方传入未验证的参数
 			const finalLimit = validateLimit(filter?.limit ?? configMaxResults)
 			const finalMinScore = validateMinScore(filter?.minScore ?? configMinScore)
-			
+		
+			// Build hybrid search options from config
+			const hybridOptions = {
+				rawQuery: query, // Pass original query for BM25 sparse encoding
+				enabled: this.configManager.hybridSearchEnabled,
+				denseWeight: this.configManager.hybridSearchDenseWeight,
+				sparseWeight: this.configManager.hybridSearchSparseWeight,
+			}
+		
 			let results = await this.vectorStore.search(vector, {
 				...filter,
 				minScore: finalMinScore,
 				limit: finalLimit
-			})
+			}, hybridOptions)
 
 			// 确保结果按分数降序排序
 			results.sort((a, b) => b.score - a.score)

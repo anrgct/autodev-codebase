@@ -161,6 +161,11 @@ export interface CodeIndexConfig {
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
 
+	// Hybrid Search (Dense + Sparse BM25)
+	hybridSearchEnabled?: boolean
+	hybridSearchDenseWeight?: number
+	hybridSearchSparseWeight?: number
+
 	// Reranker configuration
 	rerankerEnabled?: boolean
 	rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
@@ -226,6 +231,9 @@ export type PreviousConfigSnapshot = {
 	qdrantApiKey?: string
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
+	hybridSearchEnabled?: boolean
+	hybridSearchDenseWeight?: number
+	hybridSearchSparseWeight?: number
 	rerankerEnabled?: boolean
 	rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	rerankerOllamaBaseUrl?: string
@@ -305,6 +313,9 @@ export interface ConfigSnapshot {
 	qdrantApiKey?: string
 	vectorSearchMinScore?: number
 	vectorSearchMaxResults?: number
+	hybridSearchEnabled?: boolean
+	hybridSearchDenseWeight?: number
+	hybridSearchSparseWeight?: number
 	rerankerEnabled?: boolean
 	rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
 	rerankerOllamaBaseUrl?: string

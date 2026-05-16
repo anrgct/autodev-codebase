@@ -121,18 +121,26 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.getCollection).toHaveBeenCalledWith(expectedCollectionName)
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledWith(expectedCollectionName, {
-				vectors: {
-					size: mockVectorSize,
-					distance: "Cosine", // Assuming 'Cosine' is the DISTANCE_METRIC
-					on_disk: true,
-				},
-				hnsw_config: {
-					m: 64,
-					ef_construct: 512,
-					on_disk: true,
-				},
-			})
-			expect(mockQdrantClientInstance.deleteCollection).not.toHaveBeenCalled()
+					vectors: {
+						size: mockVectorSize,
+						distance: "Cosine", // Assuming 'Cosine' is the DISTANCE_METRIC
+						on_disk: true,
+					},
+					hnsw_config: {
+						m: 64,
+						ef_construct: 512,
+						on_disk: true,
+					},
+					sparse_vectors: {
+						"bm25": {
+							index: {
+								on_disk: true,
+							},
+							modifier: "idf",
+						},
+					},
+				})
+				expect(mockQdrantClientInstance.deleteCollection).not.toHaveBeenCalled()
 
 			// Verify payload index creation - 'type' field first, then pathSegments
 			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
@@ -149,15 +157,18 @@ describe("QdrantVectorStore", () => {
 		})
 		it("should not create a new collection if one exists with matching vectorSize and return false", async () => {
 			// Mock getCollection to return existing collection info with matching vector size
-			mockQdrantClientInstance.getCollection.mockResolvedValue({
-				config: {
-					params: {
-						vectors: {
-							size: mockVectorSize, // Matching vector size
+				mockQdrantClientInstance.getCollection.mockResolvedValue({
+					config: {
+						params: {
+							vectors: {
+								size: mockVectorSize, // Matching vector size
+							},
+							sparse_vectors: {
+								"bm25": {}, // Sparse vectors configured
+							},
 						},
 					},
-				},
-			} as any) // Cast to any to satisfy QdrantClient types
+				} as any) // Cast to any to satisfy QdrantClient types
 			mockQdrantClientInstance.createPayloadIndex.mockResolvedValue({} as any)
 
 			const result = await vectorStore.initialize()
@@ -210,17 +221,25 @@ describe("QdrantVectorStore", () => {
 			expect(mockQdrantClientInstance.deleteCollection).toHaveBeenCalledWith(expectedCollectionName)
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.createCollection).toHaveBeenCalledWith(expectedCollectionName, {
-				vectors: {
-					size: mockVectorSize, // Should use the new, correct vector size
-					distance: "Cosine",
-					on_disk: true,
-				},
-				hnsw_config: {
-					m: 64,
-					ef_construct: 512,
-					on_disk: true,
-				},
-			})
+					vectors: {
+						size: mockVectorSize, // Should use the new, correct vector size
+						distance: "Cosine",
+						on_disk: true,
+					},
+					hnsw_config: {
+						m: 64,
+						ef_construct: 512,
+						on_disk: true,
+					},
+					sparse_vectors: {
+						"bm25": {
+							index: {
+								on_disk: true,
+							},
+							modifier: "idf",
+						},
+					},
+				})
 
 			// Verify payload index creation
 			expect(mockQdrantClientInstance.createPayloadIndex).toHaveBeenCalledWith(expectedCollectionName, {
@@ -465,42 +484,54 @@ describe("QdrantVectorStore", () => {
 
 			expect(mockQdrantClientInstance.upsert).toHaveBeenCalledTimes(1)
 			expect(mockQdrantClientInstance.upsert).toHaveBeenCalledWith(expectedCollectionName, {
-				points: [
-					{
-						id: expect.any(String),
-						vector: [0.1, 0.2, 0.3],
-						payload: {
-							filePath: "src/components/Button.tsx",
-							content: "export const Button = () => {}",
-							startLine: 1,
-							endLine: 3,
-							pathSegments: {
-								"0": "src",
-								"1": "components",
-								"2": "Button.tsx",
+					points: [
+						{
+							id: expect.any(String),
+							vector: {
+								"": [0.1, 0.2, 0.3],
+								"bm25": {
+									text: "",
+									model: "qdrant/bm25",
+								},
 							},
-							segmentHash: mockHashedPath,
-						},
-					},
-					{
-						id: expect.any(String),
-						vector: [0.4, 0.5, 0.6],
-						payload: {
-							filePath: "src/utils/helpers.ts",
-							content: "export function helper() {}",
-							startLine: 5,
-							endLine: 7,
-							pathSegments: {
-								"0": "src",
-								"1": "utils",
-								"2": "helpers.ts",
+							payload: {
+								filePath: "src/components/Button.tsx",
+								content: "export const Button = () => {}",
+								startLine: 1,
+								endLine: 3,
+								pathSegments: {
+									"0": "src",
+									"1": "components",
+									"2": "Button.tsx",
+								},
+								segmentHash: mockHashedPath,
 							},
-							segmentHash: mockHashedPath,
 						},
-					},
-				],
-				wait: true,
-			})
+						{
+							id: expect.any(String),
+							vector: {
+								"": [0.4, 0.5, 0.6],
+								"bm25": {
+									text: "",
+									model: "qdrant/bm25",
+								},
+							},
+							payload: {
+								filePath: "src/utils/helpers.ts",
+								content: "export function helper() {}",
+								startLine: 5,
+								endLine: 7,
+								pathSegments: {
+									"0": "src",
+									"1": "utils",
+									"2": "helpers.ts",
+								},
+								segmentHash: mockHashedPath,
+							},
+						},
+					],
+					wait: true,
+				})
 		})
 
 		it("should handle points without filePath in payload", async () => {
@@ -566,28 +597,34 @@ describe("QdrantVectorStore", () => {
 			await vectorStore.upsertPoints(mockPoints)
 
 			expect(mockQdrantClientInstance.upsert).toHaveBeenCalledWith(expectedCollectionName, {
-				points: [
-					{
-						id: expect.any(String),
-						vector: [0.1, 0.2, 0.3],
-						payload: {
-							filePath: "src/components/ui/forms/InputField.tsx",
-							content: "export const InputField = () => {}",
-							startLine: 1,
-							endLine: 3,
-							pathSegments: {
-								"0": "src",
-								"1": "components",
-								"2": "ui",
-								"3": "forms",
-								"4": "InputField.tsx",
+					points: [
+						{
+							id: expect.any(String),
+							vector: {
+								"": [0.1, 0.2, 0.3],
+								"bm25": {
+									text: "",
+									model: "qdrant/bm25",
+								},
 							},
-							segmentHash: mockHashedPath,
+							payload: {
+								filePath: "src/components/ui/forms/InputField.tsx",
+								content: "export const InputField = () => {}",
+								startLine: 1,
+								endLine: 3,
+								pathSegments: {
+									"0": "src",
+									"1": "components",
+									"2": "ui",
+									"3": "forms",
+									"4": "InputField.tsx",
+								},
+								segmentHash: mockHashedPath,
+							},
 						},
-					},
-				],
-				wait: true,
-			})
+					],
+					wait: true,
+				})
 		})
 
 		it("should handle error scenarios when qdrantClient.upsert fails", async () => {

@@ -2,7 +2,7 @@ import { QdrantClient, Schemas } from "@qdrant/js-client-rest"
 import { createHash } from "crypto"
 import * as path from "path"
 import { v5 as uuidv5 } from "uuid"
-import { IVectorStore, SearchFilter } from "../interfaces/vector-store"
+import { IVectorStore, SearchFilter, HybridSearchOptions } from "../interfaces/vector-store"
 import { Payload, VectorStoreSearchResult } from "../interfaces"
 import {
 	DEFAULT_SEARCH_MIN_SCORE,
@@ -247,6 +247,14 @@ export class QdrantVectorStore implements IVectorStore {
 						ef_construct: 512,
 						on_disk: true,
 					},
+					sparse_vectors: {
+						"bm25": {
+							index: {
+								on_disk: true,
+							},
+							modifier: "idf",
+						},
+					},
 				})
 				created = true
 			} else {
@@ -268,7 +276,16 @@ export class QdrantVectorStore implements IVectorStore {
 				}
 
 				if (existingVectorSize === this.vectorSize) {
-					created = false // Exists and correct
+						// Check if sparse_vectors are configured (needed for hybrid BM25 search)
+						const sparseVectorsConfig = (collectionInfo.config?.params as any)?.sparse_vectors
+						if (!sparseVectorsConfig || Object.keys(sparseVectorsConfig).length === 0) {
+							console.warn(
+								`[QdrantVectorStore] Collection ${this.collectionName} exists but lacks sparse_vectors config. Recreating to enable hybrid search.`,
+							)
+							created = await this._recreateCollectionWithNewDimension(existingVectorSize)
+						} else {
+							created = false // Exists and correct
+						}
 				} else {
 					// Exists but wrong vector size, recreate with enhanced error handling
 					created = await this._recreateCollectionWithNewDimension(existingVectorSize)
@@ -337,6 +354,14 @@ export class QdrantVectorStore implements IVectorStore {
 					m: 64,
 					ef_construct: 512,
 					on_disk: true,
+				},
+				sparse_vectors: {
+					"bm25": {
+						index: {
+							on_disk: true,
+						},
+						modifier: "idf",
+					},
 				},
 			})
 			console.log(`[QdrantVectorStore] Successfully created new collection ${this.collectionName}`)
@@ -460,6 +485,13 @@ export class QdrantVectorStore implements IVectorStore {
 					return {
 						...point,
 						id: pointId,
+						vector: {
+							"": point.vector, // Unnamed = dense vector
+							"bm25": {
+								text: content,
+								model: "qdrant/bm25",
+							},
+						},
 						payload: {
 							...point.payload,
 							pathSegments,
@@ -498,11 +530,13 @@ export class QdrantVectorStore implements IVectorStore {
 	 * Searches for similar vectors
 	 * @param queryVector Vector to search for
 	 * @param filter Optional search filter options
+	 * @param hybridOptions Optional hybrid search options (BM25 sparse vector)
 	 * @returns Promise resolving to search results
 	 */
 		async search(
 			queryVector: number[],
 			filter?: SearchFilter,
+			hybridOptions?: HybridSearchOptions,
 		): Promise<VectorStoreSearchResult[]> {
 			try {
 				// Build Qdrant filter using PatternCompiler for pathFilters
@@ -522,17 +556,64 @@ export class QdrantVectorStore implements IVectorStore {
 				? { ...qdrantFilter, must_not: [...(qdrantFilter.must_not || []), ...metadataExclusion.must_not] }
 				: metadataExclusion
 
-			const searchRequest = {
-				query: queryVector,
-				filter: finalFilter,
-				// 使用统一验证，确保参数合法
-				score_threshold: validateMinScore(filter?.minScore),
-				limit: validateLimit(filter?.limit),
-				params: {
-					hnsw_ef: 128,
-					exact: false,
-				},
-				with_payload: true,
+			const validatedMinScore = validateMinScore(filter?.minScore)
+			const validatedLimit = validateLimit(filter?.limit)
+
+			// Determine whether to use hybrid search (dense + sparse BM25)
+			const useHybrid = hybridOptions?.enabled !== false && hybridOptions?.rawQuery
+
+			let searchRequest: any
+
+			if (useHybrid) {
+				// Hybrid search: prefetch with dense + sparse (BM25), fused via RRF
+				const denseWeight = hybridOptions?.denseWeight ?? 1.0
+				const sparseWeight = hybridOptions?.sparseWeight ?? 0.3
+				const totalWeight = denseWeight + sparseWeight
+
+				// Allocate limits proportionally to weights
+				const denseLimit = Math.max(1, Math.ceil(validatedLimit * denseWeight / totalWeight))
+				const sparseLimit = Math.max(1, Math.ceil(validatedLimit * sparseWeight / totalWeight))
+
+				searchRequest = {
+						query: { fusion: "rrf" },
+						prefetch: [
+							{
+								query: queryVector,
+								using: "", // Unnamed = dense vector
+								filter: finalFilter,
+								limit: denseLimit,
+								params: {
+									hnsw_ef: 128,
+									exact: false,
+								},
+							},
+							{
+								query: {
+									text: hybridOptions.rawQuery,
+									model: "qdrant/bm25",
+								},
+								using: "bm25", // Named = BM25 sparse vector
+								filter: finalFilter,
+								limit: sparseLimit,
+							},
+						],
+						limit: validatedLimit,
+						score_threshold: validatedMinScore,
+						with_payload: true,
+					}
+			} else {
+				// Pure dense search (original behavior)
+				searchRequest = {
+					query: queryVector,
+					filter: finalFilter,
+					score_threshold: validatedMinScore,
+					limit: validatedLimit,
+					params: {
+						hnsw_ef: 128,
+						exact: false,
+					},
+					with_payload: true,
+				}
 			}
 
 			const operationResult = await this.client.query(this.collectionName, searchRequest)

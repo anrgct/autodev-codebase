@@ -216,6 +216,9 @@ export class CodeIndexConfigManager {
 			qdrantApiKey: config.qdrantApiKey ?? "",
 			vectorSearchMinScore: config.vectorSearchMinScore,
 			vectorSearchMaxResults: config.vectorSearchMaxResults,
+			hybridSearchEnabled: config.hybridSearchEnabled,
+			hybridSearchDenseWeight: config.hybridSearchDenseWeight,
+			hybridSearchSparseWeight: config.hybridSearchSparseWeight,
 			rerankerEnabled: config.rerankerEnabled,
 			rerankerProvider: config.rerankerProvider,
 			rerankerOllamaBaseUrl: config.rerankerOllamaBaseUrl,
@@ -470,6 +473,27 @@ export class CodeIndexConfigManager {
 	public get currentSearchMaxResults(): number {
 		const raw = this.config?.vectorSearchMaxResults
 		return validateLimit(raw ?? SEARCH_CONFIG.DEFAULT_LIMIT)
+	}
+
+	/**
+	 * Gets whether hybrid search (dense + sparse BM25) is enabled
+	 */
+	public get hybridSearchEnabled(): boolean {
+		return this.config?.hybridSearchEnabled ?? true
+	}
+
+	/**
+	 * Gets the dense (semantic) weight for hybrid search
+	 */
+	public get hybridSearchDenseWeight(): number {
+		return this.config?.hybridSearchDenseWeight ?? 1.0
+	}
+
+	/**
+	 * Gets the sparse (BM25 keyword) weight for hybrid search
+	 */
+	public get hybridSearchSparseWeight(): number {
+		return this.config?.hybridSearchSparseWeight ?? 0.3
 	}
 
 	  /**
