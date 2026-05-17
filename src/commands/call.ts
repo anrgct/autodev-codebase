@@ -10,7 +10,8 @@ import {
   resolveWorkspacePath,
   initGlobalLogger,
   getLogger,
-  ensureDemoFiles
+  ensureDemoFiles,
+  registerProjectToCacheMap
 } from './shared';
 import {
   analyze,
@@ -387,6 +388,9 @@ async function callHandler(targetPath: string | undefined, options: CommandOptio
 
   // Resolve workspace path (working directory)
   const workspacePath = resolveWorkspacePath(options.path, options.demo);
+
+  // Register workspace path for cache --list
+  await registerProjectToCacheMap(workspacePath);
 
   // Handle --clear-cache
   if (options.clearCache) {

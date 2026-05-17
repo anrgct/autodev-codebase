@@ -9,6 +9,7 @@ import { createOutlineCommand } from './commands/outline';
 import { createStdioCommand } from './commands/stdio';
 import { createConfigCommand } from './commands/config/index';
 import { createCallCommand } from './commands/call';
+import { createCacheCommand } from './commands/cache';
 
 /**
  * Main CLI program
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
   program.addCommand(createStdioCommand());
   program.addCommand(createConfigCommand());
   program.addCommand(createCallCommand());
+  program.addCommand(createCacheCommand());
 
   // Parse arguments
   await program.parseAsync(process.argv);

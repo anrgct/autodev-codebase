@@ -2,6 +2,9 @@
  * Shared utilities and types for CLI commands
  */
 import * as path from 'path';
+import * as os from 'os';
+import * as fs from 'fs';
+import { createHash } from 'crypto';
 import { createNodeDependencies } from '../adapters/nodejs';
 import { CodeIndexManager } from '../code-index/manager';
 import { Logger, LogLevel, setGlobalLogger, getGlobalLogger } from '../utils/logger';
@@ -183,4 +186,48 @@ export async function waitForIndexingCompletion(manager: CodeIndexManager): Prom
       })
       .catch(reject);
   });
+}
+
+// ============================================================================
+// Project Map Registration (for codebase cache subcommand)
+// ============================================================================
+
+const PROJECT_MAP_FILE = path.join(os.homedir(), '.autodev-cache', 'project-map.json');
+
+/**
+ * Register the workspace path in the project map so that
+ * `codebase cache --list` can resolve project names from hashes.
+ * Call this once at the beginning of any command that uses a workspace.
+ */
+export async function registerProjectToCacheMap(workspacePath: string): Promise<void> {
+  try {
+    // Ensure cache directory exists
+    const cacheDir = path.dirname(PROJECT_MAP_FILE);
+    await fs.promises.mkdir(cacheDir, { recursive: true });
+
+    // Load existing map
+    let map: Record<string, string> = {};
+    try {
+      const content = await fs.promises.readFile(PROJECT_MAP_FILE, 'utf-8');
+      map = JSON.parse(content);
+    } catch {
+      // File doesn't exist or is corrupted — start fresh
+    }
+
+    // Compute hash
+    const fullHash = createHash('sha256').update(workspacePath).digest('hex');
+    const shortHash = fullHash.substring(0, 16);
+
+    // Only write if not already registered
+    if (map[fullHash] === workspacePath && map[shortHash] === workspacePath) {
+      return;
+    }
+
+    map[fullHash] = workspacePath;
+    map[shortHash] = workspacePath;
+
+    await fs.promises.writeFile(PROJECT_MAP_FILE, JSON.stringify(map, null, 2), 'utf-8');
+  } catch {
+    // Non-critical — silently ignore write failures
+  }
 }

@@ -3,7 +3,7 @@
  */
 import { Command } from 'commander';
 import * as crypto from 'crypto';
-import { CommandOptions, initializeManager, waitForIndexingCompletion, getLogger, initGlobalLogger, resolveWorkspacePath } from './shared';
+import { CommandOptions, initializeManager, waitForIndexingCompletion, getLogger, initGlobalLogger, resolveWorkspacePath, registerProjectToCacheMap } from './shared';
 import { CodeIndexManager } from '../code-index/manager';
 import { CodebaseHTTPMCPServer } from '../mcp/http-server';
 
@@ -252,6 +252,9 @@ async function indexHandler(options: any): Promise<void> {
   };
 
   initGlobalLogger(commandOptions.logLevel);
+
+  // Register workspace path for cache --list
+  await registerProjectToCacheMap(commandOptions.path);
 
   // Handle --clear-cache
   if (commandOptions.clearCache) {

@@ -3,7 +3,7 @@
  */
 import { Command } from 'commander';
 import * as path from 'path';
-import { CommandOptions, getLogger, initGlobalLogger, resolveWorkspacePath, createDependencies, ensureDemoFiles } from './shared';
+import { CommandOptions, getLogger, initGlobalLogger, resolveWorkspacePath, createDependencies, ensureDemoFiles, registerProjectToCacheMap } from './shared';
 
 /**
  * Handle outline command
@@ -131,6 +131,9 @@ async function outlineHandler(pattern: string, options: any): Promise<void> {
   };
 
   initGlobalLogger(commandOptions.logLevel);
+
+  // Register workspace path for cache --list
+  await registerProjectToCacheMap(commandOptions.path);
 
   // Create demo files if requested
   if (commandOptions.demo) {
