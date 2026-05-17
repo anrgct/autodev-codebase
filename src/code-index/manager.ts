@@ -1,4 +1,4 @@
-import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner, IReranker } from "./interfaces"
+import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner, IReranker, IHighlighter } from "./interfaces"
 import { IndexingState, ICodeIndexManager } from "./interfaces/manager"
 import { CodeIndexConfigManager } from "./config-manager"
 import { IConfigProvider } from "../abstractions/config"
@@ -437,6 +437,20 @@ export class CodeIndexManager implements ICodeIndexManager {
 			}
 		}
 
+		// Create highlighter (optional)
+		let highlighter: IHighlighter | undefined
+		const highlighterConfig = this._configManager!.highlighterConfig
+		if (highlighterConfig.enabled) {
+			highlighter = this._serviceFactory.createHighlighter()
+			if (highlighter) {
+				const highlighterValidation = await this._serviceFactory.validateHighlighter(highlighter)
+				if (!highlighterValidation.valid) {
+					console.warn('Highlighter validation failed:', highlighterValidation.error)
+					highlighter = undefined // Degrade gracefully
+				}
+			}
+		}
+
 		// (Re)Initialize orchestrator
 		this._orchestrator = new CodeIndexOrchestrator(
 			this._configManager!,
@@ -455,7 +469,8 @@ export class CodeIndexManager implements ICodeIndexManager {
 			this._stateManager,
 			embedder,
 			vectorStore,
-			reranker // Pass reranker to search service
+			reranker, // Pass reranker to search service
+			highlighter, // Pass highlighter to search service
 		)
 
 		// Clear any error state after successful recreation

@@ -136,6 +136,24 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 	summarizerConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent summarization requests' },
 	summarizerMaxRetries: { type: 'integer', minValue: 0, description: 'Maximum number of retries for summarization' },
 	summarizerRetryDelayMs: { type: 'integer', minValue: 0, description: 'Delay between summarization retries (ms)' },
+
+	// Highlighter (semantic highlight / line-level filtering)
+	highlighterEnabled: { type: 'boolean', description: 'Enable semantic line-level highlighting for search results' },
+	highlighterProvider: {
+		type: 'enum',
+		enumValues: ['llamacpp', 'llamacpp-llm'] as const,
+		description: 'Highlight provider: llamacpp (dedicated model) or llamacpp-llm (LLM prompt-based)'
+	},
+	highlighterGgufPath: { type: 'string', description: 'Path to dedicated semantic-highlight GGUF model (provider=llamacpp)' },
+	highlighterGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model for prompt-based highlighting (provider=llamacpp-llm, e.g. 0.6B model)' },
+	highlighterTopK: { type: 'integer', minValue: 1, description: 'Number of top-K lines to keep (topk mode)' },
+	highlighterMode: {
+		type: 'enum',
+		enumValues: ['topk', 'threshold'] as const,
+		description: 'Highlight selection mode: topk (fixed count) or threshold (score-based)'
+	},
+	highlighterThreshold: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum keep probability for threshold mode (0-1)' },
+	highlighterConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent highlight requests (llamacpp-llm provider)' },
 }
 
 /**

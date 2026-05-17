@@ -2,6 +2,7 @@ import { EmbedderProvider } from "./interfaces/manager"
 import { CodeIndexConfig, PreviousConfigSnapshot } from "./interfaces/config"
 import { RerankerConfig } from "./interfaces/reranker"
 import { SummarizerConfig } from "./interfaces/summarizer"
+import { HighlighterConfig } from "./interfaces/highlighter"
 import { DEFAULT_SEARCH_MIN_SCORE, DEFAULT_MAX_SEARCH_RESULTS, DEFAULT_CONFIG } from "./constants"
 import { getDefaultModelId, getModelDimension, getModelScoreThreshold } from "../shared/embeddingModels"
 import { IConfigProvider } from "../abstractions/config"
@@ -47,6 +48,14 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
 	'rerankerOpenAiCompatibleApiKey',     // Reranker OpenAI Compatible API key
 	'rerankerMinScore',                   // Reranker threshold
 	'rerankerBatchSize',                  // Reranker batch size
+	'highlighterEnabled',                 // Highlighter toggle
+	'highlighterProvider',                // Highlighter provider change
+	'highlighterGgufPath',                // Highlighter model path
+	'highlighterGgufLlmPath',             // Highlighter LLM model path
+	'highlighterTopK',                    // Highlighter top-K lines
+	'highlighterMode',                    // Highlighter selection mode
+	'highlighterThreshold',               // Highlighter threshold
+	'highlighterConcurrency',             // Highlighter concurrency
 	'summarizerProvider',                 // Summarizer provider
 	'summarizerOllamaBaseUrl',            // Summarizer Ollama URL
 	'summarizerOllamaModelId',            // Summarizer Ollama model
@@ -238,6 +247,20 @@ export class CodeIndexConfigManager {
 			summarizerOpenAiCompatibleApiKey: config.summarizerOpenAiCompatibleApiKey,
 			summarizerLanguage: config.summarizerLanguage,
 			summarizerTemperature: config.summarizerTemperature,
+			summarizerBatchSize: config.summarizerBatchSize,
+			summarizerConcurrency: config.summarizerConcurrency,
+			summarizerMaxRetries: config.summarizerMaxRetries,
+			summarizerRetryDelayMs: config.summarizerRetryDelayMs,
+
+			// Highlighter
+			highlighterEnabled: config.highlighterEnabled,
+			highlighterProvider: config.highlighterProvider,
+			highlighterGgufPath: config.highlighterGgufPath,
+			highlighterGgufLlmPath: config.highlighterGgufLlmPath,
+			highlighterTopK: config.highlighterTopK,
+			highlighterMode: config.highlighterMode,
+			highlighterThreshold: config.highlighterThreshold,
+			highlighterConcurrency: config.highlighterConcurrency,
 		}
 	}
 
@@ -535,6 +558,22 @@ export class CodeIndexConfigManager {
 			concurrency: this.config?.summarizerConcurrency ?? DEFAULT_CONFIG.summarizerConcurrency,
 			maxRetries: this.config?.summarizerMaxRetries ?? DEFAULT_CONFIG.summarizerMaxRetries,
 			retryDelayMs: this.config?.summarizerRetryDelayMs ?? DEFAULT_CONFIG.summarizerRetryDelayMs
+		};
+	}
+
+	/**
+	 * Gets the highlighter configuration.
+	 */
+	public get highlighterConfig(): HighlighterConfig {
+		return {
+			enabled: this.config?.highlighterEnabled === true,
+			provider: this.config?.highlighterProvider ?? "llamacpp",
+			ggufPath: this.config?.highlighterGgufPath,
+			ggufLlmPath: this.config?.highlighterGgufLlmPath,
+			topK: this.config?.highlighterTopK ?? 20,
+			mode: this.config?.highlighterMode ?? "topk",
+			threshold: this.config?.highlighterThreshold ?? 0.5,
+			concurrency: this.config?.highlighterConcurrency ?? 2,
 		};
 	}
 

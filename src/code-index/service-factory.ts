@@ -14,13 +14,15 @@ import { LlamaCppLLMReranker } from "./rerankers/llamacpp-llm-rerank"
 import { OllamaSummarizer } from "./summarizers/ollama"
 import { OpenAICompatibleSummarizer } from "./summarizers/openai-compatible"
 import { LlamaCppSummarizer } from "./summarizers/llamacpp"
+import { LlamaCppHighlightProvider } from "./highlighters/llamacpp"
+import { LlamaCppLLMHighlighter } from "./highlighters/llamacpp-llm"
 import { createHash } from "crypto"
 import { QdrantClient } from "@qdrant/js-client-rest"
 import { getLlama, LlamaModel, LlamaLogLevel } from "node-llama-cpp"
 import { EmbedderProvider, getDefaultModelId, getModelDimension } from "../shared/embeddingModels"
 import { QdrantVectorStore } from "./vector-store/qdrant-client"
 import { codeParser, DirectoryScanner, FileWatcher } from "./processors"
-import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker, ISummarizer } from "./interfaces"
+import { ICodeParser, IEmbedder, ICodeFileWatcher, IVectorStore, IReranker, ISummarizer, IHighlighter } from "./interfaces"
 import { CodeIndexConfig } from "./interfaces/config"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CacheManager } from "./cache-manager"
@@ -533,6 +535,62 @@ export class CodeIndexServiceFactory {
 			return {
 				valid: false,
 				error: error instanceof Error ? error.message : 'Summarizer validation failed'
+			}
+		}
+	}
+
+	/**
+	 * Creates a highlighter instance based on the current configuration.
+	 * @returns IHighlighter instance or undefined if highlighter is disabled
+	 */
+	public createHighlighter(): IHighlighter | undefined {
+		const config = this.configManager.highlighterConfig
+		if (!config.enabled) {
+			return undefined
+		}
+
+		const provider = config.provider ?? "llamacpp"
+
+		if (provider === "llamacpp-llm") {
+			if (!config.ggufLlmPath) {
+				this.warn("Highlighter is enabled with llamacpp-llm provider but highlighterGgufLlmPath is not configured")
+				return undefined
+			}
+			// Model is loaded lazily on first highlight() call
+			return new LlamaCppLLMHighlighter(
+				config.ggufLlmPath,
+				config.topK ?? 20,
+				this.logger,
+				config.mode ?? "topk",
+				config.threshold ?? 0.5,
+			)
+		}
+
+		// Default: llamacpp (dedicated model)
+		if (!config.ggufPath) {
+			this.warn("Highlighter is enabled but highlighterGgufPath is not configured")
+			return undefined
+		}
+
+		return new LlamaCppHighlightProvider(
+			config.ggufPath,
+			config.topK ?? 20,
+			this.logger,
+			config.mode ?? "topk",
+			config.threshold ?? 0.5,
+		)
+	}
+
+	/**
+	 * Validates the highlighter configuration.
+	 */
+	public async validateHighlighter(highlighter: IHighlighter): Promise<{ valid: boolean; error?: string }> {
+		try {
+			return await highlighter.validateConfiguration()
+		} catch (error) {
+			return {
+				valid: false,
+				error: error instanceof Error ? error.message : 'Highlighter validation failed'
 			}
 		}
 	}

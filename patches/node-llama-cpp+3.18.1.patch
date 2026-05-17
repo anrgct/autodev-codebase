@@ -1,3 +1,87 @@
+diff --git a/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.d.ts b/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.d.ts
+index d60237d..bce642a 100644
+--- a/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.d.ts
++++ b/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.d.ts
+@@ -44,6 +44,13 @@ export declare class LlamaEmbeddingContext {
+     readonly onDispose: EventRelay<void>;
+     private constructor();
+     getEmbeddingFor(input: Token[] | string | LlamaText): Promise<LlamaEmbedding>;
++    /**
++     * Returns per-token embeddings for the given input.
++     * Requires a model with pooling_type=none in GGUF metadata.
++     * @returns Promise resolving to an array of per-token embedding vectors (each is number[])
++     */
++    getEmbeddingsForTokens(input: Token[] | string | LlamaText): Promise<number[][]>;
++
+     dispose(): Promise<void>;
+     /** @hidden */
+     [Symbol.asyncDispose](): Promise<void>;
+diff --git a/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js b/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
+index 20b5a3d..43949fe 100644
+--- a/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
++++ b/node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
+@@ -53,6 +53,61 @@ export class LlamaEmbeddingContext {
+             });
+         });
+     }
++    /**
++     * Returns per-token embeddings for the given input.
++     * Requires a model with pooling_type=none in GGUF metadata.
++     * Each element is a Float32Array representing the hidden state at that token position.
++     * @param input - text or token array
++     * @returns Promise resolving to an array of per-token embedding vectors
++     */
++    async getEmbeddingsForTokens(input) {
++        const resolvedInput = tokenizeInput(input, this._llamaContext.model.tokenizer, undefined, true);
++        if (resolvedInput.length > this._llamaContext.contextSize)
++            throw new Error("Input is longer than the context size. " +
++                "Try to increase the context size or use another model that supports longer contexts.");
++        else if (resolvedInput.length === 0)
++            return [];
++        const beginningToken = resolveBeginningTokenToPrepend(this.model.vocabularyType, this.model.tokens);
++        if (beginningToken != null && resolvedInput[0] !== beginningToken)
++            resolvedInput.unshift(beginningToken);
++        const endToken = resolveEndTokenToAppend(this.model.vocabularyType, this.model.tokens);
++        if (endToken != null && resolvedInput.at(-1) !== endToken)
++            resolvedInput.push(endToken);
++        return await withLock([this, "evaluate"], async () => {
++            await this._sequence.eraseContextTokenRanges([{
++                    start: 0,
++                    end: this._sequence.nextTokenIndex
++                }]);
++            const iterator = this._sequence.evaluate(resolvedInput, { _noSampling: true });
++            // eslint-disable-next-line @typescript-eslint/no-unused-vars
++            for await (const token of iterator) {
++                break; // only generate one token to get embeddings
++            }
++            // Get per-token embeddings. With pooling_type=none, getEmbedding(i)
++            // returns the (i-1)-th token's embedding via llama_get_embeddings_ith.
++            // Some tokens may fail (e.g., beyond model's position limit);
++            // fall back to zero vectors for those.
++            const allEmbeddings = [];
++            let zeroVector = null;
++            for (let i = 1; i <= resolvedInput.length; i++) {
++                try {
++                    const emb = this._llamaContext._ctx.getEmbedding(i);
++                    if (emb && emb.length > 0) {
++                        allEmbeddings.push(Array.from(emb));
++                        if (zeroVector === null) zeroVector = new Array(emb.length).fill(0);
++                        continue;
++                    }
++                } catch (_e) {
++                    // Fallback to zero vector
++                }
++                if (zeroVector !== null) {
++                    allEmbeddings.push([...zeroVector]);
++                }
++            }
++            return allEmbeddings;
++        });
++    }
++
+     async dispose() {
+         await this._disposeAggregator.dispose();
+     }
 diff --git a/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js b/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js
 index cc77cce..ad794f0 100644
 --- a/node_modules/node-llama-cpp/dist/evaluator/LlamaRankingContext.js
