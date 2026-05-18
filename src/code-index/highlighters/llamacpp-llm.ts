@@ -107,16 +107,16 @@ export class LlamaCppLLMHighlighter implements IHighlighter {
 				`[LlamaCppLLMHighlighter] Raw response: ${response.replace(/\n/g, "\\n")}`,
 			)
 
-			// 3. 解析 JSONL 响应
-			const ranges = this._parseResponse(response, startLine, codeLines.length)
+			// 3. 解析响应
+			const range = this._parseResponse(response, startLine, codeLines.length)
 
-				if (ranges.length === 0) {
+			if (!range) {
 				// 模型判定无相关行 — 返回空结果
-					return this._emptyResult(codeLines, startLine)
-				}
+				return this._emptyResult(codeLines, startLine)
+			}
 
 			// 4. 构建 HighlightResult
-			return this._buildResult(codeLines, startLine, ranges, options)
+			return this._buildResult(codeLines, startLine, range, options)
 		} finally {
 			// 释放 context（不保留状态）
 			// LlamaContext 通过 GC 回收，无需显式释放
@@ -124,7 +124,9 @@ export class LlamaCppLLMHighlighter implements IHighlighter {
 	}
 
 	/**
-	 * 构建针对 0.6B 小模型优化的 prompt
+	 * 构建针对 0.6B 小模型优化的 prompt（基于 MiniCPM 17 轮实测优化）
+	 *
+	 * 核心设计：TOPIC 前缀 + matching 语义 + 无示例 + 负向约束
 	 */
 	private _buildPrompt(
 		query: string,
@@ -132,83 +134,78 @@ export class LlamaCppLLMHighlighter implements IHighlighter {
 		startLine: number,
 		_options?: HighlightOptions,
 	): string {
+		const normalized = query.replace(/^where\s+is\s+/i, '')
 		const numberedCode = codeLines
 			.map((line, i) => `${String(startLine + i).padStart(4)}  ${line}`)
 			.join("\n")
 
-		return `Find ALL line ranges in this code related to: "${query}"
-Output each range as one JSON line with "reason", "startLine", "endLine".
-If nothing is related, output: {"reason":"not related","startLine":0,"endLine":0}
+		return `TOPIC: "${normalized}"
 
-Example with multiple ranges:
-   5  class Model:
-  12      def train(self, data, epochs=10):
-  13          optimizer = torch.optim.Adam()
-  18          return self
-  30      @property
-  32          return self.device
-  50      def evaluate(self):
-  51          self.train(data)
-Output:
-{"reason":"defines train method","startLine":12,"endLine":18}
-{"reason":"calls train method","startLine":50,"endLine":51}
+Find lines in this code matching this topic.
+Matching = defines, implements, describes, or references the concept.
+Synonyms count. Word overlap with different meaning does NOT count.
 
-Example with nothing found:
-  30  @property
-  32      return self.device
-Output:
-{"reason":"not related","startLine":0,"endLine":0}
+Output: START N END M (two numbers) or 0 0 if no match.
 
-Now analyze:
+CODE:
 ${numberedCode}
-Output:`
+
+RESULT:`
 	}
 	/**
-	 * 解析 LLM 返回的 JSONL 行范围
+	 * 解析 LLM 返回的单范围输出（START N END M / 0 0 / NONE 等格式）
 	 */
 	private _parseResponse(
 		response: string,
 		startLine: number,
 		totalLines: number,
-	): Array<{ reason: string; startLine: number; endLine: number }> {
-		// 去除 <think>...</think> 标签
+	): { start: number; end: number } | null {
 		const cleaned = response.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim()
-		if (!cleaned) return []
-
-		// 如果模型返回 startLine:0 且 endLine:0 表示代码与 query 无关
-		if (/"startLine"\s*:\s*0\b/.test(cleaned) && /"endLine"\s*:\s*0\b/.test(cleaned)) return []
-		// 确保响应中至少有一个包含 startLine 的 JSON 对象
-		if (!/"startLine"\s*:/.test(cleaned)) return []
+		if (!cleaned) return null
 
 		const endLine = startLine + totalLines - 1
-		const ranges: Array<{ reason: string; startLine: number; endLine: number }> = []
-		const lines = cleaned.split("\n")
 
-		for (const line of lines) {
-			const trimmed = line.trim()
-			if (!trimmed.startsWith("{")) continue
-
-			try {
-				const obj = JSON.parse(trimmed)
-				if (
-					typeof obj.startLine === "number" &&
-					typeof obj.endLine === "number"
-				) {
-					const s = Math.max(startLine, Math.min(obj.startLine, endLine))
-					const e = Math.max(s, Math.min(obj.endLine, endLine))
-					ranges.push({
-						reason: typeof obj.reason === "string" ? obj.reason : "",
-						startLine: s,
-						endLine: e,
-					})
-				}
-			} catch {
-				// 跳过无法解析的行
-				continue
+		// "START N END M" 或 "START N M END" 格式
+		let m = cleaned.match(/START\s+(\d+)\s+END\s+(\d+)/i)
+		if (!m) m = cleaned.match(/START\s+(\d+)\s+(\d+)\s*END/i)
+		if (m) {
+			const s = parseInt(m[1], 10)
+			const e = parseInt(m[2], 10)
+			if (s > 0 && e > 0 && s >= startLine && s <= endLine && s <= e) {
+				return { start: s, end: Math.min(e, endLine) }
 			}
 		}
 
-		return ranges
+		// "0 0" 或 "NONE" → 无匹配
+		if (/^\s*(NONE|0\s*[,\s]\s*0)\s*$/im.test(cleaned)) return null
+
+		// 范围格式: Lxxx-Lyyy 或 xxx-yyy
+		const rangeMatch = cleaned.match(/L?(\d+)\s*[-]\s*L?(\d+)/)
+		if (rangeMatch) {
+			const s = parseInt(rangeMatch[1], 10)
+			const e = parseInt(rangeMatch[2], 10)
+			if (s > 0 && e > 0 && s >= startLine && e <= endLine && s <= e) {
+				return { start: s, end: e }
+			}
+		}
+
+		// 通用数字对 "X Y"（从后往前，取最后一个有效对）
+		const pairs = cleaned.match(/\b(\d+)\s+(\d+)\b/g)
+		if (pairs) {
+			for (let i = pairs.length - 1; i >= 0; i--) {
+				const pm = pairs[i].match(/(\d+)\s+(\d+)/)
+				if (!pm) continue
+				const s = parseInt(pm[1], 10)
+				const e = parseInt(pm[2], 10)
+				if (s === 0 || e === 0) continue
+				if (s > e) continue
+				if (s >= startLine && e <= endLine) {
+					return { start: s, end: e }
+				}
+			}
+		}
+
+		return null
 	}
 
 	/**
@@ -217,15 +214,15 @@ Output:`
 	private _buildResult(
 		codeLines: string[],
 		startLine: number,
-		ranges: Array<{ reason: string; startLine: number; endLine: number }>,
+		range: { start: number; end: number } | null,
 		options?: HighlightOptions,
 	): HighlightResult {
 		const endLine = startLine + codeLines.length - 1
 
-		// 构建 kept set
+		// 构建 kept set（单范围）
 		const keptSet = new Set<number>()
-		for (const range of ranges) {
-			for (let ln = range.startLine; ln <= range.endLine; ln++) {
+		if (range) {
+			for (let ln = range.start; ln <= range.end; ln++) {
 				const idx = ln - startLine
 				if (idx >= 0 && idx < codeLines.length) {
 					keptSet.add(idx)
@@ -238,21 +235,13 @@ Output:`
 		if (mode === "topk" && keptSet.size > 0) {
 			const topK = options?.topK ?? this.defaultTopK
 			if (keptSet.size > topK) {
-				// 范围已按 LLM 输出顺序排列（通常重要性递减），截断到 topK
 				let count = 0
 				const trimmedSet = new Set<number>()
-				for (const range of ranges) {
-					for (let ln = range.startLine; ln <= range.endLine; ln++) {
-						const idx = ln - startLine
-						if (idx >= 0 && idx < codeLines.length && keptSet.has(idx)) {
-							trimmedSet.add(idx)
-							count++
-							if (count >= topK) break
-						}
-					}
+				for (const idx of keptSet) {
+					trimmedSet.add(idx)
+					count++
 					if (count >= topK) break
 				}
-				// 替换 keptSet
 				keptSet.clear()
 				for (const idx of trimmedSet) keptSet.add(idx)
 			}
