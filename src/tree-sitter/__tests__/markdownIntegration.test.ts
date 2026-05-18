@@ -107,7 +107,8 @@ describe("Markdown Integration Tests", () => {
 
   it("should handle markdown files with headers that don't meet minimum section length", async () => {
     // Mock markdown content with headers but short sections
-    const markdownContent = "# Header 1\nShort section\n\n# Header 2\nAnother short section"
+    // Each section is 1 line, below the minimum of 2 lines
+    const markdownContent = "# Header 1\n# Header 2"
 
     // Mock fs.readFile to return our markdown content
     vi.mocked(mockDependencies.fileSystem.readFile).mockResolvedValue(new TextEncoder().encode(markdownContent))

@@ -711,6 +711,9 @@ export function c() {
 export function a() {
   return 'a'
 }
+
+// Top-level call to trigger module node creation
+a()
 `)
 
       const result = await runAnalysis()
