@@ -2,203 +2,203 @@
  * Summarizer request interface
  */
 export interface SummarizerRequest {
-	/**
-	 * Complete code content to summarize (NOT truncated)
-	 */
-	content: string
+  /**
+   * Complete code content to summarize (NOT truncated)
+   */
+  content: string
 
-	/**
-	 * Complete document content for context (optional)
-	 * When provided, gives the model full file context to generate better summaries
-	 */
-	document?: string
+  /**
+   * Complete document content for context (optional)
+   * When provided, gives the model full file context to generate better summaries
+   */
+  document?: string
 
-	/**
-	 * Output language for the summary
-	 */
-	language: 'English' | 'Chinese'
+  /**
+   * Output language for the summary
+   */
+  language: 'English' | 'Chinese'
 
-	/**
-	 * Type of code (e.g., 'class', 'function', 'method')
-	 */
-	codeType: string
+  /**
+   * Type of code (e.g., 'class', 'function', 'method')
+   */
+  codeType: string
 
-	/**
-	 * Optional name of the code element (e.g., 'Model', '__init__')
-	 */
-	codeName?: string
+  /**
+   * Optional name of the code element (e.g., 'Model', '__init__')
+   */
+  codeName?: string
 
-	/**
-	 * Optional file path for context (filename only)
-	 */
-	filePath?: string
+  /**
+   * Optional file path for context (filename only)
+   */
+  filePath?: string
 }
 
 /**
  * Summarizer result interface
  */
 export interface SummarizerResult {
-	/**
-	 * Generated summary text
-	 */
-	summary: string
+  /**
+   * Generated summary text
+   */
+  summary: string
 
-	/**
-	 * Actual language used for the summary
-	 */
-	language: string
+  /**
+   * Actual language used for the summary
+   */
+  language: string
 }
 
 /**
  * Summarizer information interface
  */
 export interface SummarizerInfo {
-	/**
-	 * Provider name (e.g., 'ollama')
-	 */
-	name: string
+  /**
+   * Provider name (e.g., 'ollama')
+   */
+  name: string
 
-	/**
-	 * Model ID
-	 */
-	model: string
+  /**
+   * Model ID
+   */
+  model: string
 }
 
 /**
  * Summarizer configuration interface
  */
 export interface SummarizerConfig {
-	/**
-	 * Provider type ('ollama' or 'openai-compatible')
-	 */
-	provider: 'ollama' | 'openai-compatible' | 'llamacpp'
+  /**
+   * Provider type ('ollama' or 'openai-compatible')
+   */
+  provider: 'ollama' | 'openai-compatible' | 'llamacpp'
 
-	/**
-	 * Ollama base URL (for ollama provider)
-	 */
-	ollamaBaseUrl?: string
+  /**
+   * Ollama base URL (for ollama provider)
+   */
+  ollamaBaseUrl?: string
 
-	/**
-	 * Ollama model ID (for ollama provider)
-	 */
-	ollamaModelId?: string
+  /**
+   * Ollama model ID (for ollama provider)
+   */
+  ollamaModelId?: string
 
-	/**
-	 * OpenAI-compatible base URL (for openai-compatible provider)
-	 */
-	openAiCompatibleBaseUrl?: string
+  /**
+   * OpenAI-compatible base URL (for openai-compatible provider)
+   */
+  openAiCompatibleBaseUrl?: string
 
-	/**
-	 * OpenAI-compatible model ID (for openai-compatible provider)
-	 */
-	openAiCompatibleModelId?: string
+  /**
+   * OpenAI-compatible model ID (for openai-compatible provider)
+   */
+  openAiCompatibleModelId?: string
 
-	/**
-	 * OpenAI-compatible API key (for openai-compatible provider)
-	 */
-	openAiCompatibleApiKey?: string
+  /**
+   * OpenAI-compatible API key (for openai-compatible provider)
+   */
+  openAiCompatibleApiKey?: string
 
-	/**
-	 * LlamaCPP model path (for llamacpp provider)
-	 */
-	llamaCppModelPath?: string
+  /**
+   * LlamaCPP model path (for llamacpp provider)
+   */
+  llamaCppModelPath?: string
 
-	/**
-	 * Language for summaries
-	 */
-	language?: 'English' | 'Chinese'
+  /**
+   * Language for summaries
+   */
+  language?: 'English' | 'Chinese'
 
-	/**
-	 * Temperature for LLM generation (affects output randomness)
-	 * Note: Only used by some providers
-	 */
-	temperature?: number
+  /**
+   * Temperature for LLM generation (affects output randomness)
+   * Note: Only used by some providers
+   */
+  temperature?: number
 
-	/**
-	 * Batch size for processing multiple code blocks in a single request
-	 * Default: 2
-	 */
-	batchSize?: number
+  /**
+   * Batch size for processing multiple code blocks in a single request
+   * Default: 2
+   */
+  batchSize?: number
 
-	/**
-	 * Maximum number of concurrent batch requests
-	 * Default: 2
-	 */
-	concurrency?: number
+  /**
+   * Maximum number of concurrent batch requests
+   * Default: 2
+   */
+  concurrency?: number
 
-	/**
-	 * Maximum number of retry attempts for failed batches
-	 * Default: 3
-	 */
-	maxRetries?: number
+  /**
+   * Maximum number of retry attempts for failed batches
+   * Default: 3
+   */
+  maxRetries?: number
 
-	/**
-	 * Initial delay in milliseconds before retrying (exponential backoff)
-	 * Default: 1000
-	 */
-	retryDelayMs?: number
+  /**
+   * Initial delay in milliseconds before retrying (exponential backoff)
+   * Default: 1000
+   */
+  retryDelayMs?: number
 }
 
 /**
  * Batch summarizer request interface
  */
 export interface SummarizerBatchRequest {
-	/**
-	 * Shared document context for all code blocks (optional)
-	 * When provided, gives the model full file context to generate better summaries
-	 * This is more efficient than including document in each block
-	 */
-	document?: string
+  /**
+   * Shared document context for all code blocks (optional)
+   * When provided, gives the model full file context to generate better summaries
+   * This is more efficient than including document in each block
+   */
+  document?: string
 
-	/**
-	 * Shared file path for context (optional)
-	 */
-	filePath?: string
+  /**
+   * Shared file path for context (optional)
+   */
+  filePath?: string
 
-	/**
-	 * Array of code blocks to summarize in a single batch
-	 */
-	blocks: Array<{
-		/**
-		 * Complete code content to summarize (NOT truncated)
-		 */
-		content: string
+  /**
+   * Array of code blocks to summarize in a single batch
+   */
+  blocks: Array<{
+    /**
+     * Complete code content to summarize (NOT truncated)
+     */
+    content: string
 
-		/**
-		 * Type of code (e.g., 'class', 'function', 'method')
-		 */
-		codeType: string
+    /**
+     * Type of code (e.g., 'class', 'function', 'method')
+     */
+    codeType: string
 
-		/**
-		 * Optional name of the code element (e.g., 'Model', '__init__')
-		 */
-		codeName?: string
-	}>
+    /**
+     * Optional name of the code element (e.g., 'Model', '__init__')
+     */
+    codeName?: string
+  }>
 
-	/**
-	 * Output language for all summaries
-	 */
-	language: 'English' | 'Chinese'
+  /**
+   * Output language for all summaries
+   */
+  language: 'English' | 'Chinese'
 }
 
 /**
  * Batch summarizer result interface
  */
 export interface SummarizerBatchResult {
-	/**
-	 * Array of generated summaries in the same order as the input blocks
-	 */
-	summaries: Array<{
-		/**
-		 * Generated summary text
-		 */
-		summary: string
+  /**
+   * Array of generated summaries in the same order as the input blocks
+   */
+  summaries: Array<{
+    /**
+     * Generated summary text
+     */
+    summary: string
 
-		/**
-		 * Actual language used for the summary
-		 */
-		language: string
-	}>
+    /**
+     * Actual language used for the summary
+     */
+    language: string
+  }>
 }
 
 /**
@@ -206,31 +206,31 @@ export interface SummarizerBatchResult {
  * All summarizer implementations must implement this interface
  */
 export interface ISummarizer {
-	/**
-	 * Generate a summary for the given code content
-	 * @throws Error if summarization fails (caller should handle gracefully)
-	 */
-	summarize(request: SummarizerRequest): Promise<SummarizerResult>
+  /**
+   * Generate a summary for the given code content
+   * @throws Error if summarization fails (caller should handle gracefully)
+   */
+  summarize(request: SummarizerRequest): Promise<SummarizerResult>
 
-	/**
-	 * Generate summaries for multiple code blocks in a single batch request
-	 * This is more efficient than calling summarize() multiple times
-	 *
-	 * @throws Error if batch summarization fails (caller should handle gracefully)
-	 *
-	 * Implementation notes:
-	 * - For OpenAI-compatible APIs: Use single prompt with multiple blocks
-	 * - For other APIs: Fall back to parallel summarize() calls with concurrency control
-	 */
-	summarizeBatch(request: SummarizerBatchRequest): Promise<SummarizerBatchResult>
+  /**
+   * Generate summaries for multiple code blocks in a single batch request
+   * This is more efficient than calling summarize() multiple times
+   *
+   * @throws Error if batch summarization fails (caller should handle gracefully)
+   *
+   * Implementation notes:
+   * - For OpenAI-compatible APIs: Use single prompt with multiple blocks
+   * - For other APIs: Fall back to parallel summarize() calls with concurrency control
+   */
+  summarizeBatch(request: SummarizerBatchRequest): Promise<SummarizerBatchResult>
 
-	/**
-	 * Validate the summarizer configuration
-	 */
-	validateConfiguration(): Promise<{ valid: boolean; error?: string }>
+  /**
+   * Validate the summarizer configuration
+   */
+  validateConfiguration(): Promise<{ valid: boolean; error?: string }>
 
-	/**
-	 * Get summarizer information
-	 */
-	get summarizerInfo(): SummarizerInfo
+  /**
+   * Get summarizer information
+   */
+  get summarizerInfo(): SummarizerInfo
 }

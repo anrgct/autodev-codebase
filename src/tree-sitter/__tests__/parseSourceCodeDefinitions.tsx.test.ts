@@ -36,84 +36,84 @@ import { testParseSourceCodeDefinitions, mockedFs } from "./helpers"
 import sampleTsxContent from "./fixtures/sample-tsx"
 
 describe("parseSourceCodeDefinitionsForFile with TSX", () => {
-	// Cache test results at the top of the describe block
-	let result: string
+  // Cache test results at the top of the describe block
+  let result: string
 
-	beforeAll(async () => {
-		// Set up mock for file system operations
-		vi.mock("fs/promises")
-		mockedFs.readFile.mockResolvedValue(Buffer.from(sampleTsxContent))
+  beforeAll(async () => {
+    // Set up mock for file system operations
+    vi.mock("fs/promises")
+    mockedFs.readFile.mockResolvedValue(Buffer.from(sampleTsxContent))
 
-		// Cache the parse result for use in all tests
-		const parseResult = await testParseSourceCodeDefinitions("test.tsx", sampleTsxContent, {
-			language: "tsx",
-			wasmFile: "tree-sitter-tsx.wasm",
-		})
-		expect(parseResult).toBeDefined()
-		expect(typeof parseResult).toBe("string")
-		result = parseResult as string
-	})
+    // Cache the parse result for use in all tests
+    const parseResult = await testParseSourceCodeDefinitions("test.tsx", sampleTsxContent, {
+      language: "tsx",
+      wasmFile: "tree-sitter-tsx.wasm",
+    })
+    expect(parseResult).toBeDefined()
+    expect(typeof parseResult).toBe("string")
+    result = parseResult as string
+  })
 
-	// Type Definition Tests
-	it("should capture interface declarations", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*interface StandardInterfaceProps/)
-		expect(result).toMatch(/\d+--\d+ \|\s*interface PropsDefinitionExample/)
-		expect(result).toMatch(/\d+--\d+ \|\s*interface ClassComponentState/)
-		expect(result).toMatch(/\d+--\d+ \|\s*interface GenericComponentProps<T>/)
-	})
+  // Type Definition Tests
+  it("should capture interface declarations", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*interface StandardInterfaceProps/)
+    expect(result).toMatch(/\d+--\d+ \|\s*interface PropsDefinitionExample/)
+    expect(result).toMatch(/\d+--\d+ \|\s*interface ClassComponentState/)
+    expect(result).toMatch(/\d+--\d+ \|\s*interface GenericComponentProps<T>/)
+  })
 
-	it("should capture type alias declarations", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*type StandardTypeAlias/)
-		expect(result).toMatch(/\d+--\d+ \|\s*type UserType/)
-	})
+  it("should capture type alias declarations", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*type StandardTypeAlias/)
+    expect(result).toMatch(/\d+--\d+ \|\s*type UserType/)
+  })
 
-	// Component Definition Tests
-	it("should capture function component declarations", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*function StandardFunctionComponent/)
-		expect(result).toMatch(/\d+--\d+ \|\s*function GenericListComponent<T>/)
-	})
+  // Component Definition Tests
+  it("should capture function component declarations", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*function StandardFunctionComponent/)
+    expect(result).toMatch(/\d+--\d+ \|\s*function GenericListComponent<T>/)
+  })
 
-	it("should capture arrow function components", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*export const ArrowFunctionComponent/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const JSXElementsExample/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const EventHandlersComponent/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const HooksStateComponent/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const HooksUsageComponent/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const GenericComponentUsage/)
-	})
+  it("should capture arrow function components", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*export const ArrowFunctionComponent/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const JSXElementsExample/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const EventHandlersComponent/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const HooksStateComponent/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const HooksUsageComponent/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const GenericComponentUsage/)
+  })
 
-	it("should capture class components", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*class StandardClassComponent extends React.Component/)
-	})
+  it("should capture class components", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*class StandardClassComponent extends React.Component/)
+  })
 
-	it("should capture higher order components", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*function withLogging<P extends object>/)
-	})
+  it("should capture higher order components", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*function withLogging<P extends object>/)
+  })
 
-	// JSX Elements Tests
-	it("should capture JSX elements", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*<div className="jsx-elements-container">/)
-		expect(result).toMatch(/\d+--\d+ \|\s*<Input/)
-		expect(result).toMatch(/\d+--\d+ \|\s*<UI.Button/)
-		expect(result).toMatch(/\d+--\d+ \|\s*<StandardFunctionComponent/)
-	})
+  // JSX Elements Tests
+  it("should capture JSX elements", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*<div className="jsx-elements-container">/)
+    expect(result).toMatch(/\d+--\d+ \|\s*<Input/)
+    expect(result).toMatch(/\d+--\d+ \|\s*<UI.Button/)
+    expect(result).toMatch(/\d+--\d+ \|\s*<StandardFunctionComponent/)
+  })
 
-	it("should capture React hooks usage", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*const \[data, setData\] = React\.useState/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const counter = React\.useRef/)
-		expect(result).toMatch(/\d+--\d+ \|\s*React\.useEffect\(\(\)/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const fetchData = React\.useCallback/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const memoizedValue = React\.useMemo/)
-	})
+  it("should capture React hooks usage", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*const \[data, setData\] = React\.useState/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const counter = React\.useRef/)
+    expect(result).toMatch(/\d+--\d+ \|\s*React\.useEffect\(\(\)/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const fetchData = React\.useCallback/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const memoizedValue = React\.useMemo/)
+  })
 
-	it("should capture event handlers", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*const handleClick =/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const handleChange =/)
-		expect(result).toMatch(/\d+--\d+ \|\s*const handleSubmit =/)
-	})
+  it("should capture event handlers", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*const handleClick =/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const handleChange =/)
+    expect(result).toMatch(/\d+--\d+ \|\s*const handleSubmit =/)
+  })
 
-	it("should capture generic component declarations", () => {
-		expect(result).toMatch(/\d+--\d+ \|\s*function GenericListComponent<T>/)
-		expect(result).toMatch(/\d+--\d+ \|\s*interface GenericComponentProps<T>/)
-	})
+  it("should capture generic component declarations", () => {
+    expect(result).toMatch(/\d+--\d+ \|\s*function GenericListComponent<T>/)
+    expect(result).toMatch(/\d+--\d+ \|\s*interface GenericComponentProps<T>/)
+  })
 })

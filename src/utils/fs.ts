@@ -9,26 +9,26 @@ import * as path from "path"
  * @returns A promise that resolves to an array of newly created directories.
  */
 export async function createDirectoriesForFile(filePath: string): Promise<string[]> {
-	const newDirectories: string[] = []
-	const normalizedFilePath = path.normalize(filePath) // Normalize path for cross-platform compatibility
-	const directoryPath = path.dirname(normalizedFilePath)
+  const newDirectories: string[] = []
+  const normalizedFilePath = path.normalize(filePath) // Normalize path for cross-platform compatibility
+  const directoryPath = path.dirname(normalizedFilePath)
 
-	let currentPath = directoryPath
-	const dirsToCreate: string[] = []
+  let currentPath = directoryPath
+  const dirsToCreate: string[] = []
 
-	// Traverse up the directory tree and collect missing directories
-	while (!(await fileExistsAtPath(currentPath))) {
-		dirsToCreate.push(currentPath)
-		currentPath = path.dirname(currentPath)
-	}
+  // Traverse up the directory tree and collect missing directories
+  while (!(await fileExistsAtPath(currentPath))) {
+    dirsToCreate.push(currentPath)
+    currentPath = path.dirname(currentPath)
+  }
 
-	// Create directories from the topmost missing one down to the target directory
-	for (let i = dirsToCreate.length - 1; i >= 0; i--) {
-		await fs.mkdir(dirsToCreate[i])
-		newDirectories.push(dirsToCreate[i])
-	}
+  // Create directories from the topmost missing one down to the target directory
+  for (let i = dirsToCreate.length - 1; i >= 0; i--) {
+    await fs.mkdir(dirsToCreate[i])
+    newDirectories.push(dirsToCreate[i])
+  }
 
-	return newDirectories
+  return newDirectories
 }
 
 /**
@@ -38,12 +38,12 @@ export async function createDirectoriesForFile(filePath: string): Promise<string
  * @returns A promise that resolves to true if the path exists, false otherwise.
  */
 export async function fileExistsAtPath(filePath: string): Promise<boolean> {
-	try {
-		await fs.access(filePath)
-		return true
-	} catch {
-		return false
-	}
+  try {
+    await fs.access(filePath)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -54,14 +54,14 @@ export async function fileExistsAtPath(filePath: string): Promise<boolean> {
  * @returns A promise that resolves when the file is written
  */
 export async function safeWriteJson(filePath: string, data: any): Promise<void> {
-	try {
-		// Ensure directory exists
-		await createDirectoriesForFile(filePath)
+  try {
+    // Ensure directory exists
+    await createDirectoriesForFile(filePath)
 
-		// Write JSON data with proper formatting
-		const jsonString = JSON.stringify(data, null, 2)
-		await fs.writeFile(filePath, jsonString, 'utf8')
-	} catch (error) {
-		throw new Error(`Failed to write JSON to ${filePath}: ${error instanceof Error ? error.message : String(error)}`)
-	}
+    // Write JSON data with proper formatting
+    const jsonString = JSON.stringify(data, null, 2)
+    await fs.writeFile(filePath, jsonString, 'utf8')
+  } catch (error) {
+    throw new Error(`Failed to write JSON to ${filePath}: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }

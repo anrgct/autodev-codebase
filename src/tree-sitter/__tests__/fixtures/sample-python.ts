@@ -18,7 +18,7 @@ class MultiLineDecoratedClass:
 # Method definition - demonstrates class method structure
 class MethodContainer:
     """Class containing method definitions"""
-    
+
     def multi_line_method(
         self,
         param1: str,
@@ -145,6 +145,6 @@ multi_line_type_annotation: dict[
 `
 
 export default {
-	path: "test.py",
-	content: samplePythonContent,
+  path: "test.py",
+  content: samplePythonContent,
 }

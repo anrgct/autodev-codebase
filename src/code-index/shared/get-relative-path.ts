@@ -9,10 +9,10 @@ import path from "path"
  * @returns The normalized absolute path
  */
 export function generateNormalizedAbsolutePath(filePath: string, workspaceRoot: string): string {
-	// Resolve the path to make it absolute if it's relative
-	const resolvedPath = path.resolve(workspaceRoot, filePath)
-	// Normalize to handle any . or .. segments and duplicate slashes
-	return path.normalize(resolvedPath)
+  // Resolve the path to make it absolute if it's relative
+  const resolvedPath = path.resolve(workspaceRoot, filePath)
+  // Normalize to handle any . or .. segments and duplicate slashes
+  return path.normalize(resolvedPath)
 }
 
 /**
@@ -24,8 +24,8 @@ export function generateNormalizedAbsolutePath(filePath: string, workspaceRoot: 
  * @returns The relative path from workspaceRoot to the file
  */
 export function generateRelativeFilePath(normalizedAbsolutePath: string, workspaceRoot: string): string {
-	// Generate the relative path
-	const relativePath = path.relative(workspaceRoot, normalizedAbsolutePath)
-	// Normalize to ensure consistent path separators
-	return path.normalize(relativePath)
+  // Generate the relative path
+  const relativePath = path.relative(workspaceRoot, normalizedAbsolutePath)
+  // Normalize to ensure consistent path separators
+  return path.normalize(relativePath)
 }

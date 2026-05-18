@@ -16,84 +16,84 @@ import { getValidConfigKeys, getConfigKeyMetadata, isValidConfigKey } from './me
  * @throws {Error} If value is invalid for the key's type
  */
 export function parseConfigValue(key: string, value: string): any {
-	const metadata = getConfigKeyMetadata(key)
+  const metadata = getConfigKeyMetadata(key)
 
-	if (!metadata) {
-		console.error(`Unknown configuration key: ${key}`)
-		console.error(`Supported keys: ${getValidConfigKeys().join(', ')}`)
-		process.exit(1)
-	}
+  if (!metadata) {
+    console.error(`Unknown configuration key: ${key}`)
+    console.error(`Supported keys: ${getValidConfigKeys().join(', ')}`)
+    process.exit(1)
+  }
 
-	const { type, enumValues, minValue, maxValue } = metadata
+  const { type, enumValues, minValue, maxValue } = metadata
 
-	// Boolean type
-	if (type === 'boolean') {
-		if (value !== 'true' && value !== 'false') {
-			console.error(`Invalid boolean value for ${key}: ${value} (must be 'true' or 'false')`)
-			process.exit(1)
-		}
-		return value === 'true'
-	}
+  // Boolean type
+  if (type === 'boolean') {
+    if (value !== 'true' && value !== 'false') {
+      console.error(`Invalid boolean value for ${key}: ${value} (must be 'true' or 'false')`)
+      process.exit(1)
+    }
+    return value === 'true'
+  }
 
-	// Integer type
-	if (type === 'integer') {
-		if (!/^-?\d+$/.test(value)) {
-			console.error(`Invalid integer value for ${key}: ${value}`)
-			process.exit(1)
-		}
-		const parsed = parseInt(value, 10)
+  // Integer type
+  if (type === 'integer') {
+    if (!/^-?\d+$/.test(value)) {
+      console.error(`Invalid integer value for ${key}: ${value}`)
+      process.exit(1)
+    }
+    const parsed = parseInt(value, 10)
 
-		if (minValue !== undefined && parsed < minValue) {
-			console.error(`Invalid value for ${key}: ${value} (must be >= ${minValue})`)
-			process.exit(1)
-		}
+    if (minValue !== undefined && parsed < minValue) {
+      console.error(`Invalid value for ${key}: ${value} (must be >= ${minValue})`)
+      process.exit(1)
+    }
 
-		if (maxValue !== undefined && parsed > maxValue) {
-			console.error(`Invalid value for ${key}: ${value} (must be <= ${maxValue})`)
-			process.exit(1)
-		}
+    if (maxValue !== undefined && parsed > maxValue) {
+      console.error(`Invalid value for ${key}: ${value} (must be <= ${maxValue})`)
+      process.exit(1)
+    }
 
-		return parsed
-	}
+    return parsed
+  }
 
-	// Number type
-	if (type === 'number') {
-		if (!/^-?\d+(?:\.\d+)?$/.test(value)) {
-			console.error(`Invalid numeric value for ${key}: ${value}`)
-			process.exit(1)
-		}
-		const parsed = parseFloat(value)
+  // Number type
+  if (type === 'number') {
+    if (!/^-?\d+(?:\.\d+)?$/.test(value)) {
+      console.error(`Invalid numeric value for ${key}: ${value}`)
+      process.exit(1)
+    }
+    const parsed = parseFloat(value)
 
-		if (!Number.isFinite(parsed)) {
-			console.error(`Invalid numeric value for ${key}: ${value}`)
-			process.exit(1)
-		}
+    if (!Number.isFinite(parsed)) {
+      console.error(`Invalid numeric value for ${key}: ${value}`)
+      process.exit(1)
+    }
 
-		if (minValue !== undefined && parsed < minValue) {
-			console.error(`Invalid value for ${key}: ${value} (must be >= ${minValue})`)
-			process.exit(1)
-		}
+    if (minValue !== undefined && parsed < minValue) {
+      console.error(`Invalid value for ${key}: ${value} (must be >= ${minValue})`)
+      process.exit(1)
+    }
 
-		if (maxValue !== undefined && parsed > maxValue) {
-			console.error(`Invalid value for ${key}: ${value} (must be <= ${maxValue})`)
-			process.exit(1)
-		}
+    if (maxValue !== undefined && parsed > maxValue) {
+      console.error(`Invalid value for ${key}: ${value} (must be <= ${maxValue})`)
+      process.exit(1)
+    }
 
-		return parsed
-	}
+    return parsed
+  }
 
-	// Enum type
-	if (type === 'enum' && enumValues) {
-		if (!enumValues.includes(value)) {
-			console.error(`Invalid value for ${key}: ${value}`)
-			console.error(`Valid values: ${enumValues.join(', ')}`)
-			process.exit(1)
-		}
-		return value
-	}
+  // Enum type
+  if (type === 'enum' && enumValues) {
+    if (!enumValues.includes(value)) {
+      console.error(`Invalid value for ${key}: ${value}`)
+      console.error(`Valid values: ${enumValues.join(', ')}`)
+      process.exit(1)
+    }
+    return value
+  }
 
-	// String type (default)
-	return value
+  // String type (default)
+  return value
 }
 
 /**
@@ -104,34 +104,34 @@ export function parseConfigValue(key: string, value: string): any {
  * @throws {Error} If format is invalid
  */
 export function parseConfigPairs(configString: string): Record<string, string> {
-	const pairs = configString.split(',').map((s) => s.trim())
-	const result: Record<string, string> = {}
+  const pairs = configString.split(',').map((s) => s.trim())
+  const result: Record<string, string> = {}
 
-	for (const pair of pairs) {
-		const equalIndex = pair.indexOf('=')
-		if (equalIndex === -1) {
-			console.error(`Invalid configuration format: ${pair} (should be key=value)`)
-			process.exit(1)
-		}
+  for (const pair of pairs) {
+    const equalIndex = pair.indexOf('=')
+    if (equalIndex === -1) {
+      console.error(`Invalid configuration format: ${pair} (should be key=value)`)
+      process.exit(1)
+    }
 
-		const key = pair.substring(0, equalIndex).trim()
-		const value = pair.substring(equalIndex + 1).trim()
+    const key = pair.substring(0, equalIndex).trim()
+    const value = pair.substring(equalIndex + 1).trim()
 
-		if (!key || value === '') {
-			console.error(`Invalid configuration format: ${pair} (empty key or value)`)
-			process.exit(1)
-		}
+    if (!key || value === '') {
+      console.error(`Invalid configuration format: ${pair} (empty key or value)`)
+      process.exit(1)
+    }
 
-		if (!isValidConfigKey(key)) {
-			console.error(`Invalid configuration item: ${key}`)
-			console.error(`Supported items: ${getValidConfigKeys().join(', ')}`)
-			process.exit(1)
-		}
+    if (!isValidConfigKey(key)) {
+      console.error(`Invalid configuration item: ${key}`)
+      console.error(`Supported items: ${getValidConfigKeys().join(', ')}`)
+      process.exit(1)
+    }
 
-		result[key] = value
-	}
+    result[key] = value
+  }
 
-	return result
+  return result
 }
 
 /**

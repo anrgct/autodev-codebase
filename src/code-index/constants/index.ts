@@ -3,8 +3,8 @@
  * In Roo Code proper these come from `@roo-code/types` as `CODEBASE_INDEX_DEFAULTS`.
  */
 const CODEBASE_INDEX_DEFAULTS = {
-	DEFAULT_SEARCH_MIN_SCORE: 0.4,
-	DEFAULT_SEARCH_RESULTS: 50,
+  DEFAULT_SEARCH_MIN_SCORE: 0.4,
+  DEFAULT_SEARCH_RESULTS: 50,
 } as const
 
 /**
@@ -13,33 +13,33 @@ const CODEBASE_INDEX_DEFAULTS = {
 import { CodeIndexConfig } from '../interfaces/config'
 
 export const DEFAULT_CONFIG: CodeIndexConfig = {
-	isEnabled: true,
-	embedderProvider: "ollama",
-	embedderModelId: "nomic-embed-text",
-	embedderModelDimension: 768,
-	embedderOllamaBaseUrl: "http://localhost:11434",
-	qdrantUrl: "http://localhost:6333",
-	vectorSearchMinScore: 0.1,
-	vectorSearchMaxResults: 20,
-	hybridSearchEnabled: true,
-	hybridSearchDenseWeight: 1.0,
-	hybridSearchSparseWeight: 0.3,
-	rerankerEnabled: false,
-	rerankerConcurrency: 3,
-	rerankerMaxRetries: 3,
-	rerankerRetryDelayMs: 1000,
-	rerankerLlamaCppServer: false,
-	summarizerProvider: 'ollama',
-	summarizerOllamaBaseUrl: 'http://localhost:11434',
-	summarizerOllamaModelId: 'qwen3-vl:4b-instruct',
-	summarizerOpenAiCompatibleBaseUrl: 'http://localhost:8080/v1',
-	summarizerOpenAiCompatibleModelId: 'gpt-4',
-	summarizerOpenAiCompatibleApiKey: '',
-	summarizerLanguage: 'English',
-	summarizerBatchSize: 2,
-	summarizerConcurrency: 2,
-	summarizerMaxRetries: 3,
-	summarizerRetryDelayMs: 1000
+  isEnabled: true,
+  embedderProvider: "ollama",
+  embedderModelId: "nomic-embed-text",
+  embedderModelDimension: 768,
+  embedderOllamaBaseUrl: "http://localhost:11434",
+  qdrantUrl: "http://localhost:6333",
+  vectorSearchMinScore: 0.1,
+  vectorSearchMaxResults: 20,
+  hybridSearchEnabled: true,
+  hybridSearchDenseWeight: 1.0,
+  hybridSearchSparseWeight: 0.3,
+  rerankerEnabled: false,
+  rerankerConcurrency: 3,
+  rerankerMaxRetries: 3,
+  rerankerRetryDelayMs: 1000,
+  rerankerLlamaCppServer: false,
+  summarizerProvider: 'ollama',
+  summarizerOllamaBaseUrl: 'http://localhost:11434',
+  summarizerOllamaModelId: 'qwen3-vl:4b-instruct',
+  summarizerOpenAiCompatibleBaseUrl: 'http://localhost:8080/v1',
+  summarizerOpenAiCompatibleModelId: 'gpt-4',
+  summarizerOpenAiCompatibleApiKey: '',
+  summarizerLanguage: 'English',
+  summarizerBatchSize: 2,
+  summarizerConcurrency: 2,
+  summarizerMaxRetries: 3,
+  summarizerRetryDelayMs: 1000
 }
 
 /**Parser */

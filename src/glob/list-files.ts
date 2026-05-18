@@ -14,28 +14,28 @@ import { IGNORE_DIRS, HIDDEN_DIR_PATTERN } from "../ignore/default-dirs"
  * - Additional path patterns specific to list-files (e.g., Java/Maven build paths)
  */
 const DIRS_TO_IGNORE = [
-	...IGNORE_DIRS,
-	HIDDEN_DIR_PATTERN,  // Retain .* behavior for consistency
-	"target/dependency",  // Java/Maven specific
-	"build/dependencies", // Build variant
+  ...IGNORE_DIRS,
+  HIDDEN_DIR_PATTERN,  // Retain .* behavior for consistency
+  "target/dependency",  // Java/Maven specific
+  "build/dependencies", // Build variant
 ]
 
 export interface ListFilesDependencies {
-	pathUtils: IPathUtils
-	fileSystem: IFileSystem
-	workspace: IWorkspace  // Through workspace to get ignoreService
-	fs?: any  // Optional custom filesystem adapter (e.g., memfs for testing)
+  pathUtils: IPathUtils
+  fileSystem: IFileSystem
+  workspace: IWorkspace  // Through workspace to get ignoreService
+  fs?: any  // Optional custom filesystem adapter (e.g., memfs for testing)
 }
 
 // Re-export IFileSystem for use
 interface IFileSystem {
-	readFile(path: string): Promise<Uint8Array>
-	writeFile(path: string, content: Uint8Array): Promise<void>
-	exists(path: string): Promise<boolean>
-	stat(path: string): Promise<{ isFile: boolean; isDirectory: boolean; size: number; mtime: number }>
-	readdir(path: string): Promise<string[]>
-	mkdir(path: string): Promise<void>
-	delete(path: string): Promise<void>
+  readFile(path: string): Promise<Uint8Array>
+  writeFile(path: string, content: Uint8Array): Promise<void>
+  exists(path: string): Promise<boolean>
+  stat(path: string): Promise<{ isFile: boolean; isDirectory: boolean; size: number; mtime: number }>
+  readdir(path: string): Promise<string[]>
+  mkdir(path: string): Promise<void>
+  delete(path: string): Promise<void>
 }
 
 /**
@@ -51,72 +51,72 @@ interface IFileSystem {
  * @returns Tuple of [file paths array, whether the limit was reached]
  */
 export async function listFiles(
-	dirPath: string,
-	recursive: boolean,
-	limit: number,
-	deps: ListFilesDependencies
+  dirPath: string,
+  recursive: boolean,
+  limit: number,
+  deps: ListFilesDependencies
 ): Promise<[string[], boolean]> {
-	// Handle special directories
-	const specialResult = await handleSpecialDirectories(dirPath, deps.pathUtils)
+  // Handle special directories
+  const specialResult = await handleSpecialDirectories(dirPath, deps.pathUtils)
 
-	if (specialResult) {
-		return specialResult
-	}
+  if (specialResult) {
+    return specialResult
+  }
 
-	// Get the ignore service
-	const ignoreService = deps.workspace.getIgnoreService()
-	await ignoreService.initialize()
+  // Get the ignore service
+  const ignoreService = deps.workspace.getIgnoreService()
+  await ignoreService.initialize()
 
-	// Use fast-glob to list files and directories
-	const pattern = recursive ? '**/*' : '*'
+  // Use fast-glob to list files and directories
+  const pattern = recursive ? '**/*' : '*'
 
-	// fast-glob configuration
-	const entries = await fg(pattern, {
-		cwd: dirPath,
-		absolute: true,
-		markDirectories: true,
-		dot: true,  // Include hidden files
-		onlyFiles: false,  // Include directories (for UI display)
+  // fast-glob configuration
+  const entries = await fg(pattern, {
+    cwd: dirPath,
+    absolute: true,
+    markDirectories: true,
+    dot: true,  // Include hidden files
+    onlyFiles: false,  // Include directories (for UI display)
 
-		// Fast pruning: skip large directories (performance optimization)
-		// This is the first layer of filtering - applies glob patterns only
-		ignore: DIRS_TO_IGNORE.map(dir => `**/${dir}/**`),
-		
-		// Support custom filesystem adapter (e.g., memfs for testing)
-		...(deps.fs && { fs: deps.fs }),
-	})
+    // Fast pruning: skip large directories (performance optimization)
+    // This is the first layer of filtering - applies glob patterns only
+    ignore: DIRS_TO_IGNORE.map(dir => `**/${dir}/**`),
 
-	// Use the unified IgnoreService for precise filtering
-	// This is the second layer - handles .gitignore complex rules
-	// Convert Entry[] to string[] for filterFiles
-	const filtered = ignoreService.filterFiles(entries.map(String))
+    // Support custom filesystem adapter (e.g., memfs for testing)
+    ...(deps.fs && { fs: deps.fs }),
+  })
 
-	// Apply limit
-	const limited = filtered.slice(0, limit)
-	const hitLimit = filtered.length > limit
+  // Use the unified IgnoreService for precise filtering
+  // This is the second layer - handles .gitignore complex rules
+  // Convert Entry[] to string[] for filterFiles
+  const filtered = ignoreService.filterFiles(entries.map(String))
 
-	return [limited, hitLimit]
+  // Apply limit
+  const limited = filtered.slice(0, limit)
+  const hitLimit = filtered.length > limit
+
+  return [limited, hitLimit]
 }
 
 /**
  * Handle special directories (root, home) that should not be fully listed
  */
 async function handleSpecialDirectories(dirPath: string, pathUtils: IPathUtils): Promise<[string[], boolean] | null> {
-	const absolutePath = pathUtils.resolve(dirPath)
+  const absolutePath = pathUtils.resolve(dirPath)
 
-	// Do not allow listing files in root directory
-	const root = process.platform === "win32" ? absolutePath.split(/[/\\]/)[0] + "/" : "/"
-	const isRoot = pathUtils.normalize(absolutePath) === pathUtils.normalize(root)
-	if (isRoot) {
-		return [[root], false]
-	}
+  // Do not allow listing files in root directory
+  const root = process.platform === "win32" ? absolutePath.split(/[/\\]/)[0] + "/" : "/"
+  const isRoot = pathUtils.normalize(absolutePath) === pathUtils.normalize(root)
+  if (isRoot) {
+    return [[root], false]
+  }
 
-	// Do not allow listing files in home directory
-	const homeDir = os.homedir()
-	const isHomeDir = pathUtils.normalize(absolutePath) === pathUtils.normalize(homeDir)
-	if (isHomeDir) {
-		return [[homeDir], false]
-	}
+  // Do not allow listing files in home directory
+  const homeDir = os.homedir()
+  const isHomeDir = pathUtils.normalize(absolutePath) === pathUtils.normalize(homeDir)
+  if (isHomeDir) {
+    return [[homeDir], false]
+  }
 
-	return null
+  return null
 }

@@ -12,24 +12,24 @@ import * as jsoncParser from 'jsonc-parser'
  * Single configuration layer result
  */
 export interface ConfigLayer {
-	/** Parsed configuration object (or null if file doesn't exist) */
-	config: Record<string, any> | null
-	/** File path for this layer */
-	path: string
+  /** Parsed configuration object (or null if file doesn't exist) */
+  config: Record<string, any> | null
+  /** File path for this layer */
+  path: string
 }
 
 /**
  * All configuration layers
  */
 export interface ConfigLayers {
-	/** Default built-in configuration */
-	defaultConfig: Record<string, any>
-	/** Global configuration layer */
-	global: ConfigLayer
-	/** Project configuration layer */
-	project: ConfigLayer
-	/** Effective configuration (merged: default → global → project) */
-	effective: Record<string, any>
+  /** Default built-in configuration */
+  defaultConfig: Record<string, any>
+  /** Global configuration layer */
+  global: ConfigLayer
+  /** Project configuration layer */
+  project: ConfigLayer
+  /** Effective configuration (merged: default → global → project) */
+  effective: Record<string, any>
 }
 
 /**
@@ -40,17 +40,17 @@ export interface ConfigLayers {
  * @returns Parsed configuration object, or null if file doesn't exist
  */
 function loadConfigLayer(filePath: string, layerName: string): Record<string, any> | null {
-	try {
-		if (fs.existsSync(filePath)) {
-			const content = fs.readFileSync(filePath, 'utf-8')
-			return jsoncParser.parse(content)
-		}
-		return null
-	} catch (error) {
-		console.error(`Failed to read ${layerName} configuration: ${error}`)
-		console.error(`Path: ${filePath}`)
-		process.exit(1)
-	}
+  try {
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8')
+      return jsoncParser.parse(content)
+    }
+    return null
+  } catch (error) {
+    console.error(`Failed to read ${layerName} configuration: ${error}`)
+    console.error(`Path: ${filePath}`)
+    process.exit(1)
+  }
 }
 
 /**
@@ -65,23 +65,23 @@ function loadConfigLayer(filePath: string, layerName: string): Record<string, an
  * @returns All configuration layers
  */
 export function loadConfigLayers(
-	globalConfigPath: string,
-	projectConfigPath: string,
-	defaultConfig: Record<string, any>
+  globalConfigPath: string,
+  projectConfigPath: string,
+  defaultConfig: Record<string, any>
 ): ConfigLayers {
-	const globalConfig = loadConfigLayer(globalConfigPath, 'global')
-	const projectConfig = loadConfigLayer(projectConfigPath, 'project')
+  const globalConfig = loadConfigLayer(globalConfigPath, 'global')
+  const projectConfig = loadConfigLayer(projectConfigPath, 'project')
 
-	const effectiveConfig = {
-		...defaultConfig,
-		...(globalConfig ?? {}),
-		...(projectConfig ?? {})
-	}
+  const effectiveConfig = {
+    ...defaultConfig,
+    ...(globalConfig ?? {}),
+    ...(projectConfig ?? {})
+  }
 
-	return {
-		defaultConfig,
-		global: { config: globalConfig, path: globalConfigPath },
-		project: { config: projectConfig, path: projectConfigPath },
-		effective: effectiveConfig
-	}
+  return {
+    defaultConfig,
+    global: { config: globalConfig, path: globalConfigPath },
+    project: { config: projectConfig, path: projectConfigPath },
+    effective: effectiveConfig
+  }
 }
