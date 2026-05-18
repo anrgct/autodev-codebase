@@ -245,6 +245,25 @@ InferenceType::Search → Bm25::search_embed:40 (bm25.rs:40)
 **问题：** 原始计划假定 Qdrant "自动对 payload 字段做分词"，实际机制不同。
 **修复：** 阅读 Qdrant 源码确认正确方式 — Named Vector 内传 Document 类型。
 
+### 2026-06-06
+**问题：** 混合搜索开启后 `maxResults=50` 实际只返回 16 条结果。
+**原因：**
+
+1. `score_threshold: 0.1` 被传入 RRF 融合查询。RRF 默认 k=2，分数公式为 `1/(2+rank)`，排名第 8 以后的结果得分均低于 0.1，被 Qdrant 过滤掉。该阈值是为纯 dense 搜索（cosine 相似度 0~1 范围）设计的，不适用于 RRF 融合分数。
+
+2. Prefetch limit 分配过于紧凑（dense=39, sparse=12），RRF 最多只有 51 个候选，刚好够 50 的 limit，没有余量。
+
+**修复：** (`src/code-index/vector-store/qdrant-client.ts`)
+
+- 混合搜索时不再传 `score_threshold`——最终结果数量由 `limit` 控制
+- Prefetch limit 基数从 `validatedLimit` 增大至 `validatedLimit × 2`，确保足够候选
+
+**验证：**
+
+- 关闭 hybrid 搜索 → 返回 50 条 ✅
+- 修复后开启 hybrid 搜索 → 返回 50 条 ✅
+- 32 个 QdrantVectorStore 单元测试全部通过 ✅
+
 ## 总结
 
 **关键收获：**
@@ -260,6 +279,7 @@ codebase search -f '!*.md' '字面量"Clear index mode"' | grep -E 'results in|^
 ```
 
 **后续优化方向：**
+- [x] ~~RRF `score_threshold` 与 RRF 分数不兼容导致结果数偏少~~（已修复：hybrid 查询不再传 `score_threshold`）
 - 支持 RRF 的 `rank_constant` 参数可配置
 - 支持 `explain` 模式查看各子查询贡献
 - 支持 linear fusion 作为 RRF 的替代融合策略

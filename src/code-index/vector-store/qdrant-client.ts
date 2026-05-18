@@ -570,9 +570,13 @@ export class QdrantVectorStore implements IVectorStore {
         const sparseWeight = hybridOptions?.sparseWeight ?? 0.3
         const totalWeight = denseWeight + sparseWeight
 
-        // Allocate limits proportionally to weights
-        const denseLimit = Math.max(1, Math.ceil(validatedLimit * denseWeight / totalWeight))
-        const sparseLimit = Math.max(1, Math.ceil(validatedLimit * sparseWeight / totalWeight))
+        // Allocate limits with enough candidates for RRF fusion.
+        // Prefetch must return at least validatedLimit each, otherwise RRF has
+        // too few candidates to fill the final limit (Qdrant doc: "prefetches
+        // must have a limit of at least limit + offset of the main query").
+        const prefetchBase = Math.max(validatedLimit, validatedLimit * 2)
+        const denseLimit = Math.max(1, Math.ceil(prefetchBase * denseWeight / totalWeight))
+        const sparseLimit = Math.max(1, Math.ceil(prefetchBase * sparseWeight / totalWeight))
 
         searchRequest = {
             query: { fusion: "rrf" },
@@ -598,7 +602,11 @@ export class QdrantVectorStore implements IVectorStore {
               },
             ],
             limit: validatedLimit,
-            score_threshold: validatedMinScore,
+            // NOTE: score_threshold intentionally omitted for hybrid RRF queries.
+            // RRF produces fused scores on a completely different scale than raw
+            // cosine similarity, so the configured minScore (typically 0.1-0.4)
+            // would incorrectly filter out most results. The final result count
+            // is controlled by outer limit anyway.
             with_payload: true,
           }
       } else {
