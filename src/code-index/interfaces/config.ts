@@ -198,6 +198,16 @@ export interface CodeIndexConfig {
 	summarizerConcurrency?: number
 	summarizerMaxRetries?: number
 	summarizerRetryDelayMs?: number
+
+	// Highlighter configuration (semantic highlight / line-level filtering)
+	highlighterEnabled?: boolean
+	highlighterProvider?: "llamacpp" | "llamacpp-llm"
+	highlighterGgufPath?: string
+	highlighterGgufLlmPath?: string
+	highlighterTopK?: number
+	highlighterMode?: "topk" | "threshold"
+	highlighterThreshold?: number
+	highlighterConcurrency?: number
 }
 
 /**
@@ -263,6 +273,16 @@ export type PreviousConfigSnapshot = {
 	summarizerConcurrency?: number
 	summarizerMaxRetries?: number
 	summarizerRetryDelayMs?: number
+
+	// Highlighter
+	highlighterEnabled?: boolean
+	highlighterProvider?: "llamacpp" | "llamacpp-llm"
+	highlighterGgufPath?: string
+	highlighterGgufLlmPath?: string
+	highlighterTopK?: number
+	highlighterMode?: "topk" | "threshold"
+	highlighterThreshold?: number
+	highlighterConcurrency?: number
 }
 
 /**
@@ -345,4 +365,14 @@ export interface ConfigSnapshot {
 	summarizerConcurrency?: number
 	summarizerMaxRetries?: number
 	summarizerRetryDelayMs?: number
+
+	// Highlighter configuration
+	highlighterEnabled?: boolean
+	highlighterProvider?: "llamacpp" | "llamacpp-llm"
+	highlighterGgufPath?: string
+	highlighterGgufLlmPath?: string
+	highlighterTopK?: number
+	highlighterMode?: "topk" | "threshold"
+	highlighterThreshold?: number
+	highlighterConcurrency?: number
 }

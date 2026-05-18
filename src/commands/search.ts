@@ -14,6 +14,7 @@ interface SearchResult {
     startLine?: number;
     endLine?: number;
     hierarchyDisplay?: string;
+    highlightedText?: string;
   } | null;
   score?: number;
 }
@@ -64,12 +65,27 @@ function formatSearchResults(results: SearchResult[], query: string): string {
       }
     }
 
-    const avgScore = deduplicatedResults.length > 0
-      ? deduplicatedResults.reduce((sum, r) => sum + (r.score || 0), 0) / deduplicatedResults.length
+    // 过滤掉高亮器判定为"not related"的结果（highlightedText 存在但为空）
+    const dedupRemoved = fileResults.length - deduplicatedResults.length
+    const meaningfulResults = deduplicatedResults.filter((result: SearchResult) => {
+      // 如果 highlightedText 为 undefined，说明高亮器未运行，保留
+      if (result.payload?.["highlightedText"] === undefined) return true
+      // 高亮器运行了但返回空结果，说明与 query 无关，过滤掉
+      return result.payload["highlightedText"] !== ""
+    })
+    const highlightRemoved = deduplicatedResults.length - meaningfulResults.length
+
+    // 如果全部被过滤，跳过该文件
+    if (meaningfulResults.length === 0) return null
+
+    const avgScore = meaningfulResults.length > 0
+      ? meaningfulResults.reduce((sum, r) => sum + (r.score || 0), 0) / meaningfulResults.length
       : 0;
 
-    const codeChunks = deduplicatedResults.map((result: SearchResult) => {
-      const codeChunk = result.payload?.codeChunk || 'No content available';
+    const codeChunks = meaningfulResults.map((result: SearchResult) => {
+      // 优先使用高亮文本，回退到原始代码块
+      const highlightedText = result.payload?.["highlightedText"];
+      const codeChunk = highlightedText || result.payload?.codeChunk || 'No content available';
       const startLine = result.payload?.startLine;
       const endLine = result.payload?.endLine;
       const lineInfo = (startLine !== undefined && endLine !== undefined)
@@ -81,27 +97,34 @@ function formatSearchResults(results: SearchResult[], query: string): string {
 ${codeChunk}`;
     }).join('\n' + '─'.repeat(5) + '\n');
 
-    const snippetInfo = deduplicatedResults.length > 1 ? ` | ${deduplicatedResults.length} snippets` : '';
-    const duplicateInfo = fileResults.length !== deduplicatedResults.length
-      ? ` (${fileResults.length - deduplicatedResults.length} duplicates removed)`
-      : '';
+    const snippetInfo = meaningfulResults.length > 1 ? ` | ${meaningfulResults.length} snippets` : '';
+    const parts: string[] = []
+    if (dedupRemoved > 0) parts.push(`${dedupRemoved} duplicates removed`)
+    if (highlightRemoved > 0) parts.push(`${highlightRemoved} not related`)
+    const removedInfo = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
     return {
       filePath,
-      topScore: deduplicatedResults[0]?.score || 0,
+      topScore: meaningfulResults[0]?.score || 0,
       avgScore,
-      formattedText: `${'='.repeat(50)}\nFile: "${filePath}"${snippetInfo}${duplicateInfo}\n${'='.repeat(50)}\n${codeChunks}`
+      formattedText: `${'='.repeat(50)}\nFile: "${filePath}"${snippetInfo}${removedInfo}\n${'='.repeat(50)}\n${codeChunks}`
     };
   });
 
-  formattedResults.sort((a, b) => b.topScore - a.topScore);
+  const filtered = formattedResults.filter((r): r is NonNullable<typeof r> => r !== null)
+  filtered.sort((a, b) => b.topScore - a.topScore);
 
-  const fileCount = resultsByFile.size;
-  const summary = `Found ${results.length} result${results.length > 1 ? 's' : ''} in ${fileCount} file${fileCount > 1 ? 's' : ''} for: "${query}"
+  const fileCount = filtered.length;
+  const totalSnippets = filtered.reduce((sum, r) => {
+    // extract snippet count from formattedText
+    const match = r.formattedText.match(/\| (\d+) snippets/)
+    return sum + (match ? parseInt(match[1], 10) : 1)
+  }, 0)
+  const summary = `Found ${totalSnippets} result${totalSnippets > 1 ? 's' : ''} in ${fileCount} file${fileCount > 1 ? 's' : ''} for: "${query}"
 
 `;
 
-  const formattedTexts = formattedResults.map(r => r.formattedText);
+  const formattedTexts = filtered.map(r => r.formattedText);
   return summary + formattedTexts.join('\n\n');
 }
 
@@ -153,7 +176,7 @@ function formatSearchResultsAsJson(results: SearchResult[], query: string): stri
   const snippets = deduplicatedResults.map((result: SearchResult) => {
     const startLine = result.payload?.startLine;
     const endLine = result.payload?.endLine;
-    return {
+    const snippet: any = {
       filePath: result.payload?.filePath || 'Unknown file',
       code: result.payload?.codeChunk || '',
       startLine: startLine,
@@ -162,6 +185,11 @@ function formatSearchResultsAsJson(results: SearchResult[], query: string): stri
       hierarchy: result.payload?.hierarchyDisplay || '',
       score: parseFloat((result.score || 0).toFixed(3))
     };
+    // Include highlighted text if available
+    if (result.payload?.["highlightedText"]) {
+      snippet.highlightedText = result.payload["highlightedText"];
+    }
+    return snippet;
   });
 
   const jsonResponse = {

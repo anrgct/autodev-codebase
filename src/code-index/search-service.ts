@@ -1,5 +1,5 @@
 import * as path from "path"
-import { VectorStoreSearchResult, SearchFilter, IReranker, RerankerCandidate } from "./interfaces"
+import { VectorStoreSearchResult, SearchFilter, IReranker, RerankerCandidate, IHighlighter } from "./interfaces"
 import { IEmbedder } from "./interfaces/embedder"
 import { IVectorStore } from "./interfaces/vector-store"
 import { CodeIndexConfigManager } from "./config-manager"
@@ -18,6 +18,7 @@ export class CodeIndexSearchService {
 		private readonly embedder: IEmbedder,
 		private readonly vectorStore: IVectorStore,
 		private readonly reranker?: IReranker,
+		private readonly highlighter?: IHighlighter,
 	) {}
 
 	/**
@@ -112,9 +113,51 @@ export class CodeIndexSearchService {
 
 				// 按 reranker 分数降序重新排序
 				results.sort((a, b) => b.score - a.score)
-			}
+				}
 
-			return results
+				// If highlighter is enabled, apply line-level semantic highlighting
+				if (this.highlighter && results.length > 0) {
+					const highlighterConfig = this.configManager.highlighterConfig
+					if (highlighterConfig.enabled) {
+						const concurrency = highlighterConfig.concurrency ?? 2
+						const highlightable = results.filter(
+							(r): r is typeof r & { payload: { codeChunk: string; startLine: number } } =>
+								!!r.payload?.codeChunk && r.payload?.startLine != null,
+						)
+
+						// Process with concurrency control — each highlight() call
+						// creates its own LlamaContext, verified thread-safe.
+						for (let i = 0; i < highlightable.length; i += concurrency) {
+							const batch = highlightable.slice(i, i + concurrency)
+							await Promise.all(
+								batch.map(async (result) => {
+									try {
+										const highlightResult = await this.highlighter!.highlight(
+											query,
+											result.payload.codeChunk,
+											result.payload.startLine,
+										)
+										if (result.payload) {
+											result.payload["highlightedText"] =
+												highlightResult.formattedText
+											result.payload["highlightLines"] =
+												highlightResult.lines
+										}
+									} catch (err) {
+										console.warn(
+											"[CodeIndexSearchService] Highlighter error for",
+											result.payload?.filePath,
+											":",
+											err,
+										)
+									}
+								}),
+							)
+						}
+					}
+				}
+
+				return results
 		} catch (error) {
 			console.error("[CodeIndexSearchService] Error during search:", error)
 			this.stateManager.setSystemState("Error", `Search failed: ${(error as Error).message}`)
