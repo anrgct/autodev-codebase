@@ -6,11 +6,15 @@
     "codebase": "dist/cli.js"
   },
   "files": [
-    "dist/**/*"
+    "dist/**/*",
+    "patches/**/*",
+    "scripts/deploy-llamacpp-patch.ts",
+    "vendor/llama-addon/binaries/**/*"
   ],
   "scripts": {
     "dev": "npx tsx src/cli.ts --demo",
     "build": "rollup -c rollup.config.cjs && chmod +x dist/cli.js",
+    "build:llamacpp": "bash vendor/llama-addon/build.sh",
     "type-check": "npx tsc -p tsconfig.json --noEmit",
     "mcp-server": "npx tsx src/cli.ts --serve --demo --port=3001",
     "test": "vitest run",
@@ -18,7 +22,7 @@
     "test:e2e": "npx vitest --config vitest.e2e.config.ts",
     "test:coverage": "vitest run --coverage",
     "push": "npm publish --access public",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package && npx tsx scripts/deploy-llamacpp-patch.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.13.1",
@@ -43,12 +47,10 @@
     "open": "^11.0.0",
     "openai": "^4.52.0",
     "p-limit": "^3.1.0",
-    "patch-package": "^8.0.1",
     "rollup": "^4.21.2",
     "tree-sitter-wasms": "^0.1.12",
     "ts-morph": "^27.0.2",
     "tslib": "^2.7.0",
-    "tsx": "^4.20.3",
     "typescript": "^5.6.2",
     "undici": "^6.19.8",
     "undici-types": "^7.10.0",
@@ -57,6 +59,8 @@
     "web-tree-sitter": "^0.23.0"
   },
   "dependencies": {
-    "node-llama-cpp": "^3.18.1"
+    "node-llama-cpp": "^3.18.1",
+    "patch-package": "^8.0.1",
+    "tsx": "^4.20.3"
   }
 }

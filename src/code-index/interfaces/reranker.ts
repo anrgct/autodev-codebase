@@ -23,7 +23,7 @@ export interface RerankerInfo {
 
 export interface RerankerConfig {
   enabled: boolean
-  provider: 'ollama' | 'openai-compatible' | 'llamacpp'
+  provider: 'ollama' | 'openai-compatible' | 'llamacpp' | 'qrranker'
   ollamaBaseUrl?: string
   ollamaModelId?: string
   openAiCompatibleBaseUrl?: string

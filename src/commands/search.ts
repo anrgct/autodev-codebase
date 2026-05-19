@@ -107,7 +107,7 @@ ${codeChunk}`;
       filePath,
       topScore: meaningfulResults[0]?.score || 0,
       avgScore,
-      formattedText: `${'='.repeat(50)}\nFile: "${filePath}"${snippetInfo}${removedInfo}\n${'='.repeat(50)}\n${codeChunks}`
+      formattedText: `${'='.repeat(50)}\nFile: "${filePath}"${snippetInfo}${removedInfo}\n\n${codeChunks}`
     };
   });
 

@@ -11,6 +11,7 @@ import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { LlamaCppReranker } from "./rerankers/llamacpp-rerank"
 import { LlamaCppLLMReranker } from "./rerankers/llamacpp-llm-rerank"
+import { QRRankerReranker } from "./rerankers/qrranker"
 import { OllamaSummarizer } from "./summarizers/ollama"
 import { OpenAICompatibleSummarizer } from "./summarizers/openai-compatible"
 import { LlamaCppSummarizer } from "./summarizers/llamacpp"
@@ -427,6 +428,17 @@ export class CodeIndexServiceFactory {
         config.concurrency || 3,
         config.maxRetries || 3,
         config.retryDelayMs || 1000
+      )
+    }
+
+    if (config.provider === 'qrranker' && config.llamaCppRerankerModelPath) {
+      return new QRRankerReranker(
+        config.llamaCppRerankerModelPath,
+        this.logger,
+        config.batchSize || 10,
+        config.concurrency || 2,
+        config.maxRetries || 2,
+        config.retryDelayMs || 1000,
       )
     }
 
