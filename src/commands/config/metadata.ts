@@ -146,11 +146,12 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   highlighterEnabled: { type: 'boolean', description: 'Enable semantic line-level highlighting for search results' },
   highlighterProvider: {
     type: 'enum',
-    enumValues: ['llamacpp', 'llamacpp-llm'] as const,
-    description: 'Highlight provider: llamacpp (dedicated model) or llamacpp-llm (LLM prompt-based)'
+    enumValues: ['llamacpp', 'llamacpp-llm', 'qrranker'] as const,
+    description: 'Highlight provider: llamacpp (dedicated model), llamacpp-llm (LLM prompt-based), or qrranker (QRRanker attention-based)'
   },
   highlighterGgufPath: { type: 'string', description: 'Path to dedicated semantic-highlight GGUF model (provider=llamacpp)' },
   highlighterGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model for prompt-based highlighting (provider=llamacpp-llm, e.g. 0.6B model)' },
+  highlighterGgufQrrankerPath: { type: 'string', description: 'Path to QRRanker GGUF model for attention-based highlighting (provider=qrranker, Qwen3-4B)' },
   highlighterTopK: { type: 'integer', minValue: 1, description: 'Number of top-K lines to keep (topk mode)' },
   highlighterMode: {
     type: 'enum',

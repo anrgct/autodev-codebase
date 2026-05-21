@@ -24,10 +24,12 @@ export interface HighlightResult {
   startLine: number
   /** 原始结束行号 */
   endLine: number
+  /** [debug] 每个 token 的 attention 热力图可视化字符串 */
+  debugTokenView?: string
 }
 
 /** Highlighter provider 类型 */
-export type HighlighterProvider = "llamacpp" | "llamacpp-llm"
+export type HighlighterProvider = "llamacpp" | "llamacpp-llm" | "qrranker"
 
 /**
  * Highlighter 配置
@@ -40,6 +42,8 @@ export interface HighlighterConfig {
   ggufPath?: string
   /** LLM GGUF 模型路径（provider=llamacpp-llm 时使用，0.6B 小模型） */
   ggufLlmPath?: string
+  /** QRRanker GGUF 模型路径（provider=qrranker 时使用，Qwen3-4B attention-based） */
+  ggufQrrankerPath?: string
   /**
    * 选取模式
    * - `"topk"`: 保留分值最高的 topK 行（默认）
@@ -64,6 +68,14 @@ export interface HighlightOptions {
   topK?: number
   /** 最低分值阈值 */
   threshold?: number
+  /** [debug] 启用 token 级 attention 热力图输出（仅 qrranker provider） */
+  debugHighlight?: boolean
+  /** [internal] 来自 reranker 的预计算 per-token 分数（供 qrranker provider 复用） */
+  _qrrankerPerTokenScores?: Float32Array
+  /** [internal] 预计算分数对应的代码原文 */
+  _qrrankerCodeText?: string
+  /** [internal] 来自 reranker 的 code token IDs（供 debug 热力图 per-token 块着色使用） */
+  _qrrankerCodeTokenIds?: number[]
 }
 
 /**

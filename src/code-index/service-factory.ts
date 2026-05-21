@@ -17,6 +17,7 @@ import { OpenAICompatibleSummarizer } from "./summarizers/openai-compatible"
 import { LlamaCppSummarizer } from "./summarizers/llamacpp"
 import { LlamaCppHighlightProvider } from "./highlighters/llamacpp"
 import { LlamaCppLLMHighlighter } from "./highlighters/llamacpp-llm"
+import { QRRankerHighlighter } from "./highlighters/qrranker"
 import { createHash } from "crypto"
 import { QdrantClient } from "@qdrant/js-client-rest"
 import { getLlama, LlamaModel, LlamaLogLevel } from "node-llama-cpp"
@@ -571,6 +572,21 @@ export class CodeIndexServiceFactory {
       // Model is loaded lazily on first highlight() call
       return new LlamaCppLLMHighlighter(
         config.ggufLlmPath,
+        config.topK ?? 20,
+        this.logger,
+        config.mode ?? "topk",
+        config.threshold ?? 0.5,
+      )
+    }
+
+    if (provider === "qrranker") {
+      if (!config.ggufQrrankerPath) {
+        this.warn("Highlighter is enabled with qrranker provider but highlighterGgufQrrankerPath is not configured")
+        return undefined
+      }
+      // Model is loaded lazily on first highlight() call (independent of reranker)
+      return new QRRankerHighlighter(
+        config.ggufQrrankerPath,
         config.topK ?? 20,
         this.logger,
         config.mode ?? "topk",

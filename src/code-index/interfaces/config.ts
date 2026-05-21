@@ -201,9 +201,10 @@ export interface CodeIndexConfig {
 
   // Highlighter configuration (semantic highlight / line-level filtering)
   highlighterEnabled?: boolean
-  highlighterProvider?: "llamacpp" | "llamacpp-llm"
+  highlighterProvider?: "llamacpp" | "llamacpp-llm" | "qrranker"
   highlighterGgufPath?: string
   highlighterGgufLlmPath?: string
+  highlighterGgufQrrankerPath?: string
   highlighterTopK?: number
   highlighterMode?: "topk" | "threshold"
   highlighterThreshold?: number
@@ -276,9 +277,10 @@ export type PreviousConfigSnapshot = {
 
   // Highlighter
   highlighterEnabled?: boolean
-  highlighterProvider?: "llamacpp" | "llamacpp-llm"
+  highlighterProvider?: "llamacpp" | "llamacpp-llm" | "qrranker"
   highlighterGgufPath?: string
   highlighterGgufLlmPath?: string
+  highlighterGgufQrrankerPath?: string
   highlighterTopK?: number
   highlighterMode?: "topk" | "threshold"
   highlighterThreshold?: number
@@ -368,9 +370,10 @@ export interface ConfigSnapshot {
 
   // Highlighter configuration
   highlighterEnabled?: boolean
-  highlighterProvider?: "llamacpp" | "llamacpp-llm"
+  highlighterProvider?: "llamacpp" | "llamacpp-llm" | "qrranker"
   highlighterGgufPath?: string
   highlighterGgufLlmPath?: string
+  highlighterGgufQrrankerPath?: string
   highlighterTopK?: number
   highlighterMode?: "topk" | "threshold"
   highlighterThreshold?: number

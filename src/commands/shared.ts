@@ -35,6 +35,7 @@ export interface CommandOptions {
   watch?: boolean;
   serve?: boolean;
   global?: boolean;
+  debugHighlight?: boolean;
   // Call command options
   viz?: string;
   query?: string;

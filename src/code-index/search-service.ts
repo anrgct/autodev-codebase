@@ -132,16 +132,34 @@ export class CodeIndexSearchService {
               await Promise.all(
                 batch.map(async (result) => {
                   try {
+                    // Pass precomputed QR ranker scores if available (optimization for qrranker provider)
+                    const highlightOptions: import("./interfaces/highlighter").HighlightOptions = {};
+                    if (filter?.debugHighlight) {
+                      highlightOptions.debugHighlight = true;
+                    }
+                    const payload = result.payload as Record<string, unknown> | undefined;
+                    if (payload?.["_qrrankerPerTokenScores"] && payload?.["_qrrankerCodeText"]) {
+                      highlightOptions._qrrankerPerTokenScores = payload["_qrrankerPerTokenScores"] as Float32Array;
+                      highlightOptions._qrrankerCodeText = payload["_qrrankerCodeText"] as string;
+                      if (payload["_qrrankerCodeTokenIds"]) {
+                        highlightOptions._qrrankerCodeTokenIds = payload["_qrrankerCodeTokenIds"] as number[];
+                      }
+                    }
                     const highlightResult = await this.highlighter!.highlight(
                       query,
                       result.payload.codeChunk,
                       result.payload.startLine,
+                      highlightOptions,
                     )
                     if (result.payload) {
                       result.payload["highlightedText"] =
                         highlightResult.formattedText
                       result.payload["highlightLines"] =
                         highlightResult.lines
+                      if (highlightResult.debugTokenView) {
+                        result.payload["debugTokenView"] =
+                          highlightResult.debugTokenView
+                      }
                     }
                   } catch (err) {
                     console.warn(

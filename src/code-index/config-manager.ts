@@ -52,6 +52,7 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
   'highlighterProvider',                // Highlighter provider change
   'highlighterGgufPath',                // Highlighter model path
   'highlighterGgufLlmPath',             // Highlighter LLM model path
+  'highlighterGgufQrrankerPath',        // Highlighter QRRanker model path
   'highlighterTopK',                    // Highlighter top-K lines
   'highlighterMode',                    // Highlighter selection mode
   'highlighterThreshold',               // Highlighter threshold
@@ -260,6 +261,7 @@ export class CodeIndexConfigManager {
       highlighterProvider: config.highlighterProvider,
       highlighterGgufPath: config.highlighterGgufPath,
       highlighterGgufLlmPath: config.highlighterGgufLlmPath,
+      highlighterGgufQrrankerPath: config.highlighterGgufQrrankerPath,
       highlighterTopK: config.highlighterTopK,
       highlighterMode: config.highlighterMode,
       highlighterThreshold: config.highlighterThreshold,
@@ -594,6 +596,7 @@ export class CodeIndexConfigManager {
       provider: this.config?.highlighterProvider ?? "llamacpp",
       ggufPath: this.config?.highlighterGgufPath,
       ggufLlmPath: this.config?.highlighterGgufLlmPath,
+      ggufQrrankerPath: this.config?.highlighterGgufQrrankerPath,
       topK: this.config?.highlighterTopK ?? 20,
       mode: this.config?.highlighterMode ?? "topk",
       threshold: this.config?.highlighterThreshold ?? 0.5,

@@ -161,13 +161,17 @@ export class QRRankerReranker implements IReranker {
    *   ne[3] = 1
    *
    * Element access: data[head * n_tokens * n_kv + tok * n_kv + kv]
+   *
+   * @returns { chunkScores, perChunkTokenScores }
+   *   chunkScores: aggregate score per chunk
+   *   perChunkTokenScores: per-KV-token scores for each chunk's token range
    */
   private computeQRScores(
     context: LlamaContext,
     chunkRanges: Array<{ start: number; end: number }>,
     queryStart: number,
     queryEnd: number,
-  ): number[] {
+  ): { chunkScores: number[]; perChunkTokenScores: Float32Array[] } {
     const shape = context.getKqSoftMaxShape();
     const nKv = shape.nKv;
     const nTokens = shape.nTokens;
@@ -180,7 +184,8 @@ export class QRRankerReranker implements IReranker {
       `nLayers=${shape.nLayers}, layers=[${shape.layers.join(",")}]`,
     );
 
-    const chunkScores = new Array<number>(nChunks).fill(0);
+    // Per-KV-position scores aggregated across all QR heads
+    const perKvScores = new Float32Array(nKv);
 
     for (const { layer, head } of QR_HEADS) {
       const layerData = context.getKqSoftMax(layer);
@@ -189,29 +194,40 @@ export class QRRankerReranker implements IReranker {
         continue;
       }
 
-      // Mean attention over query tokens for this head
-      const attnPerKv = new Float32Array(nKv);
+      // Sum attention from each query token to each KV position
       for (let q = queryStart; q < queryEnd; q++) {
         for (let kv = 0; kv < nKv; kv++) {
-          attnPerKv[kv] += layerData[head * nTokens * nKv + q * nKv + kv];
+          perKvScores[kv] += layerData[head * nTokens * nKv + q * nKv + kv];
         }
-      }
-      for (let kv = 0; kv < nKv; kv++) {
-        attnPerKv[kv] /= nQueryTokens;
-      }
-
-      // Sum over each chunk's token range
-      for (let ci = 0; ci < nChunks; ci++) {
-        const { start, end } = chunkRanges[ci];
-        let sum = 0;
-        for (let kv = start; kv < end && kv < nKv; kv++) {
-          sum += attnPerKv[kv];
-        }
-        chunkScores[ci] += sum;
       }
     }
 
-    return chunkScores;
+    // Normalize by (heads × query tokens) so scores are in [0, 1]
+    const normalizer = QR_HEADS.length * nQueryTokens;
+    if (normalizer > 0) {
+      for (let kv = 0; kv < nKv; kv++) {
+        perKvScores[kv] /= normalizer;
+      }
+    }
+
+    // Sum per-chunk aggregate scores and extract per-token slices
+    const chunkScores = new Array<number>(nChunks).fill(0);
+    const perChunkTokenScores: Float32Array[] = [];
+
+    for (let ci = 0; ci < nChunks; ci++) {
+      const { start, end } = chunkRanges[ci];
+      const chunkLen = Math.min(end, nKv) - start;
+      const tokenScores = new Float32Array(chunkLen);
+      let sum = 0;
+      for (let kv = start; kv < start + chunkLen; kv++) {
+        tokenScores[kv - start] = perKvScores[kv];
+        sum += perKvScores[kv];
+      }
+      chunkScores[ci] = sum;
+      perChunkTokenScores.push(tokenScores);
+    }
+
+    return { chunkScores, perChunkTokenScores };
   }
 
   // ─── IReranker Interface ────────────────────────────────────────────
@@ -263,12 +279,9 @@ export class QRRankerReranker implements IReranker {
 
     // Create context with kq_soft_max collection enabled
     const ubatch = Math.min(tokens.length, 8192);
-    if (tokens.length > 8192) {
-      this.logger?.warn(
-        `[QRRanker] Input (${tokens.length} tokens) exceeds max batch (8192). ` +
-        `Results may be incomplete.`,
-      );
-    }
+    this.logger?.info(
+      `[QRRanker] Processing ${tokens.length} tokens with batchSize=${ubatch}`,
+    );
     const context = await model.createContext({
       contextSize: Math.max(32768, tokens.length + 256),
       batchSize: ubatch,
@@ -284,14 +297,95 @@ export class QRRankerReranker implements IReranker {
         `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs`,
       );
 
-      const scores = this.computeQRScores(context, chunkRanges, queryStart, queryEnd);
+      const { chunkScores, perChunkTokenScores } = this.computeQRScores(context, chunkRanges, queryStart, queryEnd);
 
-      const results: RerankerResult[] = batch.map((candidate, i) => ({
-        id: candidate.id,
-        score: scores[i] ?? 0,
-        originalScore: candidate.score,
-        payload: candidate.payload,
-      }));
+      const results: RerankerResult[] = batch.map((candidate, i) => {
+        // Slice per-token scores to code region only, so the highlighter can
+        // map directly from code tokens to lines without needing to know the
+        // chunk's prefix/suffix format (which varies per chunk by title/hierarchy).
+        let codeScores = perChunkTokenScores[i];
+    let codeTokenIds: number[] = [];
+        if (codeScores.length > 0) {
+          const chunkStr = this.chunkText(candidate, i);
+          const chunkTok = model.tokenize(chunkStr);
+          const contentTok = model.tokenize(candidate.content);
+          if (contentTok.length > 0 && contentTok.length <= chunkTok.length) {
+            const firstId = Number(contentTok[0]);
+            const maxStart = chunkTok.length - contentTok.length;
+            let codeStart = -1;
+            for (let j = 0; j <= maxStart; j++) {
+              if (Number(chunkTok[j]) !== firstId) continue;
+              let match = true;
+              for (let k = 1; k < contentTok.length; k++) {
+                if (Number(chunkTok[j + k]) !== Number(contentTok[k])) { match = false; break; }
+              }
+              if (match) { codeStart = j; break; }
+            }
+            if (codeStart >= 0) {
+              const codeLen = Math.min(contentTok.length, codeScores.length - codeStart);
+              if (codeLen > 0 && codeLen < codeScores.length) {
+                const sliced = new Float32Array(codeLen);
+                for (let j = 0; j < codeLen; j++) sliced[j] = codeScores[codeStart + j];
+                codeScores = sliced;
+              }
+              const chunkStart = chunkRanges[i].start;
+              codeTokenIds = Array.from(
+                { length: codeLen },
+                (_, j) => Number(tokens[chunkStart + codeStart + j]),
+              );
+            } else {
+              // Use CONTEXTUAL token positions to find code start within chunk.
+              // perChunkTokenScores[i] is indexed at [chunkRanges[i].start, chunkRanges[i].end),
+              // but these ranges were computed from isolated tokenization. BPE boundary merging
+              // means the contextual token count and IDs may differ from isolated tokenization.
+              // Strategy: group-detokenize the contextual chunk tokens, find the code content's
+              // exact character position in the reconstructed text, then map back to token index
+              // by re-detokenizing individually and accumulating character lengths.
+              const chunkStart = chunkRanges[i].start;
+              const chunkEnd = chunkRanges[i].end;
+              const contextualChunkTokens = tokens.slice(chunkStart, chunkEnd);
+              const detokFull = model.detokenize(contextualChunkTokens);
+              const codeCharOffset = detokFull.indexOf(candidate.content.trim());
+              let codeStart = -1;
+              if (codeCharOffset >= 0) {
+                let charPos = 0;
+                for (let ti = 0; ti < contextualChunkTokens.length; ti++) {
+                  const text = model.detokenize([contextualChunkTokens[ti]]);
+                  charPos += text.length;
+                  if (charPos >= codeCharOffset) {
+                    codeStart = ti;
+                    break;
+                  }
+                }
+              }
+              if (codeStart < 0) codeStart = 0;
+              if (codeStart < codeScores.length) {
+                const codeLen = Math.min(contentTok.length, codeScores.length - codeStart);
+                if (codeLen > 0) {
+                  const sliced = new Float32Array(codeLen);
+                  for (let j = 0; j < codeLen; j++) sliced[j] = codeScores[codeStart + j];
+                  codeScores = sliced;
+                  codeTokenIds = Array.from(
+                    { length: codeLen },
+                    (_, j) => Number(tokens[chunkStart + codeStart + j]),
+                  );
+                }
+              }
+            }
+          }
+        }
+        return {
+          id: candidate.id,
+          score: chunkScores[i] ?? 0,
+          originalScore: candidate.score,
+          payload: {
+            ...candidate.payload,
+            _qrrankerPerTokenScores: codeScores,
+            _qrrankerCodeText: candidate.content,
+            _qrrankerCodeTokenIds: codeTokenIds,
+          },
+        };
+      });
 
       results.sort((a, b) => b.score - a.score);
       return results;

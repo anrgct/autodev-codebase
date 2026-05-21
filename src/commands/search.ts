@@ -226,7 +226,8 @@ async function searchHandler(query: string, options: any): Promise<void> {
     summarize: false,
     title: false,
     clearCache: false,
-    dryRun: false
+    dryRun: false,
+    debugHighlight: !!options.debugHighlight,
   };
 
   initGlobalLogger(commandOptions.logLevel);
@@ -252,6 +253,10 @@ async function searchHandler(query: string, options: any): Promise<void> {
   if (options.minScore !== undefined) {
     filter.minScore = validateMinScore(options.minScore);
     getLogger().info(`Min score: ${filter.minScore}`);
+  }
+
+  if (options.debugHighlight) {
+    filter.debugHighlight = true;
   }
 
   const manager = await initializeManager(commandOptions, { searchOnly: true });
@@ -287,6 +292,22 @@ async function searchHandler(query: string, options: any): Promise<void> {
     } else {
       const formattedOutput = formatSearchResults(results as SearchResult[], query);
       console.log(formattedOutput);
+    }
+
+    // Print token-level debug heatmaps if requested
+    if (options.debugHighlight && results && results.length > 0) {
+      for (const result of results) {
+        const debugView = (result as any).payload?.debugTokenView;
+        if (debugView) {
+          const filePath = result.payload?.filePath || 'Unknown file';
+          const startLine = result.payload?.startLine;
+          const endLine = result.payload?.endLine;
+          console.log(`\n${'═'.repeat(50)}`);
+          console.log(`[Debug Highlight] "${filePath}" (L${startLine ?? '?'}-${endLine ?? '?'})`);
+          console.log(debugView);
+          console.log(`${'═'.repeat(50)}\n`);
+        }
+      }
     }
 
     if (!results || results.length === 0) {
@@ -325,6 +346,7 @@ export function createSearchCommand(): Command {
     .option('--storage <path>', 'Custom storage path')
     .option('--cache <path>', 'Custom cache path')
     .option('--demo', 'Use demo workspace')
+    .option('--debug-highlight', 'Print token-level attention heatmap (qrranker highlighter only)')
     .action(searchHandler);
 
   return command;
