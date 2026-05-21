@@ -29,7 +29,7 @@ export interface HighlightResult {
 }
 
 /** Highlighter provider 类型 */
-export type HighlighterProvider = "llamacpp" | "llamacpp-llm" | "qrranker"
+export type HighlighterProvider = "semantic-highlight" | "llamacpp-llm" | "qrranker"
 
 /**
  * Highlighter 配置

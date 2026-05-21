@@ -550,8 +550,8 @@ export class CodeIndexConfigManager {
         openAiCompatibleBaseUrl: this.config.rerankerOpenAiCompatibleBaseUrl,
         openAiCompatibleModelId: this.config.rerankerOpenAiCompatibleModelId,
         openAiCompatibleApiKey: this.config.rerankerOpenAiCompatibleApiKey,
-        llamaCppModelPath: this.config.rerankerLlamaCppModelPath,
-        llamaCppRerankerModelPath: this.config.rerankerLlamaCppRerankerModelPath,
+        ggufPath: this.config.rerankerGgufPath,
+        ggufLlmPath: this.config.rerankerGgufLlmPath,
         llamaCppServer: this.config.rerankerLlamaCppServer === true,
         llamaCppServerBinPath: this.config.rerankerLlamaCppServerBinPath,
         minScore: this.config.rerankerMinScore,
@@ -593,7 +593,7 @@ export class CodeIndexConfigManager {
   public get highlighterConfig(): HighlighterConfig {
     return {
       enabled: this.config?.highlighterEnabled === true,
-      provider: this.config?.highlighterProvider ?? "llamacpp",
+      provider: this.config?.highlighterProvider ?? "semantic-highlight",
       ggufPath: this.config?.highlighterGgufPath,
       ggufLlmPath: this.config?.highlighterGgufLlmPath,
       ggufQrrankerPath: this.config?.highlighterGgufQrrankerPath,

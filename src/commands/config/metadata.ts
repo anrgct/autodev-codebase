@@ -101,7 +101,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   rerankerEnabled: { type: 'boolean', description: 'Enable LLM reranking for search results' },
   rerankerProvider: {
     type: 'enum',
-    enumValues: ['ollama', 'openai-compatible', 'llamacpp'] as const,
+    enumValues: ['ollama', 'openai-compatible', 'llamacpp', 'llamacpp-llm'] as const,
     description: 'Reranker provider to use'
   },
   rerankerOllamaBaseUrl: { type: 'string', description: 'Ollama server base URL for reranking' },
@@ -109,8 +109,8 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   rerankerOpenAiCompatibleBaseUrl: { type: 'string', description: 'OpenAI-compatible server base URL for reranking' },
   rerankerOpenAiCompatibleModelId: { type: 'string', description: 'OpenAI-compatible model ID for reranking' },
   rerankerOpenAiCompatibleApiKey: { type: 'string', description: 'OpenAI-compatible API key for reranking' },
-  rerankerLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for LLM reranking' },
-  rerankerLlamaCppRerankerModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model for dedicated reranking (optional)' },
+  rerankerGgufPath: { type: 'string', description: 'Path to dedicated reranker GGUF model (provider=llamacpp/llamacpp-llm)' },
+  rerankerGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model for chat-based reranking (provider=llamacpp-llm)' },
   rerankerLlamaCppServer: { type: 'boolean', description: 'Use llama.cpp server for reranking (auto-starts/stop server)' },
   rerankerLlamaCppServerBinPath: { type: 'string', description: 'Path to llama-server binary (used when rerankerLlamaCppServer is true)' },
   rerankerMinScore: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum score for reranked results' },
@@ -146,10 +146,10 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   highlighterEnabled: { type: 'boolean', description: 'Enable semantic line-level highlighting for search results' },
   highlighterProvider: {
     type: 'enum',
-    enumValues: ['llamacpp', 'llamacpp-llm', 'qrranker'] as const,
-    description: 'Highlight provider: llamacpp (dedicated model), llamacpp-llm (LLM prompt-based), or qrranker (QRRanker attention-based)'
+    enumValues: ['semantic-highlight', 'llamacpp-llm', 'qrranker'] as const,
+    description: 'Highlight provider: semantic-highlight (dedicated model), llamacpp-llm (LLM prompt-based), or qrranker (QRRanker attention-based)'
   },
-  highlighterGgufPath: { type: 'string', description: 'Path to dedicated semantic-highlight GGUF model (provider=llamacpp)' },
+  highlighterGgufPath: { type: 'string', description: 'Path to dedicated semantic-highlight GGUF model (provider=semantic-highlight)' },
   highlighterGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model for prompt-based highlighting (provider=llamacpp-llm, e.g. 0.6B model)' },
   highlighterGgufQrrankerPath: { type: 'string', description: 'Path to QRRanker GGUF model for attention-based highlighting (provider=qrranker, Qwen3-4B)' },
   highlighterTopK: { type: 'integer', minValue: 1, description: 'Number of top-K lines to keep (topk mode)' },

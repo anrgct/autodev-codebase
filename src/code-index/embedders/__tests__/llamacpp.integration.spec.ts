@@ -44,7 +44,7 @@ function findModelPath(key: string): string | undefined {
 }
 
 const embedderModelPath = findModelPath("embedderLlamaCppModelPath")
-const rerankerModelPath = findModelPath("rerankerLlamaCppRerankerModelPath")
+const rerankerModelPath = findModelPath("rerankerGgufPath")
 const llmModelPath = findModelPath("summarizerLlamaCppModelPath")
 
 describe.runIf(embedderModelPath)("LlamaCPP Embedder", () => {

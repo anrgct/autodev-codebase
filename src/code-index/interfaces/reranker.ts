@@ -23,14 +23,14 @@ export interface RerankerInfo {
 
 export interface RerankerConfig {
   enabled: boolean
-  provider: 'ollama' | 'openai-compatible' | 'llamacpp' | 'qrranker'
+  provider: 'ollama' | 'openai-compatible' | 'llamacpp' | 'llamacpp-llm' | 'qrranker'
   ollamaBaseUrl?: string
   ollamaModelId?: string
   openAiCompatibleBaseUrl?: string
   openAiCompatibleModelId?: string
   openAiCompatibleApiKey?: string
-  llamaCppModelPath?: string
-  llamaCppRerankerModelPath?: string
+  ggufPath?: string
+  ggufLlmPath?: string
   llamaCppServer?: boolean
   llamaCppServerBinPath?: string
   minScore?: number

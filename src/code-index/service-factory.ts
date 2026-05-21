@@ -432,9 +432,9 @@ export class CodeIndexServiceFactory {
       )
     }
 
-    if (config.provider === 'qrranker' && config.llamaCppRerankerModelPath) {
+    if (config.provider === 'qrranker' && config.ggufPath) {
       return new QRRankerReranker(
-        config.llamaCppRerankerModelPath,
+        config.ggufPath,
         this.logger,
         config.batchSize || 10,
         config.concurrency || 2,
@@ -445,27 +445,34 @@ export class CodeIndexServiceFactory {
 
     if (config.provider === 'llamacpp') {
       // Dedicated reranker model path → cross-encoder rerank mode (or server mode)
-      if (config.llamaCppRerankerModelPath) {
+      if (config.ggufPath) {
         return new LlamaCppReranker(
-          config.llamaCppRerankerModelPath,
+          config.ggufPath,
           config.llamaCppServer === true,
           config.llamaCppServerBinPath || "",
           this.logger
         )
       }
 
-      // LLM model path → chat-based rerank mode (shares the lazy-loaded model)
-      if (config.llamaCppModelPath) {
-        const model = await this._getOrCreateLlamaCppLlmModel(config.llamaCppModelPath)
-        return new LlamaCppLLMReranker(
-          model,
-          this.logger,
-          config.batchSize || 10,
-          config.concurrency || 3,
-          config.maxRetries || 3,
-          config.retryDelayMs || 1000
-        )
+      this.warn("Reranker is enabled with llamacpp provider but rerankerGgufPath is not configured")
+      return undefined
+    }
+
+    if (config.provider === 'llamacpp-llm') {
+      // LLM model path → chat-based rerank mode
+      if (!config.ggufLlmPath) {
+        this.warn("Reranker is enabled with llamacpp-llm provider but rerankerGgufLlmPath is not configured")
+        return undefined
       }
+      const model = await this._getOrCreateLlamaCppLlmModel(config.ggufLlmPath)
+      return new LlamaCppLLMReranker(
+        model,
+        this.logger,
+        config.batchSize || 10,
+        config.concurrency || 3,
+        config.maxRetries || 3,
+        config.retryDelayMs || 1000
+      )
     }
 
     // If provider is undefined or unknown, return undefined
@@ -562,7 +569,7 @@ export class CodeIndexServiceFactory {
       return undefined
     }
 
-    const provider = config.provider ?? "llamacpp"
+    const provider = config.provider ?? "semantic-highlight"
 
     if (provider === "llamacpp-llm") {
       if (!config.ggufLlmPath) {
@@ -594,7 +601,7 @@ export class CodeIndexServiceFactory {
       )
     }
 
-    // Default: llamacpp (dedicated model)
+    // Default: semantic-highlight (dedicated model)
     if (!config.ggufPath) {
       this.warn("Highlighter is enabled but highlighterGgufPath is not configured")
       return undefined

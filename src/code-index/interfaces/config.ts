@@ -168,14 +168,14 @@ export interface CodeIndexConfig {
 
   // Reranker configuration
   rerankerEnabled?: boolean
-  rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp' | 'qrranker'
+  rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp' | 'llamacpp-llm' | 'qrranker'
   rerankerOllamaBaseUrl?: string
   rerankerOllamaModelId?: string
   rerankerOpenAiCompatibleBaseUrl?: string
   rerankerOpenAiCompatibleModelId?: string
   rerankerOpenAiCompatibleApiKey?: string
-  rerankerLlamaCppModelPath?: string
-  rerankerLlamaCppRerankerModelPath?: string
+  rerankerGgufPath?: string
+  rerankerGgufLlmPath?: string
   rerankerLlamaCppServer?: boolean
   rerankerLlamaCppServerBinPath?: string
   rerankerMinScore?: number
@@ -201,7 +201,7 @@ export interface CodeIndexConfig {
 
   // Highlighter configuration (semantic highlight / line-level filtering)
   highlighterEnabled?: boolean
-  highlighterProvider?: "llamacpp" | "llamacpp-llm" | "qrranker"
+  highlighterProvider?: "semantic-highlight" | "llamacpp-llm" | "qrranker"
   highlighterGgufPath?: string
   highlighterGgufLlmPath?: string
   highlighterGgufQrrankerPath?: string
@@ -246,14 +246,14 @@ export type PreviousConfigSnapshot = {
   hybridSearchDenseWeight?: number
   hybridSearchSparseWeight?: number
   rerankerEnabled?: boolean
-  rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp' | 'qrranker'
+  rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp' | 'llamacpp-llm' | 'qrranker'
   rerankerOllamaBaseUrl?: string
   rerankerOllamaModelId?: string
   rerankerOpenAiCompatibleBaseUrl?: string
   rerankerOpenAiCompatibleModelId?: string
   rerankerOpenAiCompatibleApiKey?: string
-  rerankerLlamaCppModelPath?: string
-  rerankerLlamaCppRerankerModelPath?: string
+  rerankerGgufPath?: string
+  rerankerGgufLlmPath?: string
   rerankerLlamaCppServer?: boolean
   rerankerLlamaCppServerBinPath?: string
   rerankerMinScore?: number
@@ -277,7 +277,7 @@ export type PreviousConfigSnapshot = {
 
   // Highlighter
   highlighterEnabled?: boolean
-  highlighterProvider?: "llamacpp" | "llamacpp-llm" | "qrranker"
+  highlighterProvider?: "semantic-highlight" | "llamacpp-llm" | "qrranker"
   highlighterGgufPath?: string
   highlighterGgufLlmPath?: string
   highlighterGgufQrrankerPath?: string
@@ -339,14 +339,14 @@ export interface ConfigSnapshot {
   hybridSearchDenseWeight?: number
   hybridSearchSparseWeight?: number
   rerankerEnabled?: boolean
-  rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp' | 'qrranker'
+  rerankerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp' | 'llamacpp-llm' | 'qrranker'
   rerankerOllamaBaseUrl?: string
   rerankerOllamaModelId?: string
   rerankerOpenAiCompatibleBaseUrl?: string
   rerankerOpenAiCompatibleModelId?: string
   rerankerOpenAiCompatibleApiKey?: string
-  rerankerLlamaCppModelPath?: string
-  rerankerLlamaCppRerankerModelPath?: string
+  rerankerGgufPath?: string
+  rerankerGgufLlmPath?: string
   rerankerLlamaCppServer?: boolean
   rerankerLlamaCppServerBinPath?: string
   rerankerMinScore?: number
@@ -370,7 +370,7 @@ export interface ConfigSnapshot {
 
   // Highlighter configuration
   highlighterEnabled?: boolean
-  highlighterProvider?: "llamacpp" | "llamacpp-llm" | "qrranker"
+  highlighterProvider?: "semantic-highlight" | "llamacpp-llm" | "qrranker"
   highlighterGgufPath?: string
   highlighterGgufLlmPath?: string
   highlighterGgufQrrankerPath?: string

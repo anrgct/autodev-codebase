@@ -249,8 +249,13 @@ export class ConfigValidator {
 
       if (config.rerankerProvider === 'llamacpp') {
         // ConfigValidator only checks provider validity for llamacpp reranker.
-        // Model path validation (at least one of llamaCppModelPath or llamaCppRerankerModelPath)
-        // is handled at creation time in service-factory.
+        // Model path validation is handled at creation time in service-factory.
+        return
+      }
+
+      if (config.rerankerProvider === 'llamacpp-llm') {
+        // ConfigValidator only checks provider validity for llamacpp-llm reranker.
+        // Model path validation is handled at creation time in service-factory.
         return
       }
 
