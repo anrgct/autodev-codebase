@@ -16,6 +16,28 @@ import type { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, "debug" | "info" | "warn" | "error">
 
+// ─── Debug Highlight: ANSI Color Helpers ────────────────────────────────
+
+const ANSI_RESET = "\x1b[0m";
+
+function scoreRatioToAnsiFg(ratio: number): string {
+  if (ratio <= 0) return "\x1b[38;5;237m";
+  if (ratio < 0.05) return "\x1b[38;5;240m";
+  if (ratio < 0.15) return "\x1b[38;5;33m";
+  if (ratio < 0.3) return "\x1b[38;5;45m";
+  if (ratio < 0.45) return "\x1b[38;5;47m";
+  if (ratio < 0.55) return "\x1b[38;5;119m";
+  if (ratio < 0.65) return "\x1b[38;5;227m";
+  if (ratio < 0.75) return "\x1b[38;5;214m";
+  if (ratio < 0.9) return "\x1b[38;5;202m";
+  return "\x1b[38;5;196m";
+}
+
+function scoreToAnsiFg(score: number, maxScore: number): string {
+  if (maxScore <= 0) return "\x1b[38;5;237m";
+  return scoreRatioToAnsiFg(Math.min(score / (maxScore * 1.15), 1));
+}
+
 /**
  * 使用本地 LlamaCPP 模型实现的行级语义高亮器。
  *
@@ -121,6 +143,14 @@ export class LlamaCppHighlightProvider implements IHighlighter {
       return this._fallbackAllLines(codeLines, startLine)
     }
 
+    // 4.5. [debug] 生成 token 级 Pruning Head 热力图
+    let debugTokenView: string | undefined;
+    if (options?.debugHighlight) {
+      debugTokenView = this._buildDebugTokenView(
+        input, codeChunk, codeLines, startLine, tokenEmbeddings, lineScores, query,
+      );
+    }
+
     // 5. 根据模式选取行
     const mode = options?.mode ?? this.defaultMode
     const keptSet = new Set<number>()
@@ -132,14 +162,6 @@ export class LlamaCppHighlightProvider implements IHighlighter {
           keptSet.add(i)
         }
       }
-      // 如果没有行通过阈值，回退到最优一行
-      if (keptSet.size === 0 && lineScores.length > 0) {
-        let bestIdx = 0
-        for (let i = 1; i < lineScores.length; i++) {
-          if (lineScores[i] > lineScores[bestIdx]) bestIdx = i
-        }
-        keptSet.add(bestIdx)
-      }
     } else {
       // Top-K 模式（默认）
       const topK = Math.min(options?.topK ?? this.defaultTopK, lineScores.length)
@@ -149,6 +171,18 @@ export class LlamaCppHighlightProvider implements IHighlighter {
         .slice(0, topK)
       for (const item of sortedIndices) {
         keptSet.add(item.index)
+      }
+    }
+
+    // 5.5 后处理：排除不连续纯符号行（与 qrranker 一致）
+    // 例如单独的 """、)、}、]、--- 且前后无保留行 → 噪音，不是内容
+    const prevKeptSize = keptSet.size;
+    for (const idx of [...keptSet]) {
+      const trimmed = codeLines[idx].trim();
+      if (trimmed.length >= 1 && trimmed.length <= 3 && !/[\p{L}\p{N}_]/u.test(trimmed)) {
+        if (!keptSet.has(idx - 1) && !keptSet.has(idx + 1)) {
+          keptSet.delete(idx);
+        }
       }
     }
 
@@ -167,6 +201,7 @@ export class LlamaCppHighlightProvider implements IHighlighter {
       lines,
       startLine,
       endLine: startLine + codeLines.length - 1,
+      debugTokenView,
     }
   }
 
@@ -265,17 +300,13 @@ export class LlamaCppHighlightProvider implements IHighlighter {
   private _formatOutput(lines: HighlightLine[]): string {
     const keptLines: { num: number; text: string }[] = []
     for (const line of lines) {
-      if (line.kept) {
+      if (line.kept && line.text.trim().length > 0) {
         keptLines.push({ num: line.lineNumber, text: line.text })
       }
     }
 
     if (keptLines.length === 0) {
-      // 如果没有保留任何行，返回前 3 行作为 fallback
-      const fallbackLines = lines.slice(0, Math.min(3, lines.length))
-      return fallbackLines
-        .map((l) => `${String(l.lineNumber).padStart(4)}  ${l.text}`)
-        .join("\n")
+      return ""
     }
 
     keptLines.sort((a, b) => a.num - b.num)
@@ -300,6 +331,122 @@ export class LlamaCppHighlightProvider implements IHighlighter {
         group.map((l) => `${String(l.num).padStart(4)}  ${l.text}`).join("\n"),
       )
       .join("\n ---\n")
+  }
+
+  /**
+   * [debug] 构建 token 级 Pruning Head 热力图。
+   *
+   * 格式：行号 + 分数条（左）+ 按 embedding 分数逐词着色的原始代码（右）。
+   * 以词语为单位着色（词中点对应 embedding token 的分数），
+   * 避免逐字符着色割裂词语，也避免 model.tokenize() API 差异导致的对齐错乱。
+   */
+  private _buildDebugTokenView(
+    input: string,
+    codeChunk: string,
+    codeLines: string[],
+    startLine: number,
+    tokenEmbeddings: number[][],
+    lineScores: number[],
+    _query: string,
+  ): string {
+    const totalTokens = tokenEmbeddings.length;
+    if (totalTokens === 0) return "";
+
+    const codeOffset = this._findCodeOffset(input, codeChunk);
+    const totalChars = input.length;
+    const codeChars = codeChunk.length;
+    const barWidth = 10;
+
+    // 1. 计算每个 embedding 的 pruning head 分数
+    const perTokenScores: number[] = new Array(totalTokens);
+    let maxScore = 0;
+    for (let ti = 0; ti < totalTokens; ti++) {
+      const score = this._applyPruningHead(tokenEmbeddings[ti]);
+      perTokenScores[ti] = score;
+      const codePos = (ti / totalTokens) * totalChars - codeOffset;
+      if (codePos >= 0 && codePos < codeChars && score > maxScore) {
+        maxScore = score;
+      }
+    }
+    if (maxScore <= 0) maxScore = 0.0001;
+
+    const maxLineScore = Math.max(...lineScores, 0.00001);
+
+    // 2. 逐词着色：将每行按空白/标点边界拆分为词，
+    //    以词中点字符位置反向映射到 embedding token 分数
+    const parts: string[] = [];
+    let charAcc = 0; // 在 codeChunk 中的累计字符偏移
+    // 匹配：空白序列 或 非空白序列
+    const wordRe = /(\s+|[^\s]+)/g;
+
+    for (let li = 0; li < codeLines.length; li++) {
+      const line = codeLines[li];
+      const segments: string[] = [];
+
+      let match: RegExpExecArray | null;
+      wordRe.lastIndex = 0;
+      while ((match = wordRe.exec(line)) !== null) {
+        const word = match[1];
+        // 取词中点字符在 codeChunk 中的位置
+        const midLocal = match.index + Math.floor(word.length / 2);
+        const codePos = charAcc + midLocal;
+        // 反向比例映射
+        const ti = Math.floor(((codePos + codeOffset) / totalChars) * totalTokens);
+        const wordScore = ti >= 0 && ti < totalTokens ? perTokenScores[ti] : 0;
+        const color = scoreToAnsiFg(wordScore, maxScore);
+        segments.push(`${color}${word}`);
+      }
+      if (segments.length > 0) segments.push(ANSI_RESET);
+
+      charAcc += line.length + 1; // +1 for \n
+
+      // 行号 + 分数值 + 分数条
+      const s = lineScores[li] ?? 0;
+      const filled = Math.round((s / maxLineScore) * barWidth);
+      const bar =
+        `${scoreToAnsiFg(s, maxLineScore)}█${ANSI_RESET}`.repeat(filled) +
+        "░".repeat(barWidth - filled);
+      const lineNum = String(startLine + li).padStart(4);
+      const scoreStr = s.toFixed(6);
+
+      parts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${segments.join("")}`);
+    }
+
+    // 3. 统计信息（仅 code 区域）
+    let codeScoreSum = 0;
+    let codeScoreMin = Infinity;
+    let codeTokenCount = 0;
+    for (let ti = 0; ti < totalTokens; ti++) {
+      const codePos = (ti / totalTokens) * totalChars - codeOffset;
+      if (codePos >= 0 && codePos < codeChars) {
+        const s = perTokenScores[ti];
+        codeScoreSum += s;
+        if (s < codeScoreMin) codeScoreMin = s;
+        codeTokenCount++;
+      }
+    }
+    if (codeScoreMin === Infinity) codeScoreMin = 0;
+    const mean = codeTokenCount > 0 ? codeScoreSum / codeTokenCount : 0;
+
+    const legendSteps = [
+      { label: "low", ratio: 0.05 },
+      { label: "", ratio: 0.3 },
+      { label: "med", ratio: 0.5 },
+      { label: "", ratio: 0.7 },
+      { label: "high", ratio: 1.0 },
+    ];
+    const legendStr = legendSteps
+      .map(({ label, ratio }) => `${scoreRatioToAnsiFg(ratio)}■${ANSI_RESET}${label}`)
+      .join("  ");
+
+    return [
+      `${ANSI_RESET}═══ Token (Pruning Head) Heatmap ═══`,
+      ...parts,
+      `\n─── Stats ───`,
+      `  Tokens: ${codeTokenCount}  |  max=${maxScore.toFixed(6)}  min=${codeScoreMin.toFixed(6)}  mean=${mean.toFixed(6)}`,
+      `  Legend: ${legendStr}`,
+      `═══════════════════════════════`,
+    ].join("\n");
   }
 
   /**

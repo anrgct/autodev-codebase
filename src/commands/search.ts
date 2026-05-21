@@ -346,7 +346,7 @@ export function createSearchCommand(): Command {
     .option('--storage <path>', 'Custom storage path')
     .option('--cache <path>', 'Custom cache path')
     .option('--demo', 'Use demo workspace')
-    .option('--debug-highlight', 'Print token-level attention heatmap (qrranker highlighter only)')
+    .option('--debug-highlight', 'Print token-level attention heatmap')
     .action(searchHandler);
 
   return command;

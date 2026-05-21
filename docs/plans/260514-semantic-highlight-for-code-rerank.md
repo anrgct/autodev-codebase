@@ -339,7 +339,21 @@ for (let offset = 0; offset < resolvedInput.length; offset += chunkSize) {
 - 新增 `highlighterMode` 配置：`"topk"`（默认，固定保留 K 行）/ `"threshold"`（保留 score ≥ 阈值的所有行）
 - 新增 `highlighterThreshold` 配置（threshold 模式阈值，默认 0.5）
 - `IHighlighter.highlight()` 新增 `options?: HighlightOptions` 参数支持运行时覆盖
-- threshold 模式回退策略：无行达标时保留最优一行
+
+### 2026-05-21（--debug-highlight 支持 + 后处理过滤 + 回退移除）
+
+- ✅ **`--debug-highlight` 支持 `semantic-highlight` provider** — `LlamaCppHighlightProvider` 新增 `_buildDebugTokenView()` 方法
+- **逐词着色** — 以 `/(\s+|[^\s]+)/g` 切分词语，取词中点字符位置反向比例映射到 embedding token 分数，词内颜色统一不割裂
+- **后处理过滤** — 排除不连续纯符号行（`"""`, `)`, `}`, `---` 等 1-3 字符无 `[\p{L}\p{N}_]` 且前后无保留行的行），与 qrranker 一致
+- **移除阈值回退** — threshold 模式下无行达标时不再回退到最优行，直接返回空
+- **过滤空行** — `_formatOutput` 跳过纯空白行
+- CLI `--debug-highlight` 描述、接口注释均已更新，不再限定 "qrranker only"
+
+```bash
+# 验证：逐词着色 + 后处理过滤
+npx tsx src/cli.ts search "train method" --demo --debug-highlight
+# 结果数从 16 → 14（过滤了 predict、clear_callback 等无关片段）
+```
 
 ### 2026-05-16
 
@@ -357,6 +371,7 @@ for (let offset = 0; offset < resolvedInput.length; offset += chunkSize) {
 
 ## 修订记录
 
+- 2026-05-21：`--debug-highlight` 支持 semantic-highlight + 后处理过滤 + 移除回退 + 过滤空行 + Unicode 字符检测
 - 2026-05-16：根因分析 → batchSize 修复 → 单元测试
 - 2026-05-15：阶段 1-7 实施，补丁迭代 v1→v3，双模式支持
 - 2026-05-14：架构设计，文档初始化

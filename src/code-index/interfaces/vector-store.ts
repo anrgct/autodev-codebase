@@ -98,7 +98,7 @@ export interface SearchFilter {
   pathFilters?: string[]
   minScore?: number
   limit?: number
-  /** [debug] Enable token-level attention heatmap output (qrranker highlighter only) */
+  /** [debug] Enable token-level heatmap output */
   debugHighlight?: boolean
 }
 

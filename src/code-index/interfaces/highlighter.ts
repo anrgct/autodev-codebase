@@ -68,7 +68,7 @@ export interface HighlightOptions {
   topK?: number
   /** 最低分值阈值 */
   threshold?: number
-  /** [debug] 启用 token 级 attention 热力图输出（仅 qrranker provider） */
+  /** [debug] 启用 token 级热力图输出 */
   debugHighlight?: boolean
   /** [internal] 来自 reranker 的预计算 per-token 分数（供 qrranker provider 复用） */
   _qrrankerPerTokenScores?: Float32Array

@@ -180,7 +180,8 @@ function buildTokenHeatmap(
     const lineNum = String(startLine + li).padStart(4);
     const tokenSide = lineTokenParts[li].join("");
     const rightSide = tokenSide || `${ANSI_RESET}${codeLines[li]}`;
-    mergedParts.push(`  ${lineNum} ${bar}  │  ${rightSide}`);
+    const scoreStr = s.toFixed(6);
+    mergedParts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${rightSide}`);
   }
 
   // Legend
@@ -632,14 +633,6 @@ export class QRRankerHighlighter implements IHighlighter {
           keptSet.add(i);
         }
       }
-      // Fallback: keep best line if none passes threshold
-      if (keptSet.size === 0 && lineScores.length > 0) {
-        let bestIdx = 0;
-        for (let i = 1; i < lineScores.length; i++) {
-          if (lineScores[i] > lineScores[bestIdx]) bestIdx = i;
-        }
-        keptSet.add(bestIdx);
-      }
     } else {
       // Top-K mode (default)
       const topK = Math.min(options?.topK ?? this.defaultTopK, lineScores.length);
@@ -657,27 +650,12 @@ export class QRRankerHighlighter implements IHighlighter {
     const prevKeptSize = keptSet.size;
     for (const idx of [...keptSet]) {
       const trimmed = codeLines[idx].trim();
-      if (trimmed.length >= 1 && trimmed.length <= 3 && !/\w/.test(trimmed)) {
+      if (trimmed.length >= 1 && trimmed.length <= 3 && !/[\p{L}\p{N}_]/u.test(trimmed)) {
         // Isolated: no adjacent kept line on either side
         if (!keptSet.has(idx - 1) && !keptSet.has(idx + 1)) {
           keptSet.delete(idx);
         }
       }
-    }
-    if (keptSet.size === 0 && lineScores.length > 0) {
-      // Fallback: keep top-1 content line (first non-structural in sorted order)
-      const fallbackSorted = lineScores
-        .map((s, i) => ({ score: s, index: i }))
-        .sort((a, b) => b.score - a.score);
-      for (const { index } of fallbackSorted) {
-        const trimmed = codeLines[index].trim();
-        if (trimmed.length > 3 || /\w/.test(trimmed)) {
-          keptSet.add(index);
-          break;
-        }
-      }
-      // Keep at least the top-1 even if all lines are structural
-      if (keptSet.size === 0) keptSet.add(fallbackSorted[0].index);
     }
     if (keptSet.size !== prevKeptSize) {
       this.logger?.debug(
@@ -821,17 +799,13 @@ export class QRRankerHighlighter implements IHighlighter {
   private _formatOutput(lines: HighlightLine[]): string {
     const keptLines: Array<{ num: number; text: string }> = [];
     for (const line of lines) {
-      if (line.kept) {
+      if (line.kept && line.text.trim().length > 0) {
         keptLines.push({ num: line.lineNumber, text: line.text });
       }
     }
 
     if (keptLines.length === 0) {
-      // Fallback: return first 3 lines
-      const fallbackLines = lines.slice(0, Math.min(3, lines.length));
-      return fallbackLines
-        .map((l) => `${String(l.lineNumber).padStart(4)}  ${l.text}`)
-        .join("\n");
+      return "";
     }
 
     keptLines.sort((a, b) => a.num - b.num);
