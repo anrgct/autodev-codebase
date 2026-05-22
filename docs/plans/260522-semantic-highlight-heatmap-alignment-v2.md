@@ -154,6 +154,23 @@ for i in 0..n:
 
 **效果：** 前半段（~14行内）文本完整可读，`deftrack(` → `def track(`。后半段 `\n` 漂移仍导致 `▓` 块，但位置由行内比例修正。
 
+**v7（逐字符着色，最终方案）：** 彻底放弃 detokenize + indexOf 路径。在 debug 热力图渲染中改为逐字符着色：
+
+1. 每个字符按全局位置 `(lineStart + ci + codeOffset) / totalChars * totalTokens` 映射到 token index
+2. 取对应 token 的 score 着色，连续同色字符合并 ANSI 码减少输出
+3. 显示的是原始 `codeLines` 文字，不是 detokenize 产物 → 永不出现 `▓` 乱码
+
+**改动范围：** 仅 `_buildDebugTokenView` 和 `_buildDebugTokenViewFromProbs`（~60 行/函数）。`_aggregate*ToLines` 评分路径、reranker、interfaces、search-service 不动。
+
+**效果：** 热力图显示真实代码文字，逐字符按 attention 分数变色。没有 detokenize 依赖，没有 `\n` 丢失问题。精度损失（比例映射而非精确 indexOf）在热力图场景下可接受。
+
+**输出示例：**
+```
+  976 ██████████ 0.184 │  >>> def on_train_start(trainer):
+  977 █████████░ 0.163 │  ...     print("Training is starting!")
+  978 █████████░ 0.166 │  >>> model = YOLO("yolo11n.pt")
+```
+
 ## 修订记录
 
 | 版本 | 日期 | 变更 |
@@ -166,6 +183,7 @@ for i in 0..n:
 | v2.4 | 2026-05-23 | `▓▓▓▓▓` 问题延续（`\n` 丢失→detokAcc 漂移），需正向 tokenize 匹配（~2500次/热力图），暂搁置 |
 | v2.5 | 2026-05-23 | v5 比例映射 fallback：8处替换，indexOf 失败时用比例映射替代漂移的 detokAcc，阻断 `\n` 累积偏差 |
 | v2.6 | 2026-05-23 | v6 行内比例映射：perLineTokEst/Idx 追踪，行首 snap + 空文本跳过，消除 BOS 污染产生的重复文本 |
+| v2.7 | 2026-05-23 | **v7 最终方案**：彻底放弃 detokenize+indexOf，改为逐字符着色。显示原始代码文字，永不出现 `▓` 乱码。仅改 `_buildDebugTokenView` / `_buildDebugTokenViewFromProbs` |
 
 ## 验证记录
 
@@ -341,6 +359,12 @@ const codePos = approxCharPos - codeOffset
 1. 方法 2A 代价极小，但对 `\n` 丢失无效（失败时 `detokAcc += trimmed.length` 仍然无法匹配不存在字符）
 2. 方法 3（二分 tokenize）是唯一能同时解决两类问题的彻底方案
 3. 或者回退到旧版的比例映射方式（牺牲精度换可靠性），在热力图场景下精度损失可接受
+
+**最终选择：v7 逐字符着色。** 彻底放弃 detokenize+indexOf 路径，改为逐字符比例映射着色原始代码文字。原因：
+- XLM-RoBERTa 的 `\n` 丢失问题不可修复（Normalizer 层，烧录在 tokenizer.json）
+- 为此引入 200+ 行 fallback 代码（v3-v6）得不偿失
+- 热力图的核心价值是 bar 分数和颜色分布，不是 token 级别文本精确性
+- 改动范围极小（仅 2 个 debug 渲染函数），数据管道（reranker/interfaces/search-service）保留以备后用
 
 **参考文件：**
 - highlighter: `src/code-index/highlighters/semantic-highlight.ts`
