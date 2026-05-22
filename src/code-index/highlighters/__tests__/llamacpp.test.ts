@@ -1,19 +1,34 @@
 import { describe, it, expect } from "vitest"
-import { LlamaCppHighlightProvider } from "../llamacpp"
-import { PRUNING_HEAD_WEIGHT } from "../constants/pruning-head-weights"
+import { SemanticHighlightHighlighter } from "../semantic-highlight"
 import type { HighlightLine } from "../../interfaces/highlighter"
 
 /**
- * LlamaCppHighlightProvider 纯逻辑单元测试。
+ * SemanticHighlightHighlighter 纯逻辑单元测试。
  * 不加载模型，仅测试无副作用的 private helper 方法。
  * 通过 `(provider as any)._method()` 访问 private 方法。
  */
 
 function makeProvider(topK = 5, mode: "topk" | "threshold" = "topk") {
-  return new LlamaCppHighlightProvider("/fake/path/model.gguf", topK, undefined, mode)
+  return new SemanticHighlightHighlighter("/fake/path/model.gguf", topK, undefined, mode)
 }
 
-describe("LlamaCppHighlightProvider", () => {
+/** 设置 mock Pruning Head 权重以便测试 _applyPruningHead */
+function setMockHeadWeights(provider: SemanticHighlightHighlighter) {
+  const w = new Float32Array(2048)
+  const b = new Float32Array(2)
+  // bias 故意设轻微不对称以验证 softmax
+  b[0] = -0.01
+  b[1] = 0.01
+  // W[1] (keep class, indices 1024..2047) 第 0 维设正值，W[0] 设 0
+  for (let i = 0; i < 1024; i++) {
+    w[i] = 0
+    w[1024 + i] = 0.001
+  }
+  ;(provider as any)._pruningHeadWeight = w
+  ;(provider as any)._pruningHeadBias = b
+}
+
+describe("SemanticHighlightHighlighter", () => {
   // ─── _findCodeOffset ────────────────────────────────────────────
 
   describe("_findCodeOffset", () => {
@@ -47,27 +62,27 @@ describe("LlamaCppHighlightProvider", () => {
   describe("_applyPruningHead", () => {
     it("应返回 [0, 1] 范围内的概率值", () => {
       const p = makeProvider()
+      setMockHeadWeights(p)
       const hidden = new Array(1024).fill(0)
       const prob = (p as any)._applyPruningHead(hidden)
       expect(prob).toBeGreaterThanOrEqual(0)
       expect(prob).toBeLessThanOrEqual(1)
     })
 
-    it("零向量输入应返回约 0.5（bias 接近零时 softmax 均分）", () => {
+    it("零向量输入应返回接近 0.5", () => {
       const p = makeProvider()
+      setMockHeadWeights(p)
       const hidden = new Array(1024).fill(0)
       const prob = (p as any)._applyPruningHead(hidden)
-      // 两个 logit 接近，softmax 输出接近 0.5
+      // bias 轻微不对称 (b[0]=-0.01, b[1]=0.01)，softmax 输出接近 0.505
       expect(prob).toBeCloseTo(0.5, 0) // 精度到整数位
     })
 
     it("极端正向量应输出高概率", () => {
       const p = makeProvider()
+      setMockHeadWeights(p)
       // 把 W[1]（keep class）方向拉满
-      const hidden = Array.from({ length: 1024 }, (_, i) => {
-        // PRUNING_HEAD_WEIGHT is [2*1024]; W[1] = slice 1024..2047
-        return PRUNING_HEAD_WEIGHT[1024 + i] * 10
-      })
+      const hidden = new Array(1024).fill(100)
       const prob = (p as any)._applyPruningHead(hidden)
       expect(prob).toBeGreaterThan(0.9)
     })
@@ -115,7 +130,7 @@ describe("LlamaCppHighlightProvider", () => {
       )
     })
 
-    it("无保留行时应回退到前 3 行", () => {
+    it("无保留行时应返回空字符串", () => {
       const p = makeProvider()
       const lines: HighlightLine[] = [
         { lineNumber: 1, text: "a", score: 0, kept: false },
@@ -124,7 +139,8 @@ describe("LlamaCppHighlightProvider", () => {
         { lineNumber: 4, text: "d", score: 0, kept: false },
       ]
       const result = (p as any)._formatOutput(lines)
-      expect(result).toBe("   1  a\n   2  b\n   3  c")
+      // 无保留行时不再回退，直接返回空
+      expect(result).toBe("")
     })
 
     it("空数组应返回空字符串", () => {
@@ -172,7 +188,7 @@ describe("LlamaCppHighlightProvider", () => {
 
   describe("highlighterInfo", () => {
     it("应返回 name 和 model 路径", () => {
-      const p = new LlamaCppHighlightProvider("/models/test.gguf")
+      const p = new SemanticHighlightHighlighter("/models/test.gguf")
       const info = p.highlighterInfo
       expect(info.name).toBe("llamacpp-semantic-highlight")
       expect(info.model).toBe("/models/test.gguf")

@@ -13,7 +13,7 @@ type LoggerLike = Pick<Logger, "debug" | "info" | "warn" | "error">
 /**
  * 使用 LLM chat prompt 实现的行级语义高亮器。
  *
- * 与 LlamaCppHighlightProvider（专用 GGUF 模型 + pruning head）不同，
+ 与 SemanticHighlightHighlighter（专用 GGUF 模型 + pruning head）不同，
  * 此类通过 LLM prompt 工程判断代码行相关性，适用于 0.6B 小模型。
  *
  * 架构：
@@ -263,7 +263,7 @@ RESULT:`
 
   /**
    * 格式化输出：保留行按行号排序，连续行成组，组间用 `---` 分隔
-   * 与 LlamaCppHighlightProvider._formatOutput 保持一致
+   与 SemanticHighlightHighlighter._formatOutput 保持一致
    */
   private _formatOutput(lines: HighlightLine[]): string {
     const keptLines: Array<{ num: number; text: string }> = []

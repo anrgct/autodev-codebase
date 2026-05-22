@@ -145,6 +145,11 @@ export class CodeIndexSearchService {
                         highlightOptions._qrrankerCodeTokenIds = payload["_qrrankerCodeTokenIds"] as number[];
                       }
                     }
+                    // Pass precomputed semantic-highlight PruningHead probs (optimization for semantic-highlight provider)
+                    if (payload?.["_semanticHighlightTokenProbs"] && payload?.["_semanticHighlightCodeText"]) {
+                      highlightOptions._semanticHighlightTokenProbs = payload["_semanticHighlightTokenProbs"] as Float32Array;
+                      highlightOptions._semanticHighlightCodeText = payload["_semanticHighlightCodeText"] as string;
+                    }
                     const highlightResult = await this.highlighter!.highlight(
                       query,
                       result.payload.codeChunk,

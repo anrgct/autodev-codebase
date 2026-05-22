@@ -76,6 +76,10 @@ export interface HighlightOptions {
   _qrrankerCodeText?: string
   /** [internal] 来自 reranker 的 code token IDs（供 debug 热力图 per-token 块着色使用） */
   _qrrankerCodeTokenIds?: number[]
+  /** [internal] 来自 semantic-highlight reranker 的预计算 PruningHead keep probs */
+  _semanticHighlightTokenProbs?: Float32Array
+  /** [internal] 预计算分数对应的代码原文（用于 token→line 字符偏移映射） */
+  _semanticHighlightCodeText?: string
 }
 
 /**

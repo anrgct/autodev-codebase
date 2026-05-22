@@ -12,10 +12,11 @@ import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { LlamaCppReranker } from "./rerankers/llamacpp-rerank"
 import { LlamaCppLLMReranker } from "./rerankers/llamacpp-llm-rerank"
 import { QRRankerReranker } from "./rerankers/qrranker"
+import { SemanticHighlightReranker } from "./rerankers/semantic-highlight"
 import { OllamaSummarizer } from "./summarizers/ollama"
 import { OpenAICompatibleSummarizer } from "./summarizers/openai-compatible"
 import { LlamaCppSummarizer } from "./summarizers/llamacpp"
-import { LlamaCppHighlightProvider } from "./highlighters/llamacpp"
+import { SemanticHighlightHighlighter } from "./highlighters/semantic-highlight"
 import { LlamaCppLLMHighlighter } from "./highlighters/llamacpp-llm"
 import { QRRankerHighlighter } from "./highlighters/qrranker"
 import { createHash } from "crypto"
@@ -443,6 +444,13 @@ export class CodeIndexServiceFactory {
       )
     }
 
+    if (config.provider === 'semantic-highlight' && config.ggufPath) {
+      return new SemanticHighlightReranker(
+        config.ggufPath,
+        this.logger,
+      )
+    }
+
     if (config.provider === 'llamacpp') {
       // Dedicated reranker model path → cross-encoder rerank mode (or server mode)
       if (config.ggufPath) {
@@ -607,7 +615,7 @@ export class CodeIndexServiceFactory {
       return undefined
     }
 
-    return new LlamaCppHighlightProvider(
+    return new SemanticHighlightHighlighter(
       config.ggufPath,
       config.topK ?? 20,
       this.logger,

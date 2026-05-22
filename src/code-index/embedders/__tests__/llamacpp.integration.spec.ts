@@ -10,6 +10,7 @@ import * as os from "os"
 import { parse } from "jsonc-parser"
 import { LlamaCppEmbedder } from "../llamacpp"
 import { LlamaCppReranker } from "../../rerankers/llamacpp-rerank"
+import { SemanticHighlightReranker } from "../../rerankers/semantic-highlight"
 import { LlamaCppSummarizer } from "../../summarizers/llamacpp"
 import { getLlama } from "node-llama-cpp"
 
@@ -46,6 +47,23 @@ function findModelPath(key: string): string | undefined {
 const embedderModelPath = findModelPath("embedderLlamaCppModelPath")
 const rerankerModelPath = findModelPath("rerankerGgufPath")
 const llmModelPath = findModelPath("summarizerLlamaCppModelPath")
+// Skip cross-encoder test if model path is a semantic-highlight model (doesn't support ranking)
+const isCrossEncoderModel = rerankerModelPath && !rerankerModelPath.includes("semantic_highlight")
+
+// Detect reranker provider type from config
+function getRerankerProvider(): string | undefined {
+  for (const dir of CONFIG_DIRS) {
+    const filepath = path.join(dir, "autodev-config.json")
+    try {
+      if (fs.existsSync(filepath)) {
+        const config = parse(fs.readFileSync(filepath, "utf-8"))
+        return config?.rerankerProvider
+      }
+    } catch { /* ignore */ }
+  }
+  return undefined
+}
+const rerankerProvider = getRerankerProvider()
 
 describe.runIf(embedderModelPath)("LlamaCPP Embedder", () => {
   it("loads model and creates embeddings", async () => {
@@ -76,7 +94,7 @@ describe.runIf(embedderModelPath)("LlamaCPP Embedder", () => {
   })
 })
 
-describe.runIf(rerankerModelPath)("LlamaCPP Reranker (cross-encoder)", () => {
+describe.runIf(isCrossEncoderModel)("LlamaCPP Reranker (cross-encoder)", () => {
   it("loads model and reranks candidates", async () => {
     const reranker = new LlamaCppReranker(rerankerModelPath!)
     const candidates = [
@@ -103,6 +121,40 @@ describe.runIf(rerankerModelPath)("LlamaCPP Reranker (cross-encoder)", () => {
     const result = await reranker.validateConfiguration()
     expect(result.valid).toBe(true)
   }, 120_000)
+})
+
+// Semantic-Highlight Reranker (unified GGUF: backbone + RerankHead)
+describe.runIf(rerankerModelPath && rerankerProvider === "semantic-highlight")("SemanticHighlight Reranker", () => {
+  it("loads model and reranks candidates", async () => {
+    const reranker = new SemanticHighlightReranker(rerankerModelPath!)
+    const candidates = [
+      { id: "1", content: "def add(a, b): return a + b", score: 0.5, payload: {} },
+      { id: "2", content: "class DataProcessor:", score: 0.4, payload: {} },
+      { id: "3", content: "import requests", score: 0.3, payload: {} },
+    ]
+    const results = await reranker.rerank("python addition function", candidates)
+    expect(results).toHaveLength(3)
+    results.forEach(r => {
+      expect(r.score).toBeGreaterThanOrEqual(0)
+      expect(r.score).toBeLessThanOrEqual(1)
+      // Should have precomputed PruningHead probs in payload
+      const payload = r.payload as Record<string, unknown> | undefined
+      expect(payload?.["_semanticHighlightTokenProbs"]).toBeTruthy()
+      expect(payload?.["_semanticHighlightCodeText"]).toBe(candidates.find(c => c.id === r.id)?.content)
+    })
+  }, 180_000)
+
+  it("returns empty for empty candidates", async () => {
+    const reranker = new SemanticHighlightReranker(rerankerModelPath!)
+    const results = await reranker.rerank("test", [])
+    expect(results).toEqual([])
+  }, 10_000)
+
+  it("validates configuration", async () => {
+    const reranker = new SemanticHighlightReranker(rerankerModelPath!)
+    const result = await reranker.validateConfiguration()
+    expect(result.valid).toBe(true)
+  }, 180_000)
 })
 
 describe.runIf(llmModelPath)("LlamaCPP Summarizer", () => {

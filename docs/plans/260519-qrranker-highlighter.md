@@ -7,7 +7,7 @@
 ### 背景
 
 两个现有高亮器质量不达标：
-- `LlamaCppHighlightProvider`（277M XLM-R + 外置 Pruning Head）— 模型太小，pruning head 不是为代码训练的，效果差
+- `SemanticHighlightHighlighter`（277M XLM-R + 外置 Pruning Head）— 模型太小，pruning head 不是为代码训练的，效果差
 - `LlamaCppLLMHighlighter`（0.6B + TOPIC prompt）— 只返回单连续行范围，无法处理不连续的感兴趣行，0.6B 理解代码能力弱
 
 QRRanker（Qwen3-4B）的 `kq_soft_max` attention 数据天然包含 per-token 的 query→document 相关性信号，是更好的高亮基础。
@@ -62,7 +62,7 @@ npx tsx src/cli.ts search "train method" --demo --json | jq '.[0].payload.highli
 
 ```text-chart
 IHighlighter
-├── LlamaCppHighlightProvider    ← 专用 GGUF (277M) + Pruning Head
+├── SemanticHighlightHighlighter    ← 专用 GGUF (277M) + Pruning Head
 ├── LlamaCppLLMHighlighter       ← 0.6B LLM + TOPIC prompt
 └── QRRankerHighlighter          ← 【新增】Qwen3-4B attention-based
 ```
@@ -421,6 +421,6 @@ reranker 的 `_rerankBatch()` 已计算出 per-token attention 分数。通过 p
 **参考：**
 - QRRanker reranker 实现：`src/code-index/rerankers/qrranker.ts`
 - QRRanker addon patch 方案：`docs/plans/260519-qrranker-llamacpp-patch.md`
-- 专用模型高亮器：`src/code-index/highlighters/llamacpp.ts`
+- 专用模型高亮器：`src/code-index/highlighters/semantic-highlight.ts`
 - LLM prompt 高亮器：`src/code-index/highlighters/llamacpp-llm.ts`
 - Debug 热力图文档：`docs/plans/260520-debug-highlight.md`（已合并到本文档）

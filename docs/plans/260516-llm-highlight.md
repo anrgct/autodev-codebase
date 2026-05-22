@@ -2,7 +2,7 @@
 
 ## 主题/需求
 
-为 codebase 搜索管线新增 **LLM Prompt 驱动的行级高亮器** (`LlamaCppLLMHighlighter`)，与现有的专用模型高亮器 (`LlamaCppHighlightProvider`) 并行存在，形成与 Reranker 层一致的"专用模型 vs LLM Prompt"双路线架构。
+为 codebase 搜索管线新增 **LLM Prompt 驱动的行级高亮器** (`LlamaCppLLMHighlighter`)，与现有的专用模型高亮器 (`SemanticHighlightHighlighter`) 并行存在，形成与 Reranker 层一致的"专用模型 vs LLM Prompt"双路线架构。
 
 ### 目标
 
@@ -47,7 +47,7 @@ IReranker
 
 ```text-chart
 IHighlighter
-└── LlamaCppHighlightProvider  ← 专用 semantic-highlight GGUF + pruning head
+└── SemanticHighlightHighlighter  ← 专用 semantic-highlight GGUF + pruning head
 └── LlamaCppLLMHighlighter     ← 【新增】共享 LLM + chat prompt 行级过滤
 ```
 
@@ -56,7 +56,7 @@ IHighlighter
 | 文件 | 职责 |
 |------|------|
 | `src/code-index/interfaces/highlighter.ts` | `IHighlighter`、`HighlighterConfig` 接口 |
-| `src/code-index/highlighters/llamacpp.ts` | 专用模型高亮器（参考实现） |
+| `src/code-index/highlighters/semantic-highlight.ts` | 专用模型高亮器（参考实现） |
 | `src/code-index/rerankers/llamacpp-llm-rerank.ts` | LLM reranker（prompt 构建参考） |
 | `src/code-index/interfaces/config.ts` | `CodeIndexConfig` 配置接口 |
 | `src/code-index/config-manager.ts` | 配置管理器 |
@@ -151,7 +151,7 @@ RESULT:
 
 ### 决策5：fallback 策略
 
-**选择：** LLM 解析失败时返回所有行（与 `LlamaCppHighlightProvider._fallbackAllLines` 一致）
+**选择：** LLM 解析失败时返回所有行（与 `SemanticHighlightHighlighter._fallbackAllLines` 一致）
 
 **理由：**
 - 不阻塞搜索管线
@@ -170,7 +170,7 @@ RESULT:
   - `validateConfiguration()` 方法：检查文件 + 模型加载 + 测试调用
   - 纯逻辑方法：`_buildPrompt`（极简 0.6B 优化）、`_parseResponse`、`_buildResult`、`_formatOutput`、`_fallbackAllLines`
 - [x] **阶段3：service-factory 集成** — 按 provider 分发
-  - `createHighlighter()` 根据 `highlighterProvider` 创建 `LlamaCppLLMHighlighter` 或 `LlamaCppHighlightProvider`
+  - `createHighlighter()` 根据 `highlighterProvider` 创建 `LlamaCppLLMHighlighter` 或 `SemanticHighlightHighlighter`
   - 模型延迟加载由 highlighter 内部处理，factory 只需传入 `modelPath`
   - `search-service.ts`: 并发控制的并行 highlighter 处理（`Promise.all` + batch）
 - [x] **阶段4：类型检查 + 构建验证**
@@ -194,7 +194,7 @@ RESULT:
   - `service-factory.ts` — createHighlighter() 支持双 provider
   - `search-service.ts` — 并发控制的并行 highlighter 处理
 - 关键决策调整：
-  - `LlamaCppLLMHighlighter` 改为接收 `modelPath`（字符串）+ 内部 `_ensureModel()` 延迟加载，而非工厂层预加载 `LlamaModel`，保持与 `LlamaCppHighlightProvider` 一致的构造模式
+  - `LlamaCppLLMHighlighter` 改为接收 `modelPath`（字符串）+ 内部 `_ensureModel()` 延迟加载，而非工厂层预加载 `LlamaModel`，保持与 `SemanticHighlightHighlighter` 一致的构造模式
   - 并发控制放在 `search-service.ts` 管线层（`Promise.all` 按 `concurrency` 分批），而非 highlighter 内部
 
 ### Prompt 优化测试（`_test_prompts.ts`）
@@ -229,7 +229,7 @@ RESULT:
 
 ## 总结
 
-**核心思路：** 用 LLM chat prompt（模仿 `LlamaCppLLMReranker`）替代专用 GGUF 模型 + pruning head（`LlamaCppHighlightProvider`），实现行级代码高亮。
+**核心思路：** 用 LLM chat prompt（模仿 `LlamaCppLLMReranker`）替代专用 GGUF 模型 + pruning head（`SemanticHighlightHighlighter`），实现行级代码高亮。
 
 **关键技术点：**
 1. Prompt 针对小模型极致优化：`TOPIC:` 前缀 + `matching` 语义 + 无示例 + 简输出

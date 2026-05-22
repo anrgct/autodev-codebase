@@ -15,6 +15,7 @@ interface SearchResult {
     endLine?: number;
     hierarchyDisplay?: string;
     highlightedText?: string;
+    debugTokenView?: string;
   } | null;
   score?: number;
 }
@@ -188,6 +189,10 @@ function formatSearchResultsAsJson(results: SearchResult[], query: string): stri
     // Include highlighted text if available
     if (result.payload?.["highlightedText"]) {
       snippet.highlightedText = result.payload["highlightedText"];
+    }
+    // Include debug token view if available
+    if (result.payload?.["debugTokenView"]) {
+      snippet.debugTokenView = result.payload["debugTokenView"];
     }
     return snippet;
   });

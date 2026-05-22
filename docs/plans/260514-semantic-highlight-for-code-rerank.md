@@ -13,7 +13,7 @@
 
 ### 预期成果
 
-- 新增 `IHighlighter` 接口和 `LlamaCppHighlightProvider` 实现
+- 新增 `IHighlighter` 接口和 `SemanticHighlightHighlighter` 实现
 - 在 `CodeIndexSearchService.searchIndex()` 管线中插入 Highlighter 步骤
 - `patch-package` 方式给 `node-llama-cpp` 打补丁，增加 `getEmbeddingsForTokens()` token 级 embedding API
 - 输出格式：`{lineNumber}  {text}` + `---` 分隔符
@@ -166,7 +166,7 @@ searchIndex(query, filter)  (search-service.CodeIndexSearchService.searchIndex:2
 
 ### 决策5：Pruning Head 权重硬编码为 TypeScript 常量
 
-**选择：** 将 `pruning_head_weight.npy` [2, 1024] 和 `pruning_head_bias.npy` [2] 导出为 TypeScript 常量，嵌入 `LlamaCppHighlightProvider`
+**选择：** 将 `pruning_head_weight.npy` [2, 1024] 和 `pruning_head_bias.npy` [2] 导出为 TypeScript 常量，嵌入 `SemanticHighlightHighlighter`
 
 **理由：**
 - 权重极小（2048 + 2 = 2050 个 float32，约 8KB），编译后增量可忽略
@@ -186,7 +186,7 @@ searchIndex(query, filter)  (search-service.CodeIndexSearchService.searchIndex:2
 
 - [x] **阶段1：node-llama-cpp patch** — 修改 `LlamaEmbeddingContext.js` 和 `.d.ts`，新增 `getEmbeddingsForTokens()`，生成 patch 文件
 - [x] **阶段2：接口定义** — 新建 `src/code-index/interfaces/highlighter.ts`，定义 `IHighlighter`、`HighlightLine`、`HighlightResult`、`HighlighterConfig`
-- [x] **阶段3：LlamaCppHighlightProvider 实现** — 新建 `src/code-index/highlighters/llamacpp.ts`
+- [x] **阶段3：SemanticHighlightHighlighter 实现** — 新建 `src/code-index/highlighters/semantic-highlight.ts`
   - 加载 GGUF 模型 + 创建 embedding context
   - 调用 `getEmbeddingsForTokens()` 获取 token 级 hidden states
   - 应用外置 Pruning Head（softmax → keep probs）
@@ -205,7 +205,7 @@ searchIndex(query, filter)  (search-service.CodeIndexSearchService.searchIndex:2
 - ✅ **阶段1-7 完成** — 全部 7 个代码阶段已实施并通过类型检查
 - 新增文件：
   - `src/code-index/interfaces/highlighter.ts` — IHighlighter 接口定义
-  - `src/code-index/highlighters/llamacpp.ts` — LlamaCppHighlightProvider 实现
+  - `src/code-index/highlighters/semantic-highlight.ts` — SemanticHighlightHighlighter 实现
   - `src/code-index/highlighters/constants/pruning-head-weights.ts` — Base64 编码的 Pruning Head 权重
 - 修改文件：
   - `interfaces/config.ts` — CodeIndexConfig / PreviousConfigSnapshot / ConfigSnapshot 新增 highlighter 字段
@@ -281,7 +281,7 @@ dispatchPendingBatch #8: llama_decode(416) → embd.data 只剩 416 个
 
 **方案 B（已采用 ✅）：增大 embedding context 的 batchSize**
 
-在 `LlamaCppHighlightProvider._ensureModel()` 中将 `createEmbeddingContext` 的 `batchSize` 设为模型的 training context size（如 8192）：
+在 `SemanticHighlightHighlighter._ensureModel()` 中将 `createEmbeddingContext` 的 `batchSize` 设为模型的 training context size（如 8192）：
 
 ```typescript
 const embedContextSize = this._model.trainContextSize
@@ -342,7 +342,7 @@ for (let offset = 0; offset < resolvedInput.length; offset += chunkSize) {
 
 ### 2026-05-21（--debug-highlight 支持 + 后处理过滤 + 回退移除）
 
-- ✅ **`--debug-highlight` 支持 `semantic-highlight` provider** — `LlamaCppHighlightProvider` 新增 `_buildDebugTokenView()` 方法
+- ✅ **`--debug-highlight` 支持 `semantic-highlight` provider** — `SemanticHighlightHighlighter` 新增 `_buildDebugTokenView()` 方法
 - **逐词着色** — 以 `/(\s+|[^\s]+)/g` 切分词语，取词中点字符位置反向比例映射到 embedding token 分数，词内颜色统一不割裂
 - **后处理过滤** — 排除不连续纯符号行（`"""`, `)`, `}`, `---` 等 1-3 字符无 `[\p{L}\p{N}_]` 且前后无保留行的行），与 qrranker 一致
 - **移除阈值回退** — threshold 模式下无行达标时不再回退到最优行，直接返回空
