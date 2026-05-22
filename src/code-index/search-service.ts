@@ -141,14 +141,22 @@ export class CodeIndexSearchService {
                     if (payload?.["_qrrankerPerTokenScores"] && payload?.["_qrrankerCodeText"]) {
                       highlightOptions._qrrankerPerTokenScores = payload["_qrrankerPerTokenScores"] as Float32Array;
                       highlightOptions._qrrankerCodeText = payload["_qrrankerCodeText"] as string;
-                      if (payload["_qrrankerCodeTokenIds"]) {
-                        highlightOptions._qrrankerCodeTokenIds = payload["_qrrankerCodeTokenIds"] as number[];
+                      if (payload["_qrrankerTokenTexts"]) {
+                        highlightOptions._qrrankerTokenTexts = payload["_qrrankerTokenTexts"] as string[];
                       }
+                      highlightOptions._qrrankerChunkScore = result.score;
                     }
                     // Pass precomputed semantic-highlight PruningHead probs (optimization for semantic-highlight provider)
                     if (payload?.["_semanticHighlightTokenProbs"] && payload?.["_semanticHighlightCodeText"]) {
                       highlightOptions._semanticHighlightTokenProbs = payload["_semanticHighlightTokenProbs"] as Float32Array;
                       highlightOptions._semanticHighlightCodeText = payload["_semanticHighlightCodeText"] as string;
+                      if (payload["_semanticHighlightTokenTexts"]) {
+                        highlightOptions._semanticHighlightTokenTexts = payload["_semanticHighlightTokenTexts"] as string[];
+                      }
+                      if (payload["_semanticHighlightInput"]) {
+                        highlightOptions._semanticHighlightInput = payload["_semanticHighlightInput"] as string;
+                      }
+                      highlightOptions._semanticHighlightChunkScore = result.score;
                     }
                     const highlightResult = await this.highlighter!.highlight(
                       query,

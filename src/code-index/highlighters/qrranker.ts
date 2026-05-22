@@ -19,13 +19,13 @@ const ANSI_RESET = "\x1b[0m";
 function scoreRatioToAnsiFg(ratio: number): string {
   if (ratio <= 0) return "\x1b[38;5;237m"; // near-invisible
   if (ratio < 0.05) return "\x1b[38;5;240m"; // dark gray
-  if (ratio < 0.15) return "\x1b[38;5;33m"; // blue
-  if (ratio < 0.3) return "\x1b[38;5;45m"; // light blue
-  if (ratio < 0.45) return "\x1b[38;5;47m"; // green
+  if (ratio < 0.15) return "\x1b[38;5;33m";  // blue
+  if (ratio < 0.3)  return "\x1b[38;5;45m";  // light blue
+  if (ratio < 0.45) return "\x1b[38;5;47m";  // green
   if (ratio < 0.55) return "\x1b[38;5;119m"; // light green
-  if (ratio < 0.65) return "\x1b[38;5;227m"; // yellow
+  if (ratio < 0.65) return "\x1b[38;5;215m"; // yellow (dimmed)
   if (ratio < 0.75) return "\x1b[38;5;214m"; // orange
-  if (ratio < 0.9) return "\x1b[38;5;202m"; // dark orange
+  if (ratio < 0.9)  return "\x1b[38;5;202m"; // dark orange
   return "\x1b[38;5;196m"; // bright red
 }
 
@@ -33,64 +33,6 @@ function scoreRatioToAnsiFg(ratio: number): string {
 function scoreToAnsiFg(score: number, maxScore: number): string {
   if (maxScore <= 0) return "\x1b[38;5;237m";
   return scoreRatioToAnsiFg(Math.min(score / (maxScore * 1.15), 1));
-}
-
-/**
- * Compute per-line scores using same detokenized-character mapping as buildTokenHeatmap.
- * This ensures bar score colors are consistent with per-token block colors.
- */
-function computeHeatmapLineScores(
-  tokenIds: number[],
-  perTokenScores: Float32Array,
-  codeChunk: string,
-  codeLines: string[],
-  detokenizeFn: (tok: Token) => string,
-): number[] {
-  const codeChars = codeChunk.length;
-  const totalTokens = tokenIds.length;
-  if (totalTokens === 0 || codeChars === 0) return new Array(codeLines.length).fill(0);
-
-  const lineCharEnds: number[] = new Array(codeLines.length);
-  let charAcc = 0;
-  for (let li = 0; li < codeLines.length; li++) {
-    charAcc += codeLines[li].length + (li < codeLines.length - 1 ? 1 : 0);
-    lineCharEnds[li] = charAcc;
-  }
-
-  const tokenTexts: string[] = new Array(totalTokens);
-  let totalDetokLen = 0;
-  for (let ti = 0; ti < totalTokens; ti++) {
-    const text = detokenizeFn(tokenIds[ti] as Token);
-    tokenTexts[ti] = text;
-    totalDetokLen += text.length;
-  }
-
-  const lineScores = new Array<number>(codeLines.length).fill(0);
-  const lineCounts = new Array<number>(codeLines.length).fill(0);
-
-  let detokAcc = 0;
-  for (let ti = 0; ti < totalTokens; ti++) {
-    const score = perTokenScores[ti];
-    const text = tokenTexts[ti];
-    const codePos = totalDetokLen > 0 ? (detokAcc / totalDetokLen) * codeChars : 0;
-    detokAcc += text.length;
-    if (codePos < 0 || codePos >= codeChars) continue;
-
-    let lineStart = 0;
-    for (let li = 0; li < codeLines.length; li++) {
-      if (codePos >= lineStart && codePos < lineCharEnds[li]) {
-        lineScores[li] += score;
-        lineCounts[li]++;
-        break;
-      }
-      lineStart = lineCharEnds[li];
-    }
-  }
-
-  for (let li = 0; li < codeLines.length; li++) {
-    if (lineCounts[li] > 0) lineScores[li] /= lineCounts[li];
-  }
-  return lineScores;
 }
 
 /**
@@ -121,13 +63,10 @@ function buildTokenHeatmap(
   const codeChars = codeChunk.length;
   const barWidth = 10;
 
-  // Pre-collect detokenized texts and compute actual cumulative character lengths
+  // Pre-collect detokenized texts
   const tokenTexts: string[] = new Array(codeTokenCount);
-  let totalDetokLen = 0;
   for (let ti = 0; ti < codeTokenCount; ti++) {
-    const text = detokenizeFn(tokens[codeStart + ti]);
-    tokenTexts[ti] = text;
-    totalDetokLen += text.length;
+    tokenTexts[ti] = detokenizeFn(tokens[codeStart + ti]);
   }
 
   // Pre-compute each code line's character range in codeChunk.
@@ -147,18 +86,45 @@ function buildTokenHeatmap(
     const score = perTokenScores[codeStart + ti] || 0;
     const text = tokenTexts[ti];
 
-    const codePos = totalDetokLen > 0 ? (detokAcc / totalDetokLen) * codeChars : 0;
-    detokAcc += text.length;
+    // Windowed search: detokAcc gives approximate position, indexOf
+    // refines it within a narrow window to avoid distant substring collisions.
+    let codePos: number;
+    if (text.length > 0) {
+      const searchFrom = Math.max(0, detokAcc - 5);
+      const searchTo = Math.min(codeChars, detokAcc + text.length + 10);
+      const idx = codeChunk.indexOf(text, searchFrom);
+      if (idx >= 0 && idx < searchTo) {
+        codePos = idx;
+        detokAcc = idx + text.length;
+      } else {
+        codePos = detokAcc;
+        detokAcc += text.length; // drift, but constrained
+      }
+    } else {
+      codePos = detokAcc;
+    }
 
     if (codePos < 0 || codePos >= codeChars) continue;
 
     let lineStart = 0;
     for (let li = 0; li < codeLines.length; li++) {
       if (codePos >= lineStart && codePos < lineCharEnds[li]) {
-        const cleanText = text.replace(/\r?\n/g, "");
-        if (cleanText.length > 0) {
-          const color = scoreToAnsiFg(score, maxScore);
-          lineTokenParts[li].push(`${color}${cleanText}${ANSI_RESET}`);
+        const color = scoreToAnsiFg(score, maxScore);
+        if (/\r?\n/.test(text)) {
+          // Token spans multiple lines: split and distribute across consecutive lines
+          const segments = text.split(/\r?\n/);
+          for (let si = 0; si < segments.length && (li + si) < codeLines.length; si++) {
+            if (segments[si].length > 0) {
+              lineTokenParts[li + si].push(`${color}${segments[si]}${ANSI_RESET}`);
+            } else if (si > 0 && si < segments.length - 1) {
+              lineTokenParts[li + si].push(`${color}↵${ANSI_RESET}`);
+            }
+          }
+          if (segments.length > 1) {
+            lineTokenParts[li].push(`${color}↵${ANSI_RESET}`);
+          }
+        } else if (text.length > 0) {
+          lineTokenParts[li].push(`${color}${text}${ANSI_RESET}`);
         }
         break;
       }
@@ -210,6 +176,147 @@ function buildTokenHeatmap(
     ...mergedParts,
     `\n─── Stats ───`,
     `  Tokens: ${total}  |  max=${maxScore.toFixed(6)}  min=${minScore.toFixed(6)}  mean=${mean.toFixed(6)}`,
+    `  Legend: ${legendStr}`,
+    `═══════════════════════════════`,
+  ].join("\n");
+}
+
+/**
+ * Build debug heatmap using pre-detokenized token texts from the reranker.
+ * Uses exact BPE boundaries (same as original buildTokenHeatmap) but no model needed.
+ */
+function buildTokenHeatmapFromTexts(
+  texts: string[],
+  perTokenScores: Float32Array,
+  codeChunk: string,
+  startLine: number,
+  lineScores: number[],
+  chunkScore?: number,
+): string {
+  const totalTokens = texts.length;
+  if (totalTokens === 0) return "";
+
+  let maxScore = 0;
+  for (let i = 0; i < totalTokens; i++) {
+    if (perTokenScores[i] > maxScore) maxScore = perTokenScores[i];
+  }
+
+  const codeLines = codeChunk.split("\n");
+  const codeChars = codeChunk.length;
+  const barWidth = 10;
+
+  const lineCharEnds: number[] = new Array(codeLines.length);
+  let charAcc = 0;
+  for (let li = 0; li < codeLines.length; li++) {
+    charAcc += codeLines[li].length + (li < codeLines.length - 1 ? 1 : 0);
+    lineCharEnds[li] = charAcc;
+  }
+
+  const lineTokenParts: string[][] = Array.from({ length: codeLines.length }, () => []);
+  const maxLineScore = Math.max(...lineScores, 0.00001);
+
+  let detokAcc = 0;
+  for (let ti = 0; ti < totalTokens; ti++) {
+    const score = perTokenScores[ti] || 0;
+    const text = texts[ti];
+
+    // Windowed search: detokAcc gives approximate position, indexOf
+    // refines it within a narrow window to avoid distant substring collisions.
+    let codePos: number;
+    if (text.length > 0) {
+      const searchFrom = Math.max(0, detokAcc - 5);
+      const searchTo = Math.min(codeChars, detokAcc + text.length + 10);
+      const idx = codeChunk.indexOf(text, searchFrom);
+      if (idx >= 0 && idx < searchTo) {
+        codePos = idx;
+        detokAcc = idx + text.length;
+      } else {
+        codePos = detokAcc;
+        detokAcc += text.length; // drift, but constrained
+      }
+    } else {
+      codePos = detokAcc;
+    }
+
+    if (codePos < 0 || codePos >= codeChars) continue;
+
+    let lineStart = 0;
+    for (let li = 0; li < codeLines.length; li++) {
+      if (codePos >= lineStart && codePos < lineCharEnds[li]) {
+        const color = scoreToAnsiFg(score, maxScore);
+        if (/\r?\n/.test(text)) {
+          // Token spans multiple lines: split and distribute across consecutive lines
+          const segments = text.split(/\r?\n/);
+          for (let si = 0; si < segments.length && (li + si) < codeLines.length; si++) {
+            const seg = segments[si];
+            if (seg.length > 0) {
+              const visible = /^\s+$/.test(seg) ? "░".repeat(Math.max(1, seg.length)) : seg;
+              lineTokenParts[li + si].push(`${color}${visible}${ANSI_RESET}`);
+            } else if (si > 0 && si < segments.length - 1) {
+              // Empty intermediate segment: blank line consumed by this BPE token
+              lineTokenParts[li + si].push(`${color}↵${ANSI_RESET}`);
+            }
+          }
+          // Mark BPE token boundary at end of anchor line
+          if (segments.length > 1) {
+            lineTokenParts[li].push(`${color}↵${ANSI_RESET}`);
+          }
+        } else if (text.length > 0) {
+          const visible = /^\s+$/.test(text) ? "░".repeat(Math.max(1, text.length)) : text;
+          lineTokenParts[li].push(`${color}${visible}${ANSI_RESET}`);
+        }
+        break;
+      }
+      lineStart = lineCharEnds[li];
+    }
+  }
+
+  const mergedParts: string[] = [];
+  for (let li = 0; li < codeLines.length; li++) {
+    const s = lineScores[li];
+    const filled = Math.round((s / maxLineScore) * barWidth);
+    const bar =
+      `${scoreToAnsiFg(s, maxScore)}█${ANSI_RESET}`.repeat(filled) +
+      "░".repeat(barWidth - filled);
+    const lineNum = String(startLine + li).padStart(4);
+    const tokenSide = lineTokenParts[li].join("");
+    const rightSide = tokenSide || `${ANSI_RESET}${codeLines[li]}`;
+    const scoreStr = s.toFixed(6);
+    mergedParts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${rightSide}`);
+  }
+
+  const legendSteps = [
+    { label: "low", ratio: 0.05 },
+    { label: "", ratio: 0.3 },
+    { label: "med", ratio: 0.5 },
+    { label: "", ratio: 0.7 },
+    { label: "high", ratio: 1.0 },
+  ];
+  const legendStr = legendSteps
+    .map(({ label, ratio }) => `${scoreRatioToAnsiFg(ratio)}■${ANSI_RESET}${label}`)
+    .join("  ");
+
+  const sum = Array.from(perTokenScores).reduce((a, b) => a + b, 0);
+  const mean = totalTokens > 0 ? sum / totalTokens : 0;
+  let minScore = Infinity;
+  for (let i = 0; i < totalTokens; i++) {
+    if (perTokenScores[i] < minScore) minScore = perTokenScores[i];
+  }
+  if (minScore === Infinity) minScore = 0;
+
+  // Per-line stats
+  const lineMax = Math.max(...lineScores, 0);
+  const lineMin = lineScores.length > 0 ? Math.min(...lineScores) : 0;
+  const lineSum = lineScores.reduce((a, b) => a + b, 0);
+  const lineMean = lineScores.length > 0 ? lineSum / lineScores.length : 0;
+
+  return [
+    `${ANSI_RESET}═══ Token Attention Heatmap ═══`,
+    ...mergedParts,
+    `\n─── Stats ───`,
+    `  Tokens: ${totalTokens}  |  max=${maxScore.toFixed(6)}  min=${minScore.toFixed(6)}  mean=${mean.toFixed(6)}`,
+    `  Lines:  ${lineScores.length}  |  max=${lineMax.toFixed(6)}  min=${lineMin.toFixed(6)}  mean=${lineMean.toFixed(6)}`,
+    ...(chunkScore !== undefined ? [`  Rerank: ${chunkScore.toFixed(6)}`] : []),
     `  Legend: ${legendStr}`,
     `═══════════════════════════════`,
   ].join("\n");
@@ -443,13 +550,22 @@ export class QRRankerHighlighter implements IHighlighter {
     );
 
     const scores = new Float32Array(nKv);
+    let validHeads = 0;
+    // QR_HEADS was designed for 32-head models. Map proportionally to the
+    // actual model's head count so relative positions (low/mid/high) are preserved.
+    const QR_SOURCE_NHEAD = 32;
 
-    for (const { layer, head } of QR_HEADS) {
+    const mappedHeads: string[] = [];
+    for (const { layer, head: rawHead } of QR_HEADS) {
+      const head = nHead === QR_SOURCE_NHEAD
+        ? rawHead
+        : Math.min(Math.round(rawHead * nHead / QR_SOURCE_NHEAD), nHead - 1);
       const layerData = context.getKqSoftMax(layer);
       if (!layerData) {
-        this.logger?.warn(`[QRRankerHighlighter] Layer ${layer} data missing, skipping`);
+        this.logger?.debug(`[QRRankerHighlighter] Layer ${layer} data missing, skipping`);
         continue;
       }
+      mappedHeads.push(`${layer}:${head}`);
 
       // Sum attention from each query token to each KV position
       for (let q = queryStart; q < queryEnd; q++) {
@@ -457,10 +573,13 @@ export class QRRankerHighlighter implements IHighlighter {
           scores[kv] += layerData[head * nTokens * nKv + q * nKv + kv];
         }
       }
+      validHeads++;
     }
 
-    // Normalize by (heads × query tokens) so scores are in [0, 1]
-    const normalizer = QR_HEADS.length * nQueryTokens;
+    this.logger?.debug(`[QRRankerHighlighter] QR heads (nHead=${nHead}): ${mappedHeads.join(" ")}`);
+
+    // Normalize by (validHeads × query tokens) so scores are in [0, 1]
+    const normalizer = validHeads * nQueryTokens;
     if (normalizer > 0) {
       for (let kv = 0; kv < nKv; kv++) {
         scores[kv] /= normalizer;
@@ -504,19 +623,28 @@ export class QRRankerHighlighter implements IHighlighter {
     const lineScores = new Array<number>(codeLines.length).fill(0);
     const lineCounts = new Array<number>(codeLines.length).fill(0);
 
-    // Use cumulative detokenized character lengths for accurate token→line mapping
-    let totalDetokLen = 0;
-    for (let ti = 0; ti < codeTokenCount; ti++) {
-      totalDetokLen += this._detokenizeOne(tokens[codeStart + ti]).length;
-    }
-
     let detokAcc = 0;
     for (let ti = 0; ti < codeTokenCount; ti++) {
       const tokenScore = perTokenScores[codeStart + ti];
+      const text = this._detokenizeOne(tokens[codeStart + ti]);
 
-      // Character position in codeChars space (scaled from detokenized-text length)
-      const codePos = totalDetokLen > 0 ? (detokAcc / totalDetokLen) * codeChars : 0;
-      detokAcc += this._detokenizeOne(tokens[codeStart + ti]).length;
+      // Windowed indexOf: detokAcc provides approximate position,
+      // narrow search window avoids distant substring collisions.
+      let codePos: number;
+      if (text.length > 0) {
+        const searchFrom = Math.max(0, detokAcc - 5);
+        const searchTo = Math.min(codeChars, detokAcc + text.length + 10);
+        const idx = codeChunk.indexOf(text, searchFrom);
+        if (idx >= 0 && idx < searchTo) {
+          codePos = idx;
+          detokAcc = idx + text.length;
+        } else {
+          codePos = detokAcc;
+          detokAcc += text.length;
+        }
+      } else {
+        codePos = detokAcc;
+      }
 
       if (codePos < 0 || codePos >= codeChars) continue;
 
@@ -568,52 +696,18 @@ export class QRRankerHighlighter implements IHighlighter {
     if (hasPrecomputed) {
       // Fast path: use reranker's precomputed scores.
       const pScores = options!._qrrankerPerTokenScores!;
-      const tokenIds = options!._qrrankerCodeTokenIds;
       this.logger?.debug(
-        `[QRRankerHighlighter] Using precomputed scores (${pScores.length} tokens)` +
-        (tokenIds ? ` with ${tokenIds.length} token IDs` : " (no token IDs)"),
+        `[QRRankerHighlighter] Using precomputed scores (${pScores.length} tokens)`,
       );
 
-      // Use detokenized-character mapping when token IDs are available (reranker always provides them),
-      // falling back to proportional mapping only when token IDs are somehow missing.
-      // Ensure model is loaded first for detokenization.
-      if (tokenIds && tokenIds.length > 0 && tokenIds.length === pScores.length) {
-        await this._ensureModel();
-        lineScores = this.tokensToLines(
-          codeChunk, codeLines, pScores, 0, pScores.length, tokenIds as unknown as Token[],
-        );
-      } else {
-        lineScores = this._mapPrecomputedToLines(codeChunk, codeLines, pScores);
-      }
+      // Use proportional character-offset mapping for safety.
+      // Token IDs come from the reranker's model and may be incompatible
+      // with the highlighter's vocabulary → proportional mapping avoids crashes.
+      lineScores = this._mapPrecomputedToLines(codeChunk, codeLines, pScores, options._qrrankerTokenTexts);
 
-      // In debug mode, build heatmap using per-token blocks with real BPE boundaries.
-      // Token IDs come from reranker's full forward pass, ensuring consistent
-      // tokenization between scores and displayed text.
+      // Debug heatmap: use pre-detokenized texts from reranker for exact BPE boundaries
       if (debugHighlight) {
-        try {
-          if (tokenIds && tokenIds.length > 0 && tokenIds.length === pScores.length) {
-            const model = await this._ensureModel();
-            const heatmapLineScores = computeHeatmapLineScores(
-              tokenIds,
-              pScores,
-              codeChunk,
-              codeLines,
-              (tok: Token) => model.detokenize([tok]),
-            );
-            debugTokenView = buildTokenHeatmap(
-              tokenIds as unknown as Token[],
-              0,
-              tokenIds.length,
-              pScores,
-              (tok: Token) => model.detokenize([tok]),
-              codeChunk,
-              startLine,
-              heatmapLineScores,
-            );
-          }
-        } catch (err) {
-          this.logger?.warn('[QRRankerHighlighter] Failed to build debug token view:', err);
-        }
+        debugTokenView = buildTokenHeatmapFromTexts(options!._qrrankerTokenTexts!, pScores, codeChunk, startLine, lineScores, options._qrrankerChunkScore);
       }
     } else {
       // No precomputed scores: run a full forward pass (also used when benchmark/new query)
@@ -756,6 +850,7 @@ export class QRRankerHighlighter implements IHighlighter {
     codeChunk: string,
     codeLines: string[],
     perTokenScores: Float32Array,
+    tokenTexts?: string[],
   ): number[] {
     const codeChars = codeChunk.length;
     const totalTokens = perTokenScores.length;
@@ -763,10 +858,33 @@ export class QRRankerHighlighter implements IHighlighter {
 
     const lineScores = new Array<number>(codeLines.length).fill(0);
     const lineCounts = new Array<number>(codeLines.length).fill(0);
+    const hasTexts = tokenTexts && tokenTexts.length === totalTokens;
 
+    let detokAcc = 0;
     for (let ti = 0; ti < totalTokens; ti++) {
       const score = perTokenScores[ti];
-      const codePos = (ti / totalTokens) * codeChars;
+
+      // Windowed indexOf when token texts available, else fallback to proportional
+      let codePos: number;
+      if (hasTexts) {
+        const text = tokenTexts![ti];
+        if (text.length > 0) {
+          const searchFrom = Math.max(0, detokAcc - 5);
+          const searchTo = Math.min(codeChars, detokAcc + text.length + 10);
+          const idx = codeChunk.indexOf(text, searchFrom);
+          if (idx >= 0 && idx < searchTo) {
+            codePos = idx;
+            detokAcc = idx + text.length;
+          } else {
+            codePos = detokAcc;
+            detokAcc += text.length;
+          }
+        } else {
+          codePos = detokAcc;
+        }
+      } else {
+        codePos = (ti / totalTokens) * codeChars;
+      }
       if (codePos < 0 || codePos >= codeChars) continue;
 
       // Each line (except the last) includes a trailing \n separator character

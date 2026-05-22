@@ -277,6 +277,18 @@ _待实施_
 
 ## 修订记录
 
+### 2026-05-22（Head 等比映射 + 跨模型安全）
+
+QR_HEADS 硬编码 16 个 `(layer, head)` 对，head 索引最高 31，基于 32-head Qwen3-4B 训练。非 QRRanker 模型（16-head/8-head）上 head 越界读取 Float32Array 返回 `undefined` → 全部分数 NaN。
+
+**Head 等比映射：** `computeQRScores` / `computePerTokenScores` 中 `mappedHead = Math.min(Math.round(rawHead × nHead / 32), nHead - 1)`。32-head 走 identity（零开销）。映射后 16 head 全部存活，normalizer 按 `validHeads` 计数。
+
+**Layer 缺失降级：** `warn → debug` — 非 QR 模型上层不匹配是预期行为。
+
+**Detokenize 前置：** reranker 在 `_rerankBatch` 中对 code 区域 token 逐个 `model.detokenize([id])`，payload 传 `_qrrankerTokenTexts: string[]` 替代 `_qrrankerCodeTokenIds`。highlighter 不需要加载模型/碰词表，消除跨模型 `std::out_of_range` crash。
+
+**一行 debug 打印选中 heads：** `QR heads (nHead=16): 17:2 22:2 21:4 ...`
+
 ### 2026-05-19（ubatch 覆盖 bug）
 
 **问题描述**：当 `batchSize = 2048` 且输入 token 数（如 5510）超过该值时，QRRanker 所有 chunk 得分全为 0。

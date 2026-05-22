@@ -74,12 +74,20 @@ export interface HighlightOptions {
   _qrrankerPerTokenScores?: Float32Array
   /** [internal] 预计算分数对应的代码原文 */
   _qrrankerCodeText?: string
-  /** [internal] 来自 reranker 的 code token IDs（供 debug 热力图 per-token 块着色使用） */
-  _qrrankerCodeTokenIds?: number[]
+  /** [internal] 来自 reranker 的 pre-detokenized token texts（供 debug 热力图使用） */
+  _qrrankerTokenTexts?: string[]
+  /** [internal] 来自 reranker 的 chunk 总分 */
+  _qrrankerChunkScore?: number
   /** [internal] 来自 semantic-highlight reranker 的预计算 PruningHead keep probs */
   _semanticHighlightTokenProbs?: Float32Array
   /** [internal] 预计算分数对应的代码原文（用于 token→line 字符偏移映射） */
   _semanticHighlightCodeText?: string
+  /** [internal] 来自 semantic-highlight reranker 的逐个 detokenize token 文本 */
+  _semanticHighlightTokenTexts?: string[]
+  /** [internal] 来自 semantic-highlight reranker 的完整 input 字符串 */
+  _semanticHighlightInput?: string
+  /** [internal] 来自 semantic-highlight reranker 的 chunk 总分 */
+  _semanticHighlightChunkScore?: number
 }
 
 /**

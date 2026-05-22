@@ -186,13 +186,22 @@ export class QRRankerReranker implements IReranker {
 
     // Per-KV-position scores aggregated across all QR heads
     const perKvScores = new Float32Array(nKv);
+    let validHeads = 0;
+    // QR_HEADS was designed for 32-head models. Map proportionally to the
+    // actual model's head count so relative positions (low/mid/high) are preserved.
+    const QR_SOURCE_NHEAD = 32;
 
-    for (const { layer, head } of QR_HEADS) {
+    const mappedHeads: string[] = [];
+    for (const { layer, head: rawHead } of QR_HEADS) {
+      const head = nHead === QR_SOURCE_NHEAD
+        ? rawHead
+        : Math.min(Math.round(rawHead * nHead / QR_SOURCE_NHEAD), nHead - 1);
       const layerData = context.getKqSoftMax(layer);
       if (!layerData) {
-        this.logger?.warn(`[QRRanker] Layer ${layer} kq_soft_max data missing, skipping head (${layer}, ${head})`);
+        this.logger?.debug(`[QRRanker] Layer ${layer} kq_soft_max data missing, skipping head (${layer}, ${head})`);
         continue;
       }
+      mappedHeads.push(`${layer}:${head}`);
 
       // Sum attention from each query token to each KV position
       for (let q = queryStart; q < queryEnd; q++) {
@@ -200,10 +209,13 @@ export class QRRankerReranker implements IReranker {
           perKvScores[kv] += layerData[head * nTokens * nKv + q * nKv + kv];
         }
       }
+      validHeads++;
     }
 
-    // Normalize by (heads × query tokens) so scores are in [0, 1]
-    const normalizer = QR_HEADS.length * nQueryTokens;
+    this.logger?.debug(`[QRRanker] QR heads (nHead=${nHead}): ${mappedHeads.join(" ")}`);
+
+    // Normalize by (validHeads × query tokens) so scores are in [0, 1]
+    const normalizer = validHeads * nQueryTokens;
     if (normalizer > 0) {
       for (let kv = 0; kv < nKv; kv++) {
         perKvScores[kv] /= normalizer;
@@ -382,7 +394,7 @@ export class QRRankerReranker implements IReranker {
             ...candidate.payload,
             _qrrankerPerTokenScores: codeScores,
             _qrrankerCodeText: candidate.content,
-            _qrrankerCodeTokenIds: codeTokenIds,
+            _qrrankerTokenTexts: codeTokenIds.map((id) => model.detokenize([id as unknown as Token])),
           },
         };
       });

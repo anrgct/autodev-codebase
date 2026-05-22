@@ -21,19 +21,24 @@ type LoggerLike = Pick<Logger, "debug" | "info" | "warn" | "error">
 
 const ANSI_RESET = "\x1b[0m";
 
+/**
+ * Map a score ratio (0~1) to ANSI 256-color foreground code.
+ * Gradient: dark gray → blue → green → yellow → orange → red.
+ */
 function scoreRatioToAnsiFg(ratio: number): string {
-  if (ratio <= 0) return "\x1b[38;5;237m";
-  if (ratio < 0.05) return "\x1b[38;5;240m";
-  if (ratio < 0.15) return "\x1b[38;5;33m";
-  if (ratio < 0.3) return "\x1b[38;5;45m";
-  if (ratio < 0.45) return "\x1b[38;5;47m";
-  if (ratio < 0.55) return "\x1b[38;5;119m";
-  if (ratio < 0.65) return "\x1b[38;5;227m";
-  if (ratio < 0.75) return "\x1b[38;5;214m";
-  if (ratio < 0.9) return "\x1b[38;5;202m";
-  return "\x1b[38;5;196m";
+  if (ratio <= 0) return "\x1b[38;5;237m"; // near-invisible
+  if (ratio < 0.05) return "\x1b[38;5;240m"; // dark gray
+  if (ratio < 0.15) return "\x1b[38;5;33m";  // blue
+  if (ratio < 0.3)  return "\x1b[38;5;45m";  // light blue
+  if (ratio < 0.45) return "\x1b[38;5;47m";  // green
+  if (ratio < 0.55) return "\x1b[38;5;119m"; // light green
+  if (ratio < 0.65) return "\x1b[38;5;215m"; // yellow (dimmed)
+  if (ratio < 0.75) return "\x1b[38;5;214m"; // orange
+  if (ratio < 0.9)  return "\x1b[38;5;202m"; // dark orange
+  return "\x1b[38;5;196m"; // bright red
 }
 
+/** Score-to-foreground-color with relative scaling by maxScore. */
 function scoreToAnsiFg(score: number, maxScore: number): string {
   if (maxScore <= 0) return "\x1b[38;5;237m";
   return scoreRatioToAnsiFg(Math.min(score / (maxScore * 1.15), 1));
@@ -155,8 +160,9 @@ export class SemanticHighlightHighlighter implements IHighlighter {
     const precomputedProbs = options?._semanticHighlightTokenProbs
     if (precomputedProbs && precomputedProbs.length > 0) {
       // 使用 reranker 的输入格式（XLM-RoBERTa text pair）对齐 token 位置
-      const input = `${query} </s></s> ${codeChunk}`
+      const input = (options?._semanticHighlightInput as string) || `${query} </s></s> ${codeChunk}`
       const codeOffset = this._findCodeOffset(input, codeChunk)
+      const tokenTexts = options?._semanticHighlightTokenTexts as string[] | undefined
 
       const lineScores = this._aggregatePrecomputedProbsToLines(
         codeChunk,
@@ -164,6 +170,7 @@ export class SemanticHighlightHighlighter implements IHighlighter {
         precomputedProbs,
         input,
         codeOffset,
+        tokenTexts,
       )
 
       if (lineScores.length === 0) {
@@ -173,7 +180,8 @@ export class SemanticHighlightHighlighter implements IHighlighter {
       let debugTokenView: string | undefined
       if (options?.debugHighlight) {
         debugTokenView = this._buildDebugTokenViewFromProbs(
-          input, codeChunk, codeLines, startLine, precomputedProbs, lineScores,
+          input, codeChunk, codeLines, startLine, precomputedProbs, lineScores, tokenTexts,
+          options?._semanticHighlightChunkScore,
         )
       }
 
@@ -224,6 +232,8 @@ export class SemanticHighlightHighlighter implements IHighlighter {
 
   /**
    * 将预计算的 PruningHead keep probs 聚合到代码行。
+   * 使用窗口化 indexOf 精确映射 token → 字符位置（与 QRRanker 一致），
+   * XLM-RoBERTa 的 detokenize 丢 \n 导致换行处降级为比例映射。
    */
   private _aggregatePrecomputedProbsToLines(
     codeChunk: string,
@@ -231,30 +241,107 @@ export class SemanticHighlightHighlighter implements IHighlighter {
     precomputedProbs: Float32Array,
     input: string,
     codeOffset: number,
+    tokenTexts?: string[],
   ): number[] {
     const lineScores: number[] = new Array(codeLines.length).fill(0)
     const lineCounts: number[] = new Array(codeLines.length).fill(0)
 
     const totalChars = input.length
-    const codeChars = codeChunk.length
     const totalTokens = precomputedProbs.length
+        // Normalize tokenTexts length: getEmbeddingsForTokens may add BOS/EOS
+    let hasTexts = false
+    if (tokenTexts && tokenTexts.length >= totalTokens - 2 && tokenTexts.length < totalTokens) {
+      const pad = totalTokens - tokenTexts.length
+      tokenTexts = [...Array(pad).fill(''), ...tokenTexts]
+      hasTexts = true
+    } else {
+      hasTexts = !!(tokenTexts && tokenTexts.length === totalTokens)
+    }
 
+    // 预计算每行的字符范围
+    const lineCharEnds: number[] = new Array(codeLines.length)
+    let charAcc = 0
+    for (let li = 0; li < codeLines.length; li++) {
+      charAcc += codeLines[li].length + (li < codeLines.length - 1 ? 1 : 0)
+      lineCharEnds[li] = charAcc
+    }
+
+    // Per-line proportional fallback: estimate tokens per line from char ratio
+    const perLineTokEst: number[] = new Array(codeLines.length)
+    const perLineTokIdx: number[] = new Array(codeLines.length).fill(0)
+    const codeTotalChars2 = codeChunk.length
+    for (let pli = 0; pli < codeLines.length; pli++) {
+      const plen = codeLines[pli].length + (pli < codeLines.length - 1 ? 1 : 0)
+      perLineTokEst[pli] = Math.max(1, Math.round((plen / codeTotalChars2) * totalTokens))
+    }
+
+    let detokAcc = 0
     for (let ti = 0; ti < totalTokens; ti++) {
       const score = precomputedProbs[ti]
-      const approxCharPos = (ti / totalTokens) * totalChars
-      const codePos = approxCharPos - codeOffset
 
-      if (codePos < 0 || codePos >= codeChars) continue
+      let codePos: number
+      if (hasTexts) {
+        const text = tokenTexts![ti]
+        if (text.length > 0) {
+          const searchFrom = Math.max(0, detokAcc - 5)
+          const searchTo = Math.min(totalChars, detokAcc + text.length + 10)
+          const idx = input.indexOf(text, searchFrom)
+          if (idx >= 0 && idx < searchTo) {
+            codePos = idx - codeOffset
+            detokAcc = idx + text.length
+          } else {
+            const trimmed = text.trimStart()
+            const idx2 = trimmed.length > 0 && trimmed !== text ? input.indexOf(trimmed, searchFrom) : -1
+            if (idx2 >= 0 && idx2 < searchTo) {
+              codePos = idx2 - codeOffset
+              detokAcc = idx2 + trimmed.length
+            } else {
+              // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset
+      let fli = 0, lstart = 0
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break
+        lstart = lineCharEnds[fli]
+      }
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0 }
+      const tokIdx = perLineTokIdx[fli]++
+      const tokCount = perLineTokEst[fli]
+      const llen = codeLines[fli].length
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+              detokAcc = Math.max(detokAcc, codePos + codeOffset + Math.max(1, text.trimStart().length || 1))
+            }
+          }
+        } else {
+          // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset
+      let fli = 0, lstart = 0
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break
+        lstart = lineCharEnds[fli]
+      }
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0 }
+      const tokIdx = perLineTokIdx[fli]++
+      const tokCount = perLineTokEst[fli]
+      const llen = codeLines[fli].length
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+        }
+      } else {
+        // 无 token 文本时降级为比例映射
+        codePos = (ti / totalTokens) * totalChars - codeOffset
+      }
 
-      let charCount = 0
-      for (let i = 0; i < codeLines.length; i++) {
-        const lineLen = codeLines[i].length + 1
-        if (codePos >= charCount && codePos < charCount + lineLen) {
-          lineScores[i] += score
-          lineCounts[i]++
+      if (codePos < 0 || codePos >= codeChunk.length) continue
+
+      let lineStart = 0
+      for (let li = 0; li < codeLines.length; li++) {
+        if (codePos >= lineStart && codePos < lineCharEnds[li]) {
+          lineScores[li] += score
+          lineCounts[li]++
           break
         }
-        charCount += lineLen
+        lineStart = lineCharEnds[li]
       }
     }
 
@@ -329,6 +416,24 @@ export class SemanticHighlightHighlighter implements IHighlighter {
     return idx >= 0 ? idx : input.indexOf("[Code] ") + 7
   }
 
+  /**
+   * Tokenize input aligned with getEmbeddingsForTokens() length.
+   * getEmbeddingsForTokens() may prepend BOS (and possibly append EOS),
+   * so we use length diff to pad, avoiding per-model BOS/EOS detection.
+   * BOS/EOS padding is set to "" since they don't appear in the original input.
+   */
+  private _tokenizeAlignedWithEmbeddings(input: string, targetLen: number): string[] {
+    if (!this._model) return []
+
+    const rawIds = this._model.tokenize(input)
+    const rawTexts = rawIds.map((id) => this._model!.detokenize([id]))
+    const diff = targetLen - rawTexts.length
+    // getEmbeddingsForTokens 在 tokenize 结果前面加 BOS → 空字符串补齐
+    return diff > 0
+      ? [...Array(diff).fill(""), ...rawTexts]
+      : rawTexts
+  }
+
   private _applyPruningHead(hidden: number[]): number {
     const W = this._pruningHeadWeight!
     const B = this._pruningHeadBias!
@@ -349,6 +454,10 @@ export class SemanticHighlightHighlighter implements IHighlighter {
     return exp1 / sum
   }
 
+  /**
+   * Token → Line 映射：窗口化 indexOf 定位每个 token 在 input 中的精确字符位置，
+   * 再映射到 codeLines。无 token 文本时降级为比例映射。
+   */
   private _aggregateTokensToLines(
     codeChunk: string,
     codeLines: string[],
@@ -360,27 +469,96 @@ export class SemanticHighlightHighlighter implements IHighlighter {
     const lineCounts: number[] = new Array(codeLines.length).fill(0)
 
     const totalChars = input.length
-    const codeChars = codeChunk.length
     const totalTokens = tokenEmbeddings.length
 
+    // Token texts 与 getEmbeddingsForTokens() 对齐（含 BOS/EOS）
+    const tokenTexts = this._tokenizeAlignedWithEmbeddings(input, totalTokens)
+    const hasTexts = tokenTexts.length === totalTokens
+
+    // 预计算每行的字符范围 (aggregate)
+    const lineCharEnds: number[] = new Array(codeLines.length)
+    let charAcc = 0
+    for (let li = 0; li < codeLines.length; li++) {
+      charAcc += codeLines[li].length + (li < codeLines.length - 1 ? 1 : 0)
+      lineCharEnds[li] = charAcc
+    }
+
+    // Per-line proportional fallback: estimate tokens per line from char ratio
+    const perLineTokEst: number[] = new Array(codeLines.length)
+    const perLineTokIdx: number[] = new Array(codeLines.length).fill(0)
+    const codeTotalChars2 = codeChunk.length
+    for (let pli = 0; pli < codeLines.length; pli++) {
+      const plen = codeLines[pli].length + (pli < codeLines.length - 1 ? 1 : 0)
+      perLineTokEst[pli] = Math.max(1, Math.round((plen / codeTotalChars2) * totalTokens))
+    }
+
+    let detokAcc = 0
     for (let ti = 0; ti < totalTokens; ti++) {
       const tokenEmb = tokenEmbeddings[ti]
       const score = this._applyPruningHead(tokenEmb)
 
-      const approxCharPos = (ti / totalTokens) * totalChars
-      const codePos = approxCharPos - codeOffset
+      let codePos: number
+      if (hasTexts) {
+        const text = tokenTexts[ti]
+        if (text.length > 0) {
+          const searchFrom = Math.max(0, detokAcc - 5)
+          const searchTo = Math.min(totalChars, detokAcc + text.length + 10)
+          const idx = input.indexOf(text, searchFrom)
+          if (idx >= 0 && idx < searchTo) {
+            codePos = idx - codeOffset
+            detokAcc = idx + text.length
+          } else {
+            const trimmed = text.trimStart()
+            const idx2 = trimmed.length > 0 && trimmed !== text ? input.indexOf(trimmed, searchFrom) : -1
+            if (idx2 >= 0 && idx2 < searchTo) {
+              codePos = idx2 - codeOffset
+              detokAcc = idx2 + trimmed.length
+            } else {
+              // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset
+      let fli = 0, lstart = 0
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break
+        lstart = lineCharEnds[fli]
+      }
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0 }
+      const tokIdx = perLineTokIdx[fli]++
+      const tokCount = perLineTokEst[fli]
+      const llen = codeLines[fli].length
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+              detokAcc = Math.max(detokAcc, codePos + codeOffset + Math.max(1, text.trimStart().length || 1))
+            }
+          }
+        } else {
+          // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset
+      let fli = 0, lstart = 0
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break
+        lstart = lineCharEnds[fli]
+      }
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0 }
+      const tokIdx = perLineTokIdx[fli]++
+      const tokCount = perLineTokEst[fli]
+      const llen = codeLines[fli].length
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+        }
+      } else {
+        codePos = (ti / totalTokens) * totalChars - codeOffset
+      }
 
-      if (codePos < 0 || codePos >= codeChars) continue
+      if (codePos < 0 || codePos >= codeChunk.length) continue
 
-      let charCount = 0
-      for (let i = 0; i < codeLines.length; i++) {
-        const lineLen = codeLines[i].length + 1
-        if (codePos >= charCount && codePos < charCount + lineLen) {
-          lineScores[i] += score
-          lineCounts[i]++
+      let lineStart = 0
+      for (let li = 0; li < codeLines.length; li++) {
+        if (codePos >= lineStart && codePos < lineCharEnds[li]) {
+          lineScores[li] += score
+          lineCounts[li]++
           break
         }
-        charCount += lineLen
+        lineStart = lineCharEnds[li]
       }
     }
 
@@ -429,6 +607,9 @@ export class SemanticHighlightHighlighter implements IHighlighter {
       .join("\n ---\n")
   }
 
+  /**
+   * [debug] normal path 热力图 — token 级着色 + bar + 多行分段（对齐 QRRanker 样式）。
+   */
   private _buildDebugTokenView(
     input: string,
     codeChunk: string,
@@ -443,66 +624,201 @@ export class SemanticHighlightHighlighter implements IHighlighter {
 
     const codeOffset = this._findCodeOffset(input, codeChunk);
     const totalChars = input.length;
-    const codeChars = codeChunk.length;
     const barWidth = 10;
 
-    const perTokenScores: number[] = new Array(totalTokens);
+    // Compute per-token PruningHead scores
+    const perTokenScores = new Float32Array(totalTokens);
     let maxScore = 0;
     for (let ti = 0; ti < totalTokens; ti++) {
       const score = this._applyPruningHead(tokenEmbeddings[ti]);
       perTokenScores[ti] = score;
-      const codePos = (ti / totalTokens) * totalChars - codeOffset;
-      if (codePos >= 0 && codePos < codeChars && score > maxScore) {
-        maxScore = score;
-      }
+      if (score > maxScore) maxScore = score;
     }
     if (maxScore <= 0) maxScore = 0.0001;
 
+    // Token texts 与 getEmbeddingsForTokens() 对齐（含 BOS/EOS）
+    const tokenTexts = this._tokenizeAlignedWithEmbeddings(input, totalTokens)
+    const hasTexts = tokenTexts.length === totalTokens
+
+    // Pre-compute line character ranges (debug)
+    const lineCharEnds: number[] = new Array(codeLines.length);
+    let charAcc = 0;
+    for (let li = 0; li < codeLines.length; li++) {
+      charAcc += codeLines[li].length + (li < codeLines.length - 1 ? 1 : 0);
+      lineCharEnds[li] = charAcc;
+    }
+
+    const lineTokenParts: string[][] = Array.from({ length: codeLines.length }, () => []);
     const maxLineScore = Math.max(...lineScores, 0.00001);
 
-    const parts: string[] = [];
-    let charAcc = 0;
-    const wordRe = /(\s+|[^\s]+)/g;
-
+    // Track per-line previous token end position (within codeChunk) for gap insertion.
+    const prevChunkEnd: number[] = new Array(codeLines.length)
+    let initPos = 0
     for (let li = 0; li < codeLines.length; li++) {
-      const line = codeLines[li];
-      const segments: string[] = [];
+      prevChunkEnd[li] = initPos
+      initPos = lineCharEnds[li]
+    }
+    // Per-line proportional fallback: estimate tokens per line from char ratio
+    const perLineTokEst: number[] = new Array(codeLines.length)
+    const perLineTokIdx: number[] = new Array(codeLines.length).fill(0)
+    const codeTotalChars2 = codeChunk.length
+    for (let pli = 0; pli < codeLines.length; pli++) {
+      const plen = codeLines[pli].length + (pli < codeLines.length - 1 ? 1 : 0)
+      perLineTokEst[pli] = Math.max(1, Math.round((plen / codeTotalChars2) * totalTokens))
+    }
 
-      let match: RegExpExecArray | null;
-      wordRe.lastIndex = 0;
-      while ((match = wordRe.exec(line)) !== null) {
-        const word = match[1];
-        const midLocal = match.index + Math.floor(word.length / 2);
-        const codePos = charAcc + midLocal;
-        const ti = Math.floor(((codePos + codeOffset) / totalChars) * totalTokens);
-        const wordScore = ti >= 0 && ti < totalTokens ? perTokenScores[ti] : 0;
-        const color = scoreToAnsiFg(wordScore, maxScore);
-        segments.push(`${color}${word}`);
+    let detokAcc = 0;
+    for (let ti = 0; ti < totalTokens; ti++) {
+      const score = perTokenScores[ti];
+      let codePos: number;
+      let tokenLen = 0;
+
+      let matched = false;
+      let effectiveText = "";
+      if (hasTexts) {
+        const text = tokenTexts[ti];
+        tokenLen = text.length;
+        effectiveText = text;
+        if (text.length > 0) {
+          const searchFrom = Math.max(0, detokAcc - 5);
+          const searchTo = Math.min(totalChars, detokAcc + text.length + 10);
+          const idx = input.indexOf(text, searchFrom);
+          if (idx >= 0 && idx < searchTo) {
+            codePos = idx - codeOffset;
+            detokAcc = idx + text.length;
+            matched = true;
+          } else {
+            const trimmed = text.trimStart();
+            const idx2 = trimmed.length > 0 && trimmed !== text ? input.indexOf(trimmed, searchFrom) : -1;
+            if (idx2 >= 0 && idx2 < searchTo) {
+              codePos = idx2 - codeOffset;
+              detokAcc = idx2 + trimmed.length;
+              matched = true;
+              effectiveText = trimmed;
+            } else {
+              // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset;
+      let fli = 0, lstart = 0;
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break;
+        lstart = lineCharEnds[fli];
       }
-      if (segments.length > 0) segments.push(ANSI_RESET);
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0; }
+      const tokIdx = perLineTokIdx[fli]++;
+      const tokCount = perLineTokEst[fli];
+      const llen = codeLines[fli].length;
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+              detokAcc = Math.max(detokAcc, codePos + codeOffset + Math.max(1, (text || "").trimStart().length || 1));
+            }
+          }
+        } else {
+          // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset;
+      let fli = 0, lstart = 0;
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break;
+        lstart = lineCharEnds[fli];
+      }
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0; }
+      const tokIdx = perLineTokIdx[fli]++;
+      const tokCount = perLineTokEst[fli];
+      const llen = codeLines[fli].length;
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+        }
+      } else {
+        codePos = (ti / totalTokens) * totalChars - codeOffset;
+        tokenLen = totalChars / totalTokens;
+      }
 
-      charAcc += line.length + 1;
+      if (codePos < 0 || codePos >= codeChunk.length) continue;
+      // Skip BOS/query tokens with no display text in code region
+      if (!matched && effectiveText.length === 0 && tokenLen === 0) continue;
 
-      const s = lineScores[li] ?? 0;
+      // Map position to line
+      let lineStart = 0;
+      for (let li = 0; li < codeLines.length; li++) {
+        if (codePos >= lineStart && codePos < lineCharEnds[li]) {
+          // --- gap insertion: fill characters between previous token end and current token start ---
+          const pce = prevChunkEnd[li];
+          if (codePos > pce) {
+            const gap = codeChunk.slice(pce, codePos);
+            const visibleGap = gap.replace(/[^\S\n]/g, (m: string) => (m === " " ? " " : "░"));
+            lineTokenParts[li].push(visibleGap);
+          }
+
+          const color = scoreToAnsiFg(score, maxScore);
+          if (hasTexts && matched && /\r?\n/.test(effectiveText)) {
+            // Token spans multiple lines AND text matched: split and distribute
+            const segments = effectiveText.split(/\r?\n/);
+            for (let si = 0; si < segments.length && (li + si) < codeLines.length; si++) {
+              const seg = segments[si];
+              if (seg.length > 0) {
+                const visible = /^\s+$/.test(seg) ? "░".repeat(Math.max(1, seg.length)) : seg;
+                lineTokenParts[li + si].push(`${color}${visible}${ANSI_RESET}`);
+              } else if (si > 0 && si < segments.length - 1) {
+                lineTokenParts[li + si].push(`${color}↵${ANSI_RESET}`);
+              }
+            }
+            if (segments.length > 1) {
+              lineTokenParts[li].push(`${color}↵${ANSI_RESET}`);
+            }
+            // Crude update for the starting line only (multi-line is rare)
+            prevChunkEnd[li] = codePos + effectiveText.length;
+          } else if (hasTexts && matched && effectiveText.length > 0) {
+            // indexOf matching succeeded: show actual text (pure whitespace → ░)
+            const visible = /^\s+$/.test(effectiveText) ? "░".repeat(Math.max(1, effectiveText.length)) : effectiveText;
+            lineTokenParts[li].push(`${color}${visible}${ANSI_RESET}`);
+            prevChunkEnd[li] = codePos + effectiveText.length;
+          } else if (score > 0 || (hasTexts && tokenLen > 0)) {
+            // indexOf failed or empty text: proportional colored blocks
+            const segLen = Math.max(1, Math.round(tokenLen || 1));
+            const blockChar = score > 0.01 ? "█" : score > 0.001 ? "▓" : "░";
+            lineTokenParts[li].push(`${color}${blockChar.repeat(Math.min(segLen, 8))}${ANSI_RESET}`);
+            // Approximate advance for gap tracking
+            prevChunkEnd[li] = codePos + Math.min(segLen, 8);
+          }
+          break;
+        }
+        lineStart = lineCharEnds[li];
+      }
+    }
+
+    // Build merged line-by-line output
+    const parts: string[] = [];
+    for (let li = 0; li < codeLines.length; li++) {
+      const s = lineScores[li];
       const filled = Math.round((s / maxLineScore) * barWidth);
       const bar =
         `${scoreToAnsiFg(s, maxLineScore)}█${ANSI_RESET}`.repeat(filled) +
         "░".repeat(barWidth - filled);
       const lineNum = String(startLine + li).padStart(4);
+      const tokenSide = lineTokenParts[li].join("");
+      const rightSide = tokenSide || `${ANSI_RESET}${codeLines[li]}`;
       const scoreStr = s.toFixed(6);
-
-      parts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${segments.join("")}`);
+      parts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${rightSide}`);
     }
 
+    // Stats
     let codeScoreSum = 0;
     let codeScoreMin = Infinity;
     let codeTokenCount = 0;
+    let codeDetokAcc = 0;
     for (let ti = 0; ti < totalTokens; ti++) {
-      const codePos = (ti / totalTokens) * totalChars - codeOffset;
-      if (codePos >= 0 && codePos < codeChars) {
-        const s = perTokenScores[ti];
-        codeScoreSum += s;
-        if (s < codeScoreMin) codeScoreMin = s;
+      let codePos: number;
+      if (hasTexts) {
+        const text = tokenTexts[ti];
+        const searchFrom = Math.max(0, codeDetokAcc - 5);
+        const idx = input.indexOf(text, searchFrom);
+        codePos = (idx >= 0 ? idx : codeDetokAcc) - codeOffset;
+        codeDetokAcc += text.length;
+      } else {
+        codePos = (ti / totalTokens) * totalChars - codeOffset;
+      }
+      if (codePos >= 0 && codePos < codeChunk.length) {
+        codeScoreSum += perTokenScores[ti];
+        if (perTokenScores[ti] < codeScoreMin) codeScoreMin = perTokenScores[ti];
         codeTokenCount++;
       }
     }
@@ -520,18 +836,24 @@ export class SemanticHighlightHighlighter implements IHighlighter {
       .map(({ label, ratio }) => `${scoreRatioToAnsiFg(ratio)}■${ANSI_RESET}${label}`)
       .join("  ");
 
+    const lineMax = Math.max(...lineScores, 0);
+    const lineMin = lineScores.length > 0 ? Math.min(...lineScores) : 0;
+    const lineSum = lineScores.reduce((a, b) => a + b, 0);
+    const lineMean = lineScores.length > 0 ? lineSum / lineScores.length : 0;
+
     return [
       `${ANSI_RESET}═══ Token (Pruning Head) Heatmap ═══`,
       ...parts,
       `\n─── Stats ───`,
       `  Tokens: ${codeTokenCount}  |  max=${maxScore.toFixed(6)}  min=${codeScoreMin.toFixed(6)}  mean=${mean.toFixed(6)}`,
+      `  Lines:  ${lineScores.length}  |  max=${lineMax.toFixed(6)}  min=${lineMin.toFixed(6)}  mean=${lineMean.toFixed(6)}`,
       `  Legend: ${legendStr}`,
       `═══════════════════════════════`,
     ].join("\n");
   }
 
   /**
-   * [debug] fast path 版热力图 — 使用预计算 probs。
+   * [debug] fast path 热力图 — token 级着色 + bar + 多行分段（对齐 QRRanker 样式）。
    */
   private _buildDebugTokenViewFromProbs(
     input: string,
@@ -540,70 +862,214 @@ export class SemanticHighlightHighlighter implements IHighlighter {
     startLine: number,
     precomputedProbs: Float32Array,
     lineScores: number[],
+    tokenTexts?: string[],
+    chunkScore?: number,
   ): string {
     const totalTokens = precomputedProbs.length
     if (totalTokens === 0) return ""
 
     const codeOffset = this._findCodeOffset(input, codeChunk)
     const totalChars = input.length
-    const codeChars = codeChunk.length
     const barWidth = 10
+        // Normalize tokenTexts length: getEmbeddingsForTokens may add BOS/EOS
+    let hasTexts = false
+    if (tokenTexts && tokenTexts.length >= totalTokens - 2 && tokenTexts.length < totalTokens) {
+      const pad = totalTokens - tokenTexts.length
+      tokenTexts = [...Array(pad).fill(''), ...tokenTexts]
+      hasTexts = true
+    } else {
+      hasTexts = !!(tokenTexts && tokenTexts.length === totalTokens)
+    }
 
     const perTokenScores = precomputedProbs
     let maxScore = 0
     for (let ti = 0; ti < totalTokens; ti++) {
-      const codePos = (ti / totalTokens) * totalChars - codeOffset
-      if (codePos >= 0 && codePos < codeChars && precomputedProbs[ti] > maxScore) {
-        maxScore = precomputedProbs[ti]
-      }
+      if (precomputedProbs[ti] > maxScore) maxScore = precomputedProbs[ti]
     }
     if (maxScore <= 0) maxScore = 0.0001
 
+    // Pre-compute line character ranges
+    const lineCharEnds: number[] = new Array(codeLines.length)
+    let charAcc = 0
+    for (let li = 0; li < codeLines.length; li++) {
+      charAcc += codeLines[li].length + (li < codeLines.length - 1 ? 1 : 0)
+      lineCharEnds[li] = charAcc
+    }
+
+    const lineTokenParts: string[][] = Array.from({ length: codeLines.length }, () => [])
     const maxLineScore = Math.max(...lineScores, 0.00001)
 
-    const parts: string[] = []
-    let charAcc = 0
-    const wordRe = /(\s+|[^\s]+)/g
-
+    // Track per-line previous token end position (within codeChunk) for gap insertion.
+    // After add_space_prefix fix, detokenize no longer emits leading spaces,
+    // so inter-word spaces in the original text become "orphan" characters
+    // that don't belong to any token's display text. We fill them from codeChunk.
+    const prevChunkEnd: number[] = new Array(codeLines.length)
+    let initPos = 0
     for (let li = 0; li < codeLines.length; li++) {
-      const line = codeLines[li]
-      const segments: string[] = []
+      prevChunkEnd[li] = initPos
+      initPos = lineCharEnds[li]
+    }
+    // Per-line proportional fallback: estimate tokens per line from char ratio
+    const perLineTokEst: number[] = new Array(codeLines.length)
+    const perLineTokIdx: number[] = new Array(codeLines.length).fill(0)
+    const codeTotalChars2 = codeChunk.length
+    for (let pli = 0; pli < codeLines.length; pli++) {
+      const plen = codeLines[pli].length + (pli < codeLines.length - 1 ? 1 : 0)
+      perLineTokEst[pli] = Math.max(1, Math.round((plen / codeTotalChars2) * totalTokens))
+    }
 
-      let match: RegExpExecArray | null
-      wordRe.lastIndex = 0
-      while ((match = wordRe.exec(line)) !== null) {
-        const word = match[1]
-        const midLocal = match.index + Math.floor(word.length / 2)
-        const codePos = charAcc + midLocal
-        const ti = Math.floor(((codePos + codeOffset) / totalChars) * totalTokens)
-        const wordScore = ti >= 0 && ti < totalTokens ? perTokenScores[ti] : 0
-        const color = scoreToAnsiFg(wordScore, maxScore)
-        segments.push(`${color}${word}`)
+    let detokAcc = 0
+    for (let ti = 0; ti < totalTokens; ti++) {
+      const score = perTokenScores[ti]
+      let codePos: number
+      let tokenLen = 0
+      let matched = false
+      let effectiveText = ""
+
+      if (hasTexts) {
+        const text = tokenTexts![ti]
+        tokenLen = text.length
+        effectiveText = text
+        if (text.length > 0) {
+          const searchFrom = Math.max(0, detokAcc - 5)
+          const searchTo = Math.min(totalChars, detokAcc + text.length + 10)
+          const idx = input.indexOf(text, searchFrom)
+          if (idx >= 0 && idx < searchTo) {
+            codePos = idx - codeOffset
+            detokAcc = idx + text.length
+            matched = true
+          } else {
+            const trimmed = text.trimStart()
+            const idx2 = trimmed.length > 0 && trimmed !== text ? input.indexOf(trimmed, searchFrom) : -1
+            if (idx2 >= 0 && idx2 < searchTo) {
+              codePos = idx2 - codeOffset
+              detokAcc = idx2 + trimmed.length
+              matched = true
+              effectiveText = trimmed
+            } else {
+              // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset
+      let fli = 0, lstart = 0
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break
+        lstart = lineCharEnds[fli]
       }
-      if (segments.length > 0) segments.push(ANSI_RESET)
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0 }
+      const tokIdx = perLineTokIdx[fli]++
+      const tokCount = perLineTokEst[fli]
+      const llen = codeLines[fli].length
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+              detokAcc = Math.max(detokAcc, codePos + codeOffset + Math.max(1, text.trimStart().length || 1))
+            }
+          }
+        } else {
+          // per-line proportional fallback (v6): snap to line, then distribute within line
+      const gpos = Math.round((ti / totalTokens) * totalChars) - codeOffset
+      let fli = 0, lstart = 0
+      for (; fli < codeLines.length; fli++) {
+        if (gpos < lineCharEnds[fli]) break
+        lstart = lineCharEnds[fli]
+      }
+      if (fli >= codeLines.length) { fli = codeLines.length - 1; lstart = lineCharEnds[fli - 1] || 0 }
+      const tokIdx = perLineTokIdx[fli]++
+      const tokCount = perLineTokEst[fli]
+      const llen = codeLines[fli].length
+      // First token on line: snap to line start to avoid gap duplication
+      codePos = tokIdx === 0 ? lstart : lstart + Math.round((tokIdx / Math.max(1, tokCount)) * llen)
+        }
+      } else {
+        codePos = (ti / totalTokens) * totalChars - codeOffset
+        tokenLen = totalChars / totalTokens
+      }
 
-      charAcc += line.length + 1
+      if (codePos < 0 || codePos >= codeChunk.length) continue
+      // Skip BOS/query tokens with no display text in code region
+      if (!matched && effectiveText.length === 0 && tokenLen === 0) continue
 
-      const s = lineScores[li] ?? 0
+      // Map position to line
+      let lineStart = 0
+      for (let li = 0; li < codeLines.length; li++) {
+        if (codePos >= lineStart && codePos < lineCharEnds[li]) {
+          // --- gap insertion: fill characters between previous token end and current token start ---
+          const pce = prevChunkEnd[li];
+          if (codePos > pce) {
+            const gap = codeChunk.slice(pce, codePos);
+            const visibleGap = gap.replace(/[^\S\n]/g, (m: string) => (m === " " ? " " : "░"));
+            lineTokenParts[li].push(visibleGap);
+          }
+
+          const color = scoreToAnsiFg(score, maxScore)
+          if (hasTexts && matched && /\r?\n/.test(effectiveText)) {
+            // Token spans multiple lines AND text matched: split and distribute
+            const segments = effectiveText.split(/\r?\n/);
+            for (let si = 0; si < segments.length && (li + si) < codeLines.length; si++) {
+              const seg = segments[si];
+              if (seg.length > 0) {
+                const visible = /^\s+$/.test(seg) ? "░".repeat(Math.max(1, seg.length)) : seg;
+                lineTokenParts[li + si].push(`${color}${visible}${ANSI_RESET}`);
+              } else if (si > 0 && si < segments.length - 1) {
+                lineTokenParts[li + si].push(`${color}↵${ANSI_RESET}`);
+              }
+            }
+            if (segments.length > 1) {
+              lineTokenParts[li].push(`${color}↵${ANSI_RESET}`);
+            }
+            // Crude update for the starting line only (multi-line is rare)
+            prevChunkEnd[li] = codePos + effectiveText.length;
+          } else if (hasTexts && matched && effectiveText.length > 0) {
+            // indexOf 匹配成功：显示原文（纯空白 → ░）
+            const visible = /^\s+$/.test(effectiveText) ? "░".repeat(Math.max(1, effectiveText.length)) : effectiveText
+            lineTokenParts[li].push(`${color}${visible}${ANSI_RESET}`);
+            prevChunkEnd[li] = codePos + effectiveText.length;
+          } else if (score > 0 || (hasTexts && tokenLen > 0)) {
+            // indexOf 失败或空文本：比例色块（含空格/换行 token）
+            const segLen = Math.max(1, Math.round(tokenLen || 1));
+            const blockChar = score > 0.01 ? "█" : score > 0.001 ? "▓" : "░";
+            lineTokenParts[li].push(`${color}${blockChar.repeat(Math.min(segLen, 8))}${ANSI_RESET}`);
+            // Approximate advance for gap tracking
+            prevChunkEnd[li] = codePos + Math.min(segLen, 8);
+          }
+          break;
+        }
+        lineStart = lineCharEnds[li];
+      }
+    }
+
+    // Build merged line-by-line output (fast path)
+    const parts: string[] = [];
+    for (let li = 0; li < codeLines.length; li++) {
+      const s = lineScores[li]
       const filled = Math.round((s / maxLineScore) * barWidth)
       const bar =
         `${scoreToAnsiFg(s, maxLineScore)}█${ANSI_RESET}`.repeat(filled) +
         "░".repeat(barWidth - filled)
       const lineNum = String(startLine + li).padStart(4)
+      const tokenSide = lineTokenParts[li].join("")
+      const rightSide = tokenSide || `${ANSI_RESET}${codeLines[li]}`
       const scoreStr = s.toFixed(6)
-
-      parts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${segments.join("")}`)
+      parts.push(`  ${lineNum} ${bar} ${scoreStr} │  ${rightSide}`)
     }
 
+    // Stats
     let codeScoreSum = 0
     let codeScoreMin = Infinity
     let codeTokenCount = 0
+    let codeDetokAcc = 0
     for (let ti = 0; ti < totalTokens; ti++) {
-      const codePos = (ti / totalTokens) * totalChars - codeOffset
-      if (codePos >= 0 && codePos < codeChars) {
-        const s = perTokenScores[ti]
-        codeScoreSum += s
-        if (s < codeScoreMin) codeScoreMin = s
+      let codePos: number
+      if (hasTexts) {
+        const text = tokenTexts![ti]
+        const searchFrom = Math.max(0, codeDetokAcc - 5)
+        const idx = input.indexOf(text, searchFrom)
+        codePos = (idx >= 0 ? idx : codeDetokAcc) - codeOffset
+        codeDetokAcc += text.length
+      } else {
+        codePos = (ti / totalTokens) * totalChars - codeOffset
+      }
+      if (codePos >= 0 && codePos < codeChunk.length) {
+        codeScoreSum += perTokenScores[ti]
+        if (perTokenScores[ti] < codeScoreMin) codeScoreMin = perTokenScores[ti]
         codeTokenCount++
       }
     }
@@ -621,11 +1087,18 @@ export class SemanticHighlightHighlighter implements IHighlighter {
       .map(({ label, ratio }) => `${scoreRatioToAnsiFg(ratio)}■${ANSI_RESET}${label}`)
       .join("  ")
 
+    const lineMax = Math.max(...lineScores, 0)
+    const lineMin = lineScores.length > 0 ? Math.min(...lineScores) : 0
+    const lineSum = lineScores.reduce((a, b) => a + b, 0)
+    const lineMean = lineScores.length > 0 ? lineSum / lineScores.length : 0
+
     return [
       `${ANSI_RESET}═══ Token (Pruning Head) Heatmap (fast path) ═══`,
       ...parts,
       `\n─── Stats ───`,
       `  Tokens: ${codeTokenCount}  |  max=${maxScore.toFixed(6)}  min=${codeScoreMin.toFixed(6)}  mean=${mean.toFixed(6)}`,
+      `  Lines:  ${lineScores.length}  |  max=${lineMax.toFixed(6)}  min=${lineMin.toFixed(6)}  mean=${lineMean.toFixed(6)}`,
+      ...(chunkScore !== undefined ? [`  Rerank: ${chunkScore.toFixed(6)}`] : []),
       `  Legend: ${legendStr}`,
       `═══════════════════════════════`,
     ].join("\n")

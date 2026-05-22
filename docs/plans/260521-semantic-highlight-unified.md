@@ -246,6 +246,56 @@ hidden [N, 1024]  (全部 token)
 
 （待补充）
 
+### 2026-05-22（debug 热力图对齐修复）
+
+**问题：** `--debug-highlight` 的 semantic-highlight 热力图显示 `█▓░` 块而非实际 token 文本，且位置映射使用 `(ti/totalTokens)*totalChars` 比例公式导致错位。
+
+**根因：** 参照 `260522-bpe-detokenize-limitation.md` 对 QRRanker 的修复，semantic-highlight 存在三个独立问题：
+1. **渲染路径**：热力图使用了 word 级正则着色（`wordRe`），没有走 token 级窗口化 `indexOf` 定位
+2. **评分路径**：`_aggregateTokensToLines` / `_aggregatePrecomputedProbsToLines` 使用比例映射 `(ti/totalTokens)*totalChars`，而非窗口化 `indexOf`
+3. **数据传参**：reranker 未传递 token 文本，search-service 未转发新字段，highlighter 的 `_buildDebugTokenViewFromProbs` 无 token 文本可用
+
+**修复：逐个函数改造**
+
+| 文件 | 函数 | 改动 |
+|------|------|------|
+| `rerankers/semantic-highlight.ts` | `rerank()` | 新增 `model.tokenize(input)` + `detokenize([id])` → `_semanticHighlightTokenTexts`，新增 `input` → `_semanticHighlightInput` 到 payload |
+| `highlighters/semantic-highlight.ts` | `_aggregatePrecomputedProbsToLines` | 新增 `tokenTexts` 参数；比例映射 → 窗口化 `indexOf(input)` + 降级；新增 `lineCharEnds` 预计算 |
+| 同上 | `_aggregateTokensToLines` | 新增 `model.tokenize(input)` 获取 token 文本；比例映射 → 窗口化 `indexOf(input)` + 降级；新增 `lineCharEnds` 预计算 |
+| 同上 | `_buildDebugTokenView` | word 级 `wordRe` regex → token 级着色；窗口化 `indexOf` 位置映射；多行 token `\r?\n` 分段 + `↵` 标记；Stats 新增 `Lines:` 行 |
+| 同上 | `_buildDebugTokenViewFromProbs` | 同上；新增 `tokenTexts` / `chunkScore` 参数；BOS/EOS 偏移自动补齐；Stats 新增 `Rerank:` 行 |
+| 同上 | `scoreRatioToAnsiFg` / `scoreToAnsiFg` | 颜色 `227`（亮黄）→ `215`（柔和黄），与 QRRanker 色阶一致；新增 JSDoc 注释 |
+| 同上 | `highlight()` (fast path) | 显式提取 `_semanticHighlightTokenTexts` / `_semanticHighlightInput` / `_semanticHighlightChunkScore` 并向下传递 |
+| `interfaces/highlighter.ts` | `HighlightOptions` | 新增 `_semanticHighlightTokenTexts`、`_semanticHighlightInput`、`_semanticHighlightChunkScore` |
+| `search-service.ts` | `searchIndex()` | 补全转发：`_semanticHighlightTokenTexts`、`_semanticHighlightInput`、`_semanticHighlightChunkScore`（参照 QRRanker 的 `_qrrankerTokenTexts` / `_qrrankerChunkScore` 模式） |
+
+**调试发现：**
+- XLM-RoBERTa 的 `model.tokenize(input).length` 比 `getEmbeddingsForTokens(input).length` 少 1（BOS token），导致 `hasTexts` 严格相等判定失败
+- 修复：允许 1-2 token 偏移，自动补齐空字符串到 tokenTexts 数组前端（`[...Array(pad).fill(''), ...tokenTexts]`）
+- XLM-RoBERTa 的 `detokenize()` 丢 `\n` + 前导字符（`def`→`f`、`#`→空），非换行 token 仍可精确匹配；换行处降级为 `detokAcc` 累积
+
+**数据流（完整链路）：**
+```text-chart
+Reranker.rerank()
+  ├─ getEmbeddingsForTokens(input) → tokenProbs → _semanticHighlightTokenProbs
+  ├─ model.tokenize(input) → tokenTexts → _semanticHighlightTokenTexts
+  └─ input → _semanticHighlightInput
+       │
+       ↓ payload 传递
+       │
+SearchService.searchIndex()
+  └─ 转发 _semanticHighlightTokenProbs / _semanticHighlightTokenTexts /
+         _semanticHighlightInput / _semanticHighlightChunkScore → HighlightOptions
+       │
+       ↓ options 传递
+       │
+Highlighter.highlight() (fast path)
+  └─ 窗口化 indexOf(input, searchFrom=detokAcc-5) → 精确 codePos
+     └─ 渲染: token 级着色 + bar + 多行分段 + Rerank 行
+```
+
+**验证：** ✅ type-check | ✅ build | L984-1010、L1012-1033 热力图文本对齐验证通过
+
 ## 总结
 
 **核心思路：** Unified GGUF 将 backbone + 双 Head 封装在一个文件中，TypeScript 侧通过 `node-llama-cpp` 的 `readGgufFileInfo()` 读取权重，去除硬编码常量依赖。三步走逐步接入：highlight → rerank → 复用。

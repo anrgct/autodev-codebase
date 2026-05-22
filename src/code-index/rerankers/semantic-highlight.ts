@@ -199,8 +199,20 @@ export class SemanticHighlightReranker implements IReranker {
 
         // Step 3: 存入预计算数据供 highlighter 复用
         if (result.payload && typeof result.payload === "object") {
-          ;(result.payload as Record<string, unknown>)["_semanticHighlightTokenProbs"] = tokenProbs
-          ;(result.payload as Record<string, unknown>)["_semanticHighlightCodeText"] = candidate.content
+          // getEmbeddingsForTokens() 比 tokenize() 多 N 个 token（通常是 BOS），
+          // 直接用长度差值补齐，不依赖 BOS/EOS 检测（各模型行为可能不同）
+          const rawIds = this._model!.tokenize(input);
+          const rawTexts = rawIds.map((id) => this._model!.detokenize([id]));
+          const diff = tokenProbs.length - rawTexts.length;
+          // getEmbeddingsForTokens 在前面加 BOS → 空字符串补齐
+          const tokenTexts = diff > 0
+            ? [...Array(diff).fill(""), ...rawTexts]
+            : rawTexts;
+          const p = result.payload as Record<string, unknown>;
+          p["_semanticHighlightTokenProbs"] = tokenProbs;
+          p["_semanticHighlightCodeText"] = candidate.content;
+          p["_semanticHighlightTokenTexts"] = tokenTexts;
+          p["_semanticHighlightInput"] = input;
         }
 
         results.push(result)

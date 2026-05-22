@@ -391,6 +391,38 @@ reranker 的 `_rerankBatch()` 已计算出 per-token attention 分数。通过 p
 | v4 | 2026-05-20 | per-token 块着色替代字符级着色、reranker 存储 token IDs、Bug 6/7 修复 |
 | v5 | 2026-05-20 | Bug 8 + 后处理排除不连续纯符号行 + fast path detokenized 映射 |
 | v6 | 2026-05-20 | BPE 边界偏差已知限制记录 + reranker codeStart 多种对齐方法尝试 |
+| v7 | 2026-05-22 | Head 等比映射、detokenize 前置、跨模型安全、stats 增强 |
+
+### 2026-05-22（跨模型兼容 + detokenize 前置）
+
+**背景：** `rerankerProvider="qrranker"` 使用非 QRRanker 模型（如 Qwen3-Reranker-0.6B, 28层/8head；semantic-highlight, 24层/16head）时，QR_HEADS 硬编码的 head 索引越界导致全部分数 NaN。
+
+**Head 等比映射（`computeQRScores` + `computePerTokenScores`）：**
+- `mappedHead = round(rawHead × nHead / 32)` — 32-head 模型原样不动，<32 head 等比压缩，>32 head 等比拉伸
+- `nHead === 32` 时走 identity（零开销）
+- 映射后全部 16 个 head 存活，normalizer 恢复正常
+- 一行 debug 日志打印选中 heads：`QR heads (nHead=16): 17:2 22:2 21:4 ...`
+
+**Layer 缺失降级：** `warn → debug` — 非 QR 模型上 layer 不匹配是预期行为。
+
+**Detokenize 前置（`_rerankBatch`）：**
+- reranker 在 forward pass 后对 code 区域 token 逐个 `model.detokenize([id])`
+- payload 新增 `_qrrankerTokenTexts: string[]` 替代 `_qrrankerCodeTokenIds: number[]`
+- highlighter 拿到的是预 detokenize 文本，不需要加载模型，不碰词表 — 消除跨模型 crash
+
+**Highlighter precomputed 路径重构：**
+- 新增 `buildTokenHeatmapFromTexts`：使用预 detokenize 文本 + 累计字符长度定位
+- 行归属用 `codePos = detokAcc / totalDetokLen × codeChars`（跟原始 `buildTokenHeatmap` 一致）
+- 颜色度量分离：bar 用 `maxLineScore`，text 用 `maxScore` — 跟原始行为一致
+- Stats 增强：新增 `Lines` 统计（min/max/mean）和 `Rerank` 行显示 chunkScore
+
+**可视化增强：**
+- 空格 token → `░`（颜色跟随 score），换行 token → `↵`
+- 亮黄色 ANSI 227 → 215（降亮度）
+
+**已知限制：**
+- 预 detokenize 文本逐个拼接 ≠ 原始 codeChunk（BPE 逐 token detokenize 固有偏差，空格/换行位置偏移，非跨模型问题）
+- 逐 token 渲染文本不可靠，但不影响 bar 分数和行级选择正确性
 
 ## 总结
 
