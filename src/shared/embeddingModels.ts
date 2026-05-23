@@ -2,7 +2,7 @@
  * Defines profiles for different embedding models, including their dimensions.
  */
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway" | "llamacpp"
+export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway" | "llamacpp" | "llamacpp-llm"
 
 export interface EmbeddingModelProfile {
   dimension: number
@@ -69,6 +69,10 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
     "all-MiniLM-L6-v2-Q4_K_M": { dimension: 384 },
     "nomic-embed-text-v1.5-Q4_K_M": { dimension: 768 },
     "bge-m3-Q8_0": { dimension: 1024 },
+  },
+  "llamacpp-llm": {
+    // Dimensions auto-detected at runtime; these entries serve as known-model overrides.
+    // MiniCPM-V-4.6: hidden_dim = 3584 (0.6B) or varies per variant
   },
 }
 

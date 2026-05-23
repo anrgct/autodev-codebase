@@ -7,6 +7,7 @@ import { VercelAiGatewayEmbedder } from "./embedders/vercel-ai-gateway"
 import { OpenRouterEmbedder } from "./embedders/openrouter"
 import { JinaEmbedder } from "./embedders/jina-embedder"
 import { LlamaCppEmbedder } from "./embedders/llamacpp"
+import { LlamaCppLlmEmbedder } from "./embedders/llamacpp-llm"
 import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { LlamaCppReranker } from "./rerankers/llamacpp-rerank"
@@ -155,6 +156,16 @@ export class CodeIndexServiceFactory {
         config.embedderLlamaCppGpuLayers,
         this.logger,
       )
+    } else if (provider === "llamacpp-llm") {
+      if (!config.embedderGgufLlmPath) {
+        throw new Error("LLM GGUF model path missing for llamacpp-llm embedder creation")
+      }
+      return new LlamaCppLlmEmbedder(
+        config.embedderGgufLlmPath,
+        config.embedderLlamaCppGpuLayers,
+        config.embedderConcurrency ?? 1,
+        this.logger,
+      )
     }
 
     throw new Error(
@@ -203,11 +214,13 @@ export class CodeIndexServiceFactory {
 
     const provider = config.embedderProvider as EmbedderProvider
 
-    // For llamacpp, derive modelId from GGUF path (it's the source of truth)
+    // For llamacpp/llamacpp-llm, derive modelId from GGUF path (it's the source of truth)
     // This avoids global config leaking embedderModelId from a different provider
     const modelId = provider === "llamacpp" && config.embedderLlamaCppModelPath
       ? (this._deriveModelIdFromGgufPath(config.embedderLlamaCppModelPath) ?? getDefaultModelId(provider))
-      : (config.embedderModelId ?? getDefaultModelId(provider))
+      : provider === "llamacpp-llm" && config.embedderGgufLlmPath
+        ? (this._deriveModelIdFromGgufPath(config.embedderGgufLlmPath) ?? getDefaultModelId(provider))
+        : (config.embedderModelId ?? getDefaultModelId(provider))
 
     // Layer 1: Profile (zero overhead, from EMBEDDING_MODEL_PROFILES)
     let vectorSize = getModelDimension(provider, modelId)

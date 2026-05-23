@@ -28,6 +28,7 @@ const REQUIRES_RESTART_KEYS: (keyof CodeIndexConfig)[] = [
   'embedderVercelAiGatewayApiKey',       // Vercel AI Gateway configuration
   'embedderOpenRouterApiKey',            // OpenRouter configuration
   'embedderLlamaCppModelPath',           // LlamaCPP configuration
+  'embedderGgufLlmPath',                // LlamaCPP LLM configuration
   'qdrantUrl',                          // Vector store location
   'qdrantApiKey',                       // Vector store authentication
 ]
@@ -57,6 +58,7 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
   'highlighterMode',                    // Highlighter selection mode
   'highlighterThreshold',               // Highlighter threshold
   'highlighterConcurrency',             // Highlighter concurrency
+  'embedderConcurrency',                // Embedder concurrency
   'summarizerProvider',                 // Summarizer provider
   'summarizerOllamaBaseUrl',            // Summarizer Ollama URL
   'summarizerOllamaModelId',            // Summarizer Ollama model
@@ -184,6 +186,9 @@ export class CodeIndexConfigManager {
     } else if (embedderProvider === "llamacpp") {
       const modelPath = this.config.embedderLlamaCppModelPath
       return !!(modelPath && qdrantUrl)
+    } else if (embedderProvider === "llamacpp-llm") {
+      const modelPath = this.config.embedderGgufLlmPath
+      return !!(modelPath && qdrantUrl)
     }
     return false
   }
@@ -239,6 +244,7 @@ export class CodeIndexConfigManager {
       rerankerMinScore: config.rerankerMinScore,
       rerankerBatchSize: config.rerankerBatchSize,
       rerankerConcurrency: config.rerankerConcurrency,
+      embedderConcurrency: config.embedderConcurrency,
       rerankerMaxRetries: config.rerankerMaxRetries,
       rerankerRetryDelayMs: config.rerankerRetryDelayMs,
       rerankerLlamaCppServer: config.rerankerLlamaCppServer,
@@ -319,6 +325,8 @@ export class CodeIndexConfigManager {
     const currentJinaApiKey = this.config.embedderJinaApiKey ?? ""
     const currentJinaBaseUrl = this.config.embedderJinaBaseUrl ?? ""
     const currentEmbedderLlamaCppModelPath = this.config.embedderLlamaCppModelPath ?? ""
+    const currentEmbedderGgufLlmPath = this.config.embedderGgufLlmPath ?? ""
+    const currentEmbedderConcurrency = this.config.embedderConcurrency
     const currentQdrantUrl = this.config.qdrantUrl ?? ""
     const currentQdrantApiKey = this.config.qdrantApiKey ?? ""
 
@@ -358,6 +366,10 @@ export class CodeIndexConfigManager {
     }
 
     if ((prev?.embedderLlamaCppModelPath ?? "") !== currentEmbedderLlamaCppModelPath) {
+      return true
+    }
+
+    if ((prev?.embedderGgufLlmPath ?? "") !== currentEmbedderGgufLlmPath) {
       return true
     }
 
@@ -448,6 +460,9 @@ export class CodeIndexConfigManager {
   public get currentModelId(): string | undefined {
     if (this.config?.embedderProvider === "llamacpp") {
       return this.config?.embedderLlamaCppModelPath ?? this.config?.embedderModelId
+    }
+    if (this.config?.embedderProvider === "llamacpp-llm") {
+      return this.config?.embedderGgufLlmPath ?? this.config?.embedderModelId
     }
     return this.config?.embedderModelId
   }

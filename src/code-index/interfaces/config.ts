@@ -10,6 +10,7 @@ export type EmbedderProvider =
   | "vercel-ai-gateway"
   | "openrouter"
   | "llamacpp"
+  | "llamacpp-llm"
 
 /**
  * Ollama embedder configuration
@@ -153,6 +154,10 @@ export interface CodeIndexConfig {
   embedderLlamaCppModelPath?: string
   embedderLlamaCppGpuLayers?: number
 
+  // Embedder - LlamaCPP LLM（通用 LLM 作为 embedder）
+  embedderGgufLlmPath?: string
+  embedderConcurrency?: number
+
   // Vector Store
   qdrantUrl?: string
   qdrantApiKey?: string
@@ -238,6 +243,8 @@ export type PreviousConfigSnapshot = {
   embedderOpenRouterBatchSize?: number
   embedderLlamaCppModelPath?: string
   embedderLlamaCppGpuLayers?: number
+  embedderGgufLlmPath?: string
+  embedderConcurrency?: number
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number
@@ -331,6 +338,8 @@ export interface ConfigSnapshot {
   embedderOpenRouterBatchSize?: number
   embedderLlamaCppModelPath?: string
   embedderLlamaCppGpuLayers?: number
+  embedderGgufLlmPath?: string
+  embedderConcurrency?: number
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number

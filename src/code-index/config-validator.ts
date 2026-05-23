@@ -173,6 +173,16 @@ export class ConfigValidator {
         }
         break
 
+      case 'llamacpp-llm':
+        if (!config.embedderGgufLlmPath) {
+          issues.push({
+            path: 'embedderGgufLlmPath',
+            code: 'required',
+            message: 'LLM GGUF model path is required for llamacpp-llm embedder'
+          })
+        }
+        break
+
       default:
         // Type safety: should never happen with TypeScript
         issues.push({
@@ -400,6 +410,14 @@ export class ConfigValidator {
         path: 'vectorSearchMaxResults',
         code: 'invalid_range',
         message: 'Search maximum results must be positive'
+      })
+    }
+
+    if (config.embedderConcurrency !== undefined && config.embedderConcurrency <= 0) {
+      issues.push({
+        path: 'embedderConcurrency',
+        code: 'invalid_range',
+        message: 'Embedder concurrency must be positive'
       })
     }
 

@@ -84,6 +84,10 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   embedderLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model file for embeddings' },
   embedderLlamaCppGpuLayers: { type: 'integer', minValue: 0, description: 'Number of GPU layers for LlamaCPP (0 for CPU only)' },
 
+  // Embedder - LlamaCPP LLM
+  embedderGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model file for LLM-based embeddings (llamacpp-llm provider)' },
+  embedderConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent embedding requests for llamacpp-llm embedder' },
+
   // Vector Store
   qdrantUrl: { type: 'string', description: 'Qdrant server URL' },
   qdrantApiKey: { type: 'string', description: 'Qdrant API key' },
