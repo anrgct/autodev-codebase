@@ -1,102 +1,151 @@
-// Deploy patched llama-addon.node and its dependent .dylib files to node_modules.
-// Called from postinstall after patch-package applies JS patches.
+// Deploy patched node-llama-cpp files to node_modules.
+// Called from postinstall.
 //
-// The source-built .node links against .dylib shared libraries. The official
-// @node-llama-cpp prebuilt package provides most of these, but ships libggml-cpu,
-// libggml-blas, and libggml-metal as Mach-O bundles (.so) — which can't be dlopen'd
-// by a shared library. We store just those 3 .dylib files alongside the patched .node.
+// Two layers:
+//   1. JS/DTS files: overwrite from vendor/node-llama-cpp/dist/ (replaces patch-package)
+//   2. C++ binaries: copy .node + .dylib from vendor/llama-addon/binaries/
 
-import { existsSync, copyFileSync, mkdirSync, readdirSync, rmSync } from "fs";
-import { join, dirname } from "path";
+import { existsSync, copyFileSync, mkdirSync, readdirSync, rmSync, readFileSync } from "fs";
+import { join, dirname, relative } from "path";
 import { platform, arch } from "process";
+import { createRequire } from "module";
 
 const PROJECT_ROOT = join(import.meta.dirname, "..");
+const require = createRequire(import.meta.url);
 
-// Map process.platform + arch to node-llama-cpp platform tag
+// ---- Platform detection ----
+
 function detectPlatformTag(): string {
-    const isMetal = platform === "darwin";
-    const suffix = isMetal ? "-metal" : "";
-
     switch (platform) {
         case "darwin":
             return arch === "arm64" ? "mac-arm64-metal" : "mac-x64";
         case "linux":
             return arch === "x64" ? "linux-x64" : arch === "arm64" ? "linux-arm64" : "";
         default:
-            console.warn(`[deploy-llamacpp-patch] Unsupported platform: ${platform}-${arch}`);
             return "";
     }
 }
 
-const tag = detectPlatformTag();
-if (!tag) {
-    console.log("[deploy-llamacpp-patch] No patched binary for this platform, skipping.");
-    process.exit(0);
+// ---- Version check ----
+
+function getInstalledVersion(): string | null {
+    try {
+        const pkg = require("node-llama-cpp/package.json") as { version: string };
+        return pkg.version;
+    } catch {
+        return null;
+    }
 }
 
-const srcDir = join(PROJECT_ROOT, "vendor", "llama-addon", "binaries", tag);
-if (!existsSync(srcDir)) {
-    console.log(`[deploy-llamacpp-patch] Patched binary dir not found: ${srcDir}, skipping.`);
-    process.exit(0);
+function getBaseVersion(): string | null {
+    const versionFile = join(PROJECT_ROOT, "vendor", "node-llama-cpp", ".version");
+    if (!existsSync(versionFile)) return null;
+    return readFileSync(versionFile, "utf8").trim();
 }
 
-// Target: node_modules/@node-llama-cpp/<platform>/bins/<platform>/
-const destDir = join(
-    PROJECT_ROOT,
-    "node_modules",
-    "@node-llama-cpp",
-    tag,
-    "bins",
-    tag,
-);
+// ---- JS/DTS file deployment ----
 
-try {
-    // Ensure localBuilds cache is removed so getLlama() doesn't load a stale
-    // source-compiled binary that would take priority over our patched prebuilt.
+function deployJsLayer() {
+    const srcRoot = join(PROJECT_ROOT, "vendor", "node-llama-cpp", "dist");
+    if (!existsSync(srcRoot)) {
+        console.log("[deploy] vendor/node-llama-cpp/dist/ not found, skipping JS layer");
+        return;
+    }
+
+    const destRoot = join(PROJECT_ROOT, "node_modules", "node-llama-cpp", "dist");
+
+    // Version check
+    const installed = getInstalledVersion();
+    const base = getBaseVersion();
+    if (installed && base && installed !== base) {
+        console.warn(
+            `[deploy] ⚠️  node-llama-cpp version mismatch!\n` +
+            `  installed: ${installed}\n` +
+            `  vendor baseline: ${base}\n` +
+            `  JS files will still be deployed, but please review changes and update vendor/.version.`
+        );
+    }
+
+    // Walk vendor/dist/ and copy each file to node_modules
+    let count = 0;
+    function walk(dir: string) {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const src = join(dir, entry.name);
+            const rel = relative(srcRoot, src);
+            const dest = join(destRoot, rel);
+            if (entry.isDirectory()) {
+                mkdirSync(dest, { recursive: true });
+                walk(src);
+            } else {
+                copyFileSync(src, dest);
+                count++;
+            }
+        }
+    }
+    walk(srcRoot);
+    console.log(`[deploy] JS/DTS layer: ${count} files deployed`);
+}
+
+// ---- C++ binary deployment ----
+
+function deployCppLayer() {
+    const tag = detectPlatformTag();
+    if (!tag) {
+        console.log("[deploy] C++ layer: unsupported platform, skipping");
+        return;
+    }
+
+    const srcDir = join(PROJECT_ROOT, "vendor", "llama-addon", "binaries", tag);
+    if (!existsSync(srcDir)) {
+        console.log(`[deploy] C++ layer: ${srcDir} not found, skipping`);
+        return;
+    }
+
+    const destDir = join(PROJECT_ROOT, "node_modules", "@node-llama-cpp", tag, "bins", tag);
+
+    // Remove stale localBuilds (getLlama priority: localBuilds > prebuilt)
     const localBuildsDir = join(
         PROJECT_ROOT, "node_modules", "node-llama-cpp", "llama", "localBuilds",
     );
     if (existsSync(localBuildsDir)) {
         rmSync(localBuildsDir, { recursive: true, force: true });
-        console.log("[deploy-llamacpp-patch] Removed stale localBuilds cache");
+        console.log("[deploy] C++ layer: removed stale localBuilds cache");
     }
 
     mkdirSync(destDir, { recursive: true });
 
-    // Files to deploy: llama-addon.node + the .dylib files our build produces
-    // that differ from the .so bundles in the original prebuilt package.
-    // (libggml-base.dylib, libggml.metal.*.dylib, libllama.metal.*.dylib
-    // already exist in the target directory from the original prebuilt.)
     const files: string[] = ["llama-addon.node"];
-    // Only deploy .dylib files from vendor that the original prebuilt lacks.
-    // We use a fixed list so we don't accidentally overwrite prebuilt dylibs.
-    const extraDylibs = ["libggml-cpu.dylib", "libggml-blas.dylib", "libggml-metal.dylib"];
-    for (const dylib of extraDylibs) {
+
+    // Extra dylibs that the official prebuilt ships as .so (Mach-O bundle),
+    // which can't be dlopen'd by a shared library.
+    for (const dylib of ["libggml-cpu.dylib", "libggml-blas.dylib", "libggml-metal.dylib"]) {
         if (existsSync(join(srcDir, dylib))) {
             files.push(dylib);
         }
     }
 
-    // Source builds can encode a custom cmake-options hash in these dependency
-    // names, e.g. libllama.metal.b8390.<hash>.dylib. Deploy them when present.
+    // Hash-versioned dylibs (e.g. libllama.metal.b8390.2da1n284.dylib)
     for (const file of readdirSync(srcDir)) {
-        if (
-            /^libllama\.metal\..+\.dylib$/.test(file) ||
-            /^libggml\.metal\..+\.dylib$/.test(file)
-        ) {
+        if (/^libllama\.metal\..+\.dylib$/.test(file) ||
+            /^libggml\.metal\..+\.dylib$/.test(file)) {
             files.push(file);
         }
     }
 
-    let copied = 0;
+    let count = 0;
     for (const file of [...new Set(files)]) {
-        const srcPath = join(srcDir, file);
-        const destPath = join(destDir, file);
-        copyFileSync(srcPath, destPath);
-        copied++;
+        copyFileSync(join(srcDir, file), join(destDir, file));
+        count++;
     }
-    console.log(`[deploy-llamacpp-patch] Deployed ${copied} files to ${destDir}`);
+    console.log(`[deploy] C++ layer: ${count} files → ${destDir}`);
+}
+
+// ---- Main ----
+
+try {
+    deployJsLayer();
+    deployCppLayer();
 } catch (err) {
-    console.error(`[deploy-llamacpp-patch] Failed:`, err);
+    console.error("[deploy] Failed:", err);
     process.exit(1);
 }

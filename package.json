@@ -7,14 +7,14 @@
   },
   "files": [
     "dist/**/*",
-    "patches/**/*",
+    "vendor/node-llama-cpp/**/*",
     "scripts/deploy-llamacpp-patch.ts",
     "vendor/llama-addon/binaries/**/*"
   ],
   "scripts": {
     "dev": "npx tsx src/cli.ts --demo",
     "build": "rollup -c rollup.config.cjs && chmod +x dist/cli.js",
-    "build:llamacpp": "bash vendor/llama-addon/build.sh",
+    "build:llamacpp": "node vendor/llama-addon/build.mjs",
     "type-check": "npx tsc -p tsconfig.json --noEmit",
     "mcp-server": "npx tsx src/cli.ts --serve --demo --port=3001",
     "test": "vitest run",
@@ -22,11 +22,11 @@
     "test:e2e": "npx vitest --config vitest.e2e.config.ts",
     "test:coverage": "vitest run --coverage",
     "push": "npm publish --access public",
-    "postinstall": "patch-package && npx tsx scripts/deploy-llamacpp-patch.ts"
+    "postinstall": "npx tsx scripts/deploy-llamacpp-patch.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.13.1",
-    "@qdrant/js-client-rest": "^1.11.0",
+    "@qdrant/js-client-rest": "^1.16.2",
     "@rollup/plugin-commonjs": "^26.0.1",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^15.2.3",
@@ -60,7 +60,6 @@
   },
   "dependencies": {
     "node-llama-cpp": "^3.18.1",
-    "patch-package": "^8.0.1",
     "tsx": "^4.20.3"
   }
 }
