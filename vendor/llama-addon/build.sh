@@ -120,6 +120,12 @@ if [ -d "$DYLIB_SRC_DIR" ]; then
             echo "[build] Copied $dylib to vendor"
         fi
     done
+    for dylib in "$DYLIB_SRC_DIR"/libllama.metal.*.dylib "$DYLIB_SRC_DIR"/libggml.metal.*.dylib; do
+        if [ -f "$dylib" ]; then
+            cp "$dylib" "$OUTPUT_DIR/$(basename "$dylib")"
+            echo "[build] Copied $(basename "$dylib") to vendor"
+        fi
+    done
 else
     # Fallback: search in localBuilds
     DYLIB_SRC_DIR=$(dirname "$COMPILED_BINARY")
@@ -129,5 +135,13 @@ else
             cp "$FOUND" "$OUTPUT_DIR/$dylib"
             echo "[build] Copied $dylib to vendor"
         fi
+    done
+    for pattern in "libllama.metal.*.dylib" "libggml.metal.*.dylib"; do
+        while IFS= read -r FOUND; do
+            if [ -n "$FOUND" ]; then
+                cp "$FOUND" "$OUTPUT_DIR/$(basename "$FOUND")"
+                echo "[build] Copied $(basename "$FOUND") to vendor"
+            fi
+        done < <(find "$PROJECT_ROOT/node_modules/node-llama-cpp/llama/localBuilds" -name "$pattern" 2>/dev/null)
     done
 fi

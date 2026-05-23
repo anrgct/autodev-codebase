@@ -31,13 +31,27 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         bool collectKqSoftMax = false;
 
         // Collected kq_soft_max data: layer_index -> float array
-        // Tensor layout: ne[0]=n_kv, ne[1]=n_tokens, ne[2]=n_head, ne[3]=1
+        // When query range is set, only stores query tokens (not full tensor).
+        // Layout: [head][nQueryTokens][nKv] (row-major), nQueryTokens = nTokens when filtered.
+        // When query range is unset (-1), stores the full tensor [head][nTokens][nKv].
         std::unordered_map<int, std::vector<float>> kqSoftMaxData;
 
         // Tensor shape metadata (set from first intercepted kq_soft_max tensor)
         int kqN_Kv = 0;
-        int kqN_Tokens = 0;
+        int kqN_Tokens = 0;   // May be reduced to nQueryTokens when query range is set
         int kqN_Head = 0;
+
+        // Query token range for slice-based collection (set before decode).
+        // When set, cbEval only copies query token rows instead of the full tensor,
+        // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
+        // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
+        int kqQueryStart = -1;
+        int kqQueryEnd = -1;
+
+        // Current JS decode batch start in absolute sequence token positions.
+        // node-llama-cpp splits long inputs before llama_decode; AddToBatch gets
+        // the true first token index, so cbEval should not infer it from tensor shape.
+        int kqCurrentBatchTokenStart = 0;
 
         // C callback for llama_context_params.cb_eval (no NAPI dependency)
         static bool cbEval(ggml_tensor *t, bool ask, void *user_data);
@@ -82,6 +96,7 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         Napi::Value GetKqSoftMax(const Napi::CallbackInfo& info);
         Napi::Value GetKqSoftMaxShape(const Napi::CallbackInfo& info);
         Napi::Value SetCollectKqSoftMax(const Napi::CallbackInfo& info);
+        Napi::Value SetKqSoftMaxQueryRange(const Napi::CallbackInfo& info);
 
         static void init(Napi::Object exports);
 };

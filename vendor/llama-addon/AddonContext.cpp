@@ -492,20 +492,71 @@ bool AddonContext::cbEval(ggml_tensor *t, bool ask, void *user_data) {
     }
 
     if (ask) {
-        // Record shape on first interception
-        if (ctx->kqN_Kv == 0) {
-            ctx->kqN_Kv = (int)t->ne[0];
-            ctx->kqN_Tokens = (int)t->ne[1];
-            ctx->kqN_Head = (int)t->ne[2];
-        }
+        // Always update shape metadata to reflect the latest (largest) KV cache.
+        // Across micro-batches, n_kv grows as more tokens are cached.
+        ctx->kqN_Kv = (int)t->ne[0];
+        ctx->kqN_Tokens = (int)t->ne[1];
+        ctx->kqN_Head = (int)t->ne[2];
         return true;
     }
 
-    // ask == false: copy data from backend to CPU
-    const size_t nbytes = ggml_nbytes(t);
+    // ask == false: copy (or accumulate) data from backend to CPU
+    const int n_head = (int)t->ne[2];
+    const int n_tokens_mb = (int)t->ne[1];  // tokens in this micro-batch
+    const int n_kv = (int)t->ne[0];
+    const size_t float_size = sizeof(float);
+
     auto &buf = ctx->kqSoftMaxData[il];
-    buf.resize(nbytes / sizeof(float));
-    ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
+
+    if (ctx->kqQueryStart >= 0 && ctx->kqQueryEnd > ctx->kqQueryStart) {
+        // Slice + accumulate: only copy query token rows across micro-batches.
+        // This avoids the V8 ArrayBuffer 4GB limit and supports multi-micro-batch eval.
+        const int n_query = ctx->kqQueryEnd - ctx->kqQueryStart;
+        const int batch_start = ctx->kqCurrentBatchTokenStart;
+        const int mb_query_start = std::max(0, ctx->kqQueryStart - batch_start);
+        const int mb_query_end   = std::min(n_tokens_mb, ctx->kqQueryEnd - batch_start);
+
+        if (mb_query_start < mb_query_end) {
+            // This micro-batch covers part of the query range
+            const int n_query_in_mb = mb_query_end - mb_query_start;
+            const int n_query_full   = ctx->kqQueryEnd - ctx->kqQueryStart;
+
+            // Initialize or resize buf for full query range
+            if (buf.empty()) {
+                buf.resize(n_head * n_query_full * n_kv, 0.0f);
+            }
+
+            // Copy query rows from this micro-batch and accumulate into buf.
+            // IMPORTANT: use t->nb[] strides, NOT row-major formula, because
+            // Metal backend may add padding between rows for alignment.
+            //
+            // Read entire head's query block at once (single ggml_backend_tensor_get
+            // call per head) to avoid potential Metal buffer offset issues with many
+            // small reads.
+            std::vector<float> tmp_head(n_query_in_mb * n_kv);
+            for (int h = 0; h < n_head; h++) {
+                // Read the entire [h, mb_query_start..mb_query_end, :] block
+                const size_t src_offset = (size_t)h * t->nb[2] + (size_t)mb_query_start * t->nb[1];
+                const size_t block_size = (size_t)n_query_in_mb * n_kv * float_size;
+                ggml_backend_tensor_get(t, tmp_head.data(), src_offset, block_size);
+                // Accumulate into buf (layout: [head][n_query][n_kv])
+                const int query_dst_start = batch_start + mb_query_start - ctx->kqQueryStart;
+                const size_t dst_offset = ((size_t)h * n_query_full + (size_t)query_dst_start) * n_kv;
+                for (size_t i = 0; i < (size_t)n_query_in_mb * n_kv; i++) {
+                    buf[dst_offset + i] += tmp_head[i];
+                }
+            }
+        }
+
+        // Update shape: nTokens = nQueryTokens (same as before)
+        ctx->kqN_Tokens = n_query;
+        ctx->kqN_Head = n_head;
+    } else {
+        // Full tensor copy (backward compatible when query slicing is not enabled)
+        const size_t nbytes = ggml_nbytes(t);
+        buf.resize(nbytes / float_size);
+        ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
+    }
 
     return true;
 }
@@ -543,6 +594,18 @@ Napi::Value AddonContext::GetKqSoftMaxShape(const Napi::CallbackInfo& info) {
 
 Napi::Value AddonContext::SetCollectKqSoftMax(const Napi::CallbackInfo& info) {
     collectKqSoftMax = info[0].As<Napi::Boolean>().Value();
+    return Env().Undefined();
+}
+
+Napi::Value AddonContext::SetKqSoftMaxQueryRange(const Napi::CallbackInfo& info) {
+    kqQueryStart = info[0].As<Napi::Number>().Int32Value();
+    kqQueryEnd = info[1].As<Napi::Number>().Int32Value();
+    // Reset accumulation state for new decode
+    kqCurrentBatchTokenStart = 0;
+    kqSoftMaxData.clear();
+    kqN_Kv = 0;
+    kqN_Tokens = 0;
+    kqN_Head = 0;
     return Env().Undefined();
 }
 
@@ -666,6 +729,10 @@ Napi::Value AddonContext::AddToBatch(const Napi::CallbackInfo& info) {
     int32_t firstTokenContextIndex = info[1].As<Napi::Number>().Int32Value();
     Napi::Uint32Array tokens = info[2].As<Napi::Uint32Array>();
     Napi::Uint32Array tokenLogitIndexes = info[3].As<Napi::Uint32Array>();
+
+    if (collectKqSoftMax && batch.n_tokens == 0) {
+        kqCurrentBatchTokenStart = firstTokenContextIndex;
+    }
 
     auto tokensLength = tokens.ElementLength();
     auto tokenLogitIndexesLength = tokenLogitIndexes.ElementLength();
@@ -1159,6 +1226,7 @@ void AddonContext::init(Napi::Object exports) {
                 InstanceMethod("getKqSoftMax", &AddonContext::GetKqSoftMax),
                 InstanceMethod("getKqSoftMaxShape", &AddonContext::GetKqSoftMaxShape),
                 InstanceMethod("setCollectKqSoftMax", &AddonContext::SetCollectKqSoftMax),
+                InstanceMethod("setKqSoftMaxQueryRange", &AddonContext::SetKqSoftMaxQueryRange),
             }
         )
     );

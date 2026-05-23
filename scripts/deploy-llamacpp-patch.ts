@@ -6,7 +6,7 @@
 // libggml-blas, and libggml-metal as Mach-O bundles (.so) — which can't be dlopen'd
 // by a shared library. We store just those 3 .dylib files alongside the patched .node.
 
-import { existsSync, copyFileSync, mkdirSync, rmSync } from "fs";
+import { existsSync, copyFileSync, mkdirSync, readdirSync, rmSync } from "fs";
 import { join, dirname } from "path";
 import { platform, arch } from "process";
 
@@ -77,8 +77,19 @@ try {
         }
     }
 
+    // Source builds can encode a custom cmake-options hash in these dependency
+    // names, e.g. libllama.metal.b8390.<hash>.dylib. Deploy them when present.
+    for (const file of readdirSync(srcDir)) {
+        if (
+            /^libllama\.metal\..+\.dylib$/.test(file) ||
+            /^libggml\.metal\..+\.dylib$/.test(file)
+        ) {
+            files.push(file);
+        }
+    }
+
     let copied = 0;
-    for (const file of files) {
+    for (const file of [...new Set(files)]) {
         const srcPath = join(srcDir, file);
         const destPath = join(destDir, file);
         copyFileSync(srcPath, destPath);
