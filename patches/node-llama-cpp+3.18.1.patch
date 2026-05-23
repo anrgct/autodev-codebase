@@ -1,8 +1,8 @@
 diff --git a/node_modules/node-llama-cpp/dist/bindings/AddonTypes.d.ts b/node_modules/node-llama-cpp/dist/bindings/AddonTypes.d.ts
-index 89a6494..3fe5cd3 100644
+index 89a6494..1c08e15 100644
 --- a/node_modules/node-llama-cpp/dist/bindings/AddonTypes.d.ts
 +++ b/node_modules/node-llama-cpp/dist/bindings/AddonTypes.d.ts
-@@ -147,6 +147,12 @@ export type AddonContext = {
+@@ -147,6 +147,16 @@ export type AddonContext = {
      loadSequenceStateFromFile(filePath: string, sequenceId: number, maxContextSize: number): Promise<Uint32Array>;
      setLoras(loras: AddonModelLora[], scales: number[]): void;
      restoreCheckpoint(checkpoint: AddonContextSequenceCheckpoint, maxPosIndex: number): Promise<boolean>;
@@ -12,17 +12,18 @@ index 89a6494..3fe5cd3 100644
 +    getKqSoftMaxShape(): { nKv: number; nTokens: number; nHead: number; nLayers: number; layers: number[] };
 +    /** QRRanker: enable/disable kq_soft_max collection at runtime. */
 +    setCollectKqSoftMax(val: boolean): void;
++    /** QRRanker: set query token range for slice-based kq_soft_max collection.
++     * Must be called before decode to avoid V8 ArrayBuffer 4GB limit on large inputs.
++     * When set, only query token rows are copied (not the full nTokens × nKv × nHead tensor). */
++    setKqSoftMaxQueryRange(queryStart: number, queryEnd: number): void;
  };
  export type AddonContextSequenceCheckpoint = {
      init(context: AddonContext, sequenceId: number): Promise<void>;
-diff --git a/node_modules/node-llama-cpp/dist/cli/cli.js b/node_modules/node-llama-cpp/dist/cli/cli.js
-old mode 100755
-new mode 100644
 diff --git a/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.d.ts b/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.d.ts
-index 905b41c..ae5c8f5 100644
+index 905b41c..6471d79 100644
 --- a/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.d.ts
 +++ b/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.d.ts
-@@ -122,6 +122,17 @@ export declare class LlamaContext {
+@@ -122,6 +122,23 @@ export declare class LlamaContext {
       * it won't print anything.
       */
      printTimings(): Promise<void>;
@@ -37,11 +38,17 @@ index 905b41c..ae5c8f5 100644
 +     * Returns the tensor dimensions and list of layers that were collected.
 +     */
 +    getKqSoftMaxShape(): { nKv: number; nTokens: number; nHead: number; nLayers: number; layers: number[] };
++    /**
++     * QRRanker: Set query token range for slice-based kq_soft_max collection.
++     * Must be called before decode. When set, cbEval only copies query token rows
++     * instead of the full nTokens × nKv × nHead tensor, avoiding V8 ArrayBuffer 4GB limit.
++     */
++    setKqSoftMaxQueryRange(queryStart: number, queryEnd: number): void;
  }
  export declare class LlamaContextSequence {
      readonly onDispose: EventRelay<void>;
 diff --git a/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.js b/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.js
-index f830b08..04644b8 100644
+index f830b08..9ad9e21 100644
 --- a/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.js
 +++ b/node_modules/node-llama-cpp/dist/evaluator/LlamaContext/LlamaContext.js
 @@ -77,7 +77,7 @@ export class LlamaContext {
@@ -63,7 +70,7 @@ index f830b08..04644b8 100644
          }));
          this._batchingOptions = {
              dispatchSchedule: batchingDispatchSchedule,
-@@ -474,6 +475,19 @@ export class LlamaContext {
+@@ -474,6 +475,26 @@ export class LlamaContext {
          await new Promise((accept) => setTimeout(accept, 0)); // wait for the logs to finish printing
      }
      /** @internal */
@@ -79,6 +86,13 @@ index f830b08..04644b8 100644
 +     */
 +    getKqSoftMaxShape() {
 +        return this._ctx.getKqSoftMaxShape();
++    }
++    /**
++     * QRRanker: Set query token range for slice-based kq_soft_max collection.
++     * Must be called before decode to avoid V8 ArrayBuffer 4GB limit on large inputs.
++     */
++    setKqSoftMaxQueryRange(queryStart, queryEnd) {
++        this._ctx.setKqSoftMaxQueryRange(queryStart, queryEnd);
 +    }
      async _decodeTokens({ sequenceId, firstTokenSequenceIndex, tokens, logits, evaluationPriority = defaultEvaluationPriority, tokenMeter, afterBatchAction }, logitDataMapper) {
          return await new Promise((accept, reject) => {
@@ -278,3 +292,251 @@ index cc77cce..ad794f0 100644
          });
      }
  }
+diff --git a/node_modules/node-llama-cpp/llama/addon/AddonContext.h b/node_modules/node-llama-cpp/llama/addon/AddonContext.h
+index 2e67720..b03bf86 100644
+--- a/node_modules/node-llama-cpp/llama/addon/AddonContext.h
++++ b/node_modules/node-llama-cpp/llama/addon/AddonContext.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
++#include <cstring>
+ #include <mutex>
++#include <unordered_map>
++#include <vector>
+ 
+ #include "llama.h"
+ #include "napi.h"
+@@ -23,6 +26,37 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
+ 
+         bool disposed = false;
+ 
++        // ---- QRRanker: kq_soft_max attention tensor collection ----
++        // Enable collection during decode (set via constructor option or SetCollectKqSoftMax)
++        bool collectKqSoftMax = false;
++
++        // Collected kq_soft_max data: layer_index -> float array
++        // When query range is set, only stores query tokens (not full tensor).
++        // Layout: [head][nQueryTokens][nKv] (row-major), nQueryTokens = nTokens when filtered.
++        // When query range is unset (-1), stores the full tensor [head][nTokens][nKv].
++        std::unordered_map<int, std::vector<float>> kqSoftMaxData;
++
++        // Tensor shape metadata (set from first intercepted kq_soft_max tensor)
++        int kqN_Kv = 0;
++        int kqN_Tokens = 0;   // May be reduced to nQueryTokens when query range is set
++        int kqN_Head = 0;
++
++        // Query token range for slice-based collection (set before decode).
++        // When set, cbEval only copies query token rows instead of the full tensor,
++        // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
++        // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
++        int kqQueryStart = -1;
++        int kqQueryEnd = -1;
++
++        // Current JS decode batch start in absolute sequence token positions.
++        // node-llama-cpp splits long inputs before llama_decode; AddToBatch gets
++        // the true first token index, so cbEval should not infer it from tensor shape.
++        int kqCurrentBatchTokenStart = 0;
++
++        // C callback for llama_context_params.cb_eval (no NAPI dependency)
++        static bool cbEval(ggml_tensor *t, bool ask, void *user_data);
++        // ------------------------------------------------------------
++
+         AddonContext(const Napi::CallbackInfo& info);
+         ~AddonContext();
+ 
+@@ -58,6 +92,12 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
+         Napi::Value SetLoras(const Napi::CallbackInfo& info);
+         Napi::Value RestoreCheckpoint(const Napi::CallbackInfo& info);
+ 
++        // QRRanker: kq_soft_max accessors
++        Napi::Value GetKqSoftMax(const Napi::CallbackInfo& info);
++        Napi::Value GetKqSoftMaxShape(const Napi::CallbackInfo& info);
++        Napi::Value SetCollectKqSoftMax(const Napi::CallbackInfo& info);
++        Napi::Value SetKqSoftMaxQueryRange(const Napi::CallbackInfo& info);
++
+         static void init(Napi::Object exports);
+ };
+ 
+diff --git a/node_modules/node-llama-cpp/llama/addon/AddonContext.cpp b/node_modules/node-llama-cpp/llama/addon/AddonContext.cpp
+index 017c696..cb4c812 100644
+--- a/node_modules/node-llama-cpp/llama/addon/AddonContext.cpp
++++ b/node_modules/node-llama-cpp/llama/addon/AddonContext.cpp
+@@ -460,8 +460,155 @@ AddonContext::AddonContext(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Ad
+         if (options.Has("swaFullCache")) {
+             context_params.swa_full = options.Get("swaFullCache").As<Napi::Boolean>().Value();
+         }
++
++        // ---- QRRanker: kq_soft_max collection ----
++        if (options.Has("collectKqSoftMax") && options.Get("collectKqSoftMax").As<Napi::Boolean>().Value()) {
++            collectKqSoftMax = true;
++            context_params.cb_eval = AddonContext::cbEval;
++            context_params.cb_eval_user_data = this;
++            // Force disable flash attention - fused ops don't expose kq_soft_max
++            context_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
++        }
++    }
++}
++
++// ---- QRRanker: cb_eval callback (no NAPI, called synchronously during llama_decode) ----
++bool AddonContext::cbEval(ggml_tensor *t, bool ask, void *user_data) {
++    auto *ctx = static_cast<AddonContext *>(user_data);
++
++    if (!ctx->collectKqSoftMax) {
++        return true;
++    }
++
++    // Only intercept kq_soft_max tensors
++    if (std::strncmp(t->name, "kq_soft_max-", 12) != 0) {
++        return true;
++    }
++
++    const int il = std::atoi(t->name + 12);
++    // QRRanker only needs attention weights from the QR head layers (17-24)
++    if (il < 17 || il >= 25) {
++        return true;
++    }
++
++    if (ask) {
++        // Always update shape metadata to reflect the latest (largest) KV cache.
++        // Across micro-batches, n_kv grows as more tokens are cached.
++        ctx->kqN_Kv = (int)t->ne[0];
++        ctx->kqN_Tokens = (int)t->ne[1];
++        ctx->kqN_Head = (int)t->ne[2];
++        return true;
++    }
++
++    // ask == false: copy (or accumulate) data from backend to CPU
++    const int n_head = (int)t->ne[2];
++    const int n_tokens_mb = (int)t->ne[1];  // tokens in this micro-batch
++    const int n_kv = (int)t->ne[0];
++    const size_t float_size = sizeof(float);
++
++    auto &buf = ctx->kqSoftMaxData[il];
++
++    if (ctx->kqQueryStart >= 0 && ctx->kqQueryEnd > ctx->kqQueryStart) {
++        // Slice + accumulate: only copy query token rows across micro-batches.
++        // This avoids the V8 ArrayBuffer 4GB limit and supports multi-micro-batch eval.
++        const int n_query = ctx->kqQueryEnd - ctx->kqQueryStart;
++        const int batch_start = ctx->kqCurrentBatchTokenStart;
++        const int mb_query_start = std::max(0, ctx->kqQueryStart - batch_start);
++        const int mb_query_end   = std::min(n_tokens_mb, ctx->kqQueryEnd - batch_start);
++
++        if (mb_query_start < mb_query_end) {
++            // This micro-batch covers part of the query range
++            const int n_query_in_mb = mb_query_end - mb_query_start;
++            const int n_query_full   = ctx->kqQueryEnd - ctx->kqQueryStart;
++
++            // Initialize or resize buf for full query range
++            if (buf.empty()) {
++                buf.resize(n_head * n_query_full * n_kv, 0.0f);
++            }
++
++            // Copy query rows from this micro-batch and accumulate into buf.
++            // IMPORTANT: use t->nb[] strides, NOT row-major formula, because
++            // Metal backend may add padding between rows for alignment.
++            //
++            // Read entire head's query block at once (single ggml_backend_tensor_get
++            // call per head) to avoid potential Metal buffer offset issues with many
++            // small reads.
++            std::vector<float> tmp_head(n_query_in_mb * n_kv);
++            for (int h = 0; h < n_head; h++) {
++                // Read the entire [h, mb_query_start..mb_query_end, :] block
++                const size_t src_offset = (size_t)h * t->nb[2] + (size_t)mb_query_start * t->nb[1];
++                const size_t block_size = (size_t)n_query_in_mb * n_kv * float_size;
++                ggml_backend_tensor_get(t, tmp_head.data(), src_offset, block_size);
++                // Accumulate into buf (layout: [head][n_query][n_kv])
++                const int query_dst_start = batch_start + mb_query_start - ctx->kqQueryStart;
++                const size_t dst_offset = ((size_t)h * n_query_full + (size_t)query_dst_start) * n_kv;
++                for (size_t i = 0; i < (size_t)n_query_in_mb * n_kv; i++) {
++                    buf[dst_offset + i] += tmp_head[i];
++                }
++            }
++        }
++
++        // Update shape: nTokens = nQueryTokens (same as before)
++        ctx->kqN_Tokens = n_query;
++        ctx->kqN_Head = n_head;
++    } else {
++        // Full tensor copy (backward compatible when query slicing is not enabled)
++        const size_t nbytes = ggml_nbytes(t);
++        buf.resize(nbytes / float_size);
++        ggml_backend_tensor_get(t, buf.data(), 0, nbytes);
++    }
++
++    return true;
++}
++
++// ---- QRRanker: NAPI getters for collected kq_soft_max data ----
++Napi::Value AddonContext::GetKqSoftMax(const Napi::CallbackInfo& info) {
++    int layer = info[0].As<Napi::Number>().Int32Value();
++
++    auto it = kqSoftMaxData.find(layer);
++    if (it == kqSoftMaxData.end()) {
++        return Env().Undefined();
+     }
++
++    const auto &data = it->second;
++    Napi::Float32Array result = Napi::Float32Array::New(Env(), data.size());
++    std::copy(data.begin(), data.end(), result.Data());
++    return result;
+ }
++
++Napi::Value AddonContext::GetKqSoftMaxShape(const Napi::CallbackInfo& info) {
++    auto obj = Napi::Object::New(Env());
++    obj.Set("nKv", Napi::Number::New(Env(), kqN_Kv));
++    obj.Set("nTokens", Napi::Number::New(Env(), kqN_Tokens));
++    obj.Set("nHead", Napi::Number::New(Env(), kqN_Head));
++    obj.Set("nLayers", Napi::Number::New(Env(), (double)kqSoftMaxData.size()));
++
++    auto layers = Napi::Array::New(Env());
++    size_t idx = 0;
++    for (const auto &[layer, _] : kqSoftMaxData) {
++        layers[idx++] = Napi::Number::New(Env(), layer);
++    }
++    obj.Set("layers", layers);
++    return obj;
++}
++
++Napi::Value AddonContext::SetCollectKqSoftMax(const Napi::CallbackInfo& info) {
++    collectKqSoftMax = info[0].As<Napi::Boolean>().Value();
++    return Env().Undefined();
++}
++
++Napi::Value AddonContext::SetKqSoftMaxQueryRange(const Napi::CallbackInfo& info) {
++    kqQueryStart = info[0].As<Napi::Number>().Int32Value();
++    kqQueryEnd = info[1].As<Napi::Number>().Int32Value();
++    // Reset accumulation state for new decode
++    kqCurrentBatchTokenStart = 0;
++    kqSoftMaxData.clear();
++    kqN_Kv = 0;
++    kqN_Tokens = 0;
++    kqN_Head = 0;
++    return Env().Undefined();
++}
++
+ AddonContext::~AddonContext() {
+     dispose();
+ }
+@@ -583,6 +730,10 @@ Napi::Value AddonContext::AddToBatch(const Napi::CallbackInfo& info) {
+     Napi::Uint32Array tokens = info[2].As<Napi::Uint32Array>();
+     Napi::Uint32Array tokenLogitIndexes = info[3].As<Napi::Uint32Array>();
+ 
++    if (collectKqSoftMax && batch.n_tokens == 0) {
++        kqCurrentBatchTokenStart = firstTokenContextIndex;
++    }
++
+     auto tokensLength = tokens.ElementLength();
+     auto tokenLogitIndexesLength = tokenLogitIndexes.ElementLength();
+     GGML_ASSERT(batch.n_tokens + tokensLength <= batch_n_tokens);
+@@ -1071,6 +1222,11 @@ void AddonContext::init(Napi::Object exports) {
+                 InstanceMethod("setLoras", &AddonContext::SetLoras),
+                 InstanceMethod("restoreCheckpoint", &AddonContext::RestoreCheckpoint),
+                 InstanceMethod("dispose", &AddonContext::Dispose),
++                // QRRanker: kq_soft_max accessors
++                InstanceMethod("getKqSoftMax", &AddonContext::GetKqSoftMax),
++                InstanceMethod("getKqSoftMaxShape", &AddonContext::GetKqSoftMaxShape),
++                InstanceMethod("setCollectKqSoftMax", &AddonContext::SetCollectKqSoftMax),
++                InstanceMethod("setKqSoftMaxQueryRange", &AddonContext::SetKqSoftMaxQueryRange),
+             }
+         )
+     );

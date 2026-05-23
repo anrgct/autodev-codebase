@@ -10,6 +10,7 @@ import { createStdioCommand } from './commands/stdio';
 import { createConfigCommand } from './commands/config/index';
 import { createCallCommand } from './commands/call';
 import { createCacheCommand } from './commands/cache';
+import { createHighlightCommand } from './commands/highlight';
 
 /**
  * Main CLI program
@@ -30,6 +31,7 @@ async function main(): Promise<void> {
   program.addCommand(createConfigCommand());
   program.addCommand(createCallCommand());
   program.addCommand(createCacheCommand());
+  program.addCommand(createHighlightCommand());
 
   // Parse arguments
   await program.parseAsync(process.argv);

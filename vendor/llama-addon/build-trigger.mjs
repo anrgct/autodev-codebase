@@ -6,6 +6,10 @@ const llama = await getLlama({
     logLevel: LlamaLogLevel.warn,
     gpu: "metal",
     usePrebuiltBinaries: false,
+    cmakeOptions: {
+        GGML_NATIVE: "OFF",
+        GGML_CPU_ARM_ARCH: "armv8.6-a+dotprod+i8mm",
+    },
     progressLogs: true,
 });
 console.log("[build] Compilation complete.");

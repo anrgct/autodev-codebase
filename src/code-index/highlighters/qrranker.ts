@@ -567,8 +567,11 @@ export class QRRankerHighlighter implements IHighlighter {
       }
       mappedHeads.push(`${layer}:${head}`);
 
-      // Sum attention from each query token to each KV position
-      for (let q = queryStart; q < queryEnd; q++) {
+      // Sum attention from each query token to each KV position.
+      // After C++ slice filtering, nTokens = nQueryTokens and data layout
+      // is [head][0..nQueryTokens)[kv] instead of the full token range.
+      // q indices are now 0-relative (0 = first query token).
+      for (let q = 0; q < nQueryTokens; q++) {
         for (let kv = 0; kv < nKv; kv++) {
           scores[kv] += layerData[head * nTokens * nKv + q * nKv + kv];
         }
@@ -793,8 +796,10 @@ export class QRRankerHighlighter implements IHighlighter {
     const { tokens, codeStart, codeEnd, queryStart, queryEnd } =
       this.tokenizeWithRanges(model, query, codeChunk);
 
-    // Create context with kq_soft_max collection enabled
-    const batchSize = Math.min(tokens.length, 8192);
+    // Create context with kq_soft_max collection enabled.
+    // Keep Metal kq_soft_max tensors below the range where tensor reads return NaN.
+    // C++ cbEval accumulates query slices across JS decode batches.
+    const batchSize = Math.min(tokens.length, 4096);
     this.logger?.info(
       `[QRRankerHighlighter] Processing ${tokens.length} tokens with batchSize=${batchSize}`,
     );
@@ -808,6 +813,10 @@ export class QRRankerHighlighter implements IHighlighter {
 
     try {
       const sequence = context.getSequence();
+      // Set query range so C++ cbEval only copies query token rows,
+      // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
+      // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
+      context.setKqSoftMaxQueryRange(queryStart, queryEnd);
       await sequence.evaluateWithoutGeneratingNewTokens(tokens);
 
       this.logger?.debug(

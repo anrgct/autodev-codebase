@@ -22,6 +22,29 @@ export class CodeIndexSearchService {
   ) {}
 
   /**
+   * Highlights code lines by semantic relevance to a query.
+   * Standalone pipeline that directly invokes the highlighter,
+   * bypassing embed / vector search / rerank.
+   * @param query Semantic query for line relevance scoring
+   * @param codeChunk Code text to highlight
+   * @param startLine Starting line number (1-based)
+   * @param options Runtime highlight options
+   * @returns Highlight result
+   * @throws Error if the highlighter is not configured
+   */
+  public async highlight(
+    query: string,
+    codeChunk: string,
+    startLine: number,
+    options?: import("./interfaces/highlighter").HighlightOptions,
+  ): Promise<import("./interfaces/highlighter").HighlightResult> {
+    if (!this.highlighter) {
+      throw new Error("Highlighter is not configured or not available. Check highlighter.enabled in config.")
+    }
+    return this.highlighter.highlight(query, codeChunk, startLine, options)
+  }
+
+  /**
    * Searches the code index for relevant content.
    * @param query The search query
    * @param filter Search filter options

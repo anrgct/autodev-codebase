@@ -162,6 +162,9 @@ export class QRRankerReranker implements IReranker {
    *
    * Element access: data[head * n_tokens * n_kv + tok * n_kv + kv]
    *
+   * C++ cbEval stores only query token rows, so n_tokens is nQueryTokens
+   * even when llama.cpp splits long inputs into multiple micro-batches.
+   *
    * @returns { chunkScores, perChunkTokenScores }
    *   chunkScores: aggregate score per chunk
    *   perChunkTokenScores: per-KV-token scores for each chunk's token range
@@ -203,8 +206,11 @@ export class QRRankerReranker implements IReranker {
       }
       mappedHeads.push(`${layer}:${head}`);
 
-      // Sum attention from each query token to each KV position
-      for (let q = queryStart; q < queryEnd; q++) {
+      // Sum attention from each query token to each KV position.
+      // After C++ slice filtering, nTokens = nQueryTokens and data layout
+      // is [head][0..nQueryTokens)[kv] instead of the full token range.
+      // q indices are now 0-relative (0 = first query token).
+      for (let q = 0; q < nQueryTokens; q++) {
         for (let kv = 0; kv < nKv; kv++) {
           perKvScores[kv] += layerData[head * nTokens * nKv + q * nKv + kv];
         }
@@ -289,8 +295,10 @@ export class QRRankerReranker implements IReranker {
     const { tokens, chunkRanges, queryStart, queryEnd } =
       this.tokenizeWithChunkRanges(model, query, batch);
 
-    // Create context with kq_soft_max collection enabled
-    const ubatch = Math.min(tokens.length, 8192);
+    // Create context with kq_soft_max collection enabled.
+    // Keep Metal kq_soft_max tensors below the range where tensor reads return NaN.
+    // C++ cbEval accumulates query slices across JS decode batches.
+    const ubatch = Math.min(tokens.length, 4096);
     this.logger?.info(
       `[QRRanker] Processing ${tokens.length} tokens with batchSize=${ubatch}`,
     );
@@ -304,6 +312,10 @@ export class QRRankerReranker implements IReranker {
 
     try {
       const sequence = context.getSequence();
+      // Set query range so C++ cbEval only copies query token rows,
+      // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
+      // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
+      context.setKqSoftMaxQueryRange(queryStart, queryEnd);
       await sequence.evaluateWithoutGeneratingNewTokens(tokens);
       this.logger?.debug(
         `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs`,
