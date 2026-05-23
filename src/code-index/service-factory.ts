@@ -166,6 +166,7 @@ export class CodeIndexServiceFactory {
         config.embedderConcurrency ?? 1,
         this.logger,
         config.embedderPoolingMode,
+        config.embedderLlmInstructionPrefix,
       )
     }
 

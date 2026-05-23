@@ -6,11 +6,19 @@ import { getModelDocumentPrefix } from "../../shared/embeddingModels"
  * Extracts the model identifier from the embedder instance and checks
  * if a "Document:" prefix is required (e.g., for jina-embeddings-v5 retrieval models).
  *
+ * For llamacpp-llm, the prefix is controlled by embedder.enableLlmPrefix flag —
+ * both query and document sides are toggled together.
+ *
  * @param embedder 嵌入器实例
  * @returns 文档前缀字符串（如 "Document: "），如果不需要则返回 undefined
  */
 export function resolveDocumentPrefix(embedder: IEmbedder): string | undefined {
   const provider = embedder.embedderInfo.name
+
+  // llamacpp-llm: Document prefix controlled by enableLlmPrefix flag (query+doc联动)
+  if (provider === "llamacpp-llm") {
+    if (!embedder.enableLlmPrefix) return undefined
+  }
 
   // Try to extract model identifier via common field names across different embedder implementations
   const embedderAny = embedder as any

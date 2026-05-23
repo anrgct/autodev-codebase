@@ -27,9 +27,17 @@ export interface IEmbedder {
   /**
    * Gets the pooling mode for this embedder.
    * "late-chunking" - concatenate all chunks from one file, one forward pass, per-chunk mean pooling
+   * "mean" - each chunk individually, mean pooling across all tokens
+   * "qr-attention" - each chunk individually, softmax attention-weighted mean pooling
    * "last-token" - each chunk individually, last-token pooling (default for non-LLM embedders)
    */
-  get poolingMode(): "late-chunking" | "last-token"
+  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention"
+
+  /**
+   * Whether to apply instruction prefix on both query and document sides.
+   * Default false. Only effective for LLM-based embedders (llamacpp-llm).
+   */
+  enableLlmPrefix?: boolean
 }
 
 export interface EmbeddingResponse {

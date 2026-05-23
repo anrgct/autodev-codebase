@@ -86,7 +86,7 @@ export class MistralEmbedder implements IEmbedder {
         return 30
     }
 
-    get poolingMode(): "late-chunking" | "last-token" {
+    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention" {
         return "last-token"
     }
 }

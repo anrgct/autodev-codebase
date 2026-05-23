@@ -188,6 +188,12 @@ export function getModelDocumentPrefix(provider: EmbedderProvider, modelId: stri
     return "Query: "
   }
 
+  // llamacpp-llm: "Document: " prefix controlled by embedder.enableLlmPrefix flag.
+  // See resolveDocumentPrefix() for the flag check.
+  if (provider === "llamacpp-llm") {
+    return "Document: "
+  }
+
   return null
 }
 

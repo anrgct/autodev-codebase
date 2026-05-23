@@ -27,6 +27,7 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
   rerankerEnabled: false,
   embedderConcurrency: 1,
   embedderPoolingMode: "late-chunking",
+  embedderLlmInstructionPrefix: false,
   rerankerConcurrency: 3,
   rerankerMaxRetries: 3,
   rerankerRetryDelayMs: 1000,

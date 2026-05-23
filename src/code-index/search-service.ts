@@ -51,7 +51,12 @@ export class CodeIndexSearchService {
       const embedderProvider = this.configManager.currentEmbedderProvider
       // Get modelId with fallback to default if not configured
       const modelId = this.configManager.currentModelId ?? getDefaultModelId(embedderProvider)
-      let prefillQuery = applyQueryPrefill(query, embedderProvider, modelId)
+      let prefillQuery = applyQueryPrefill(
+        query,
+        embedderProvider,
+        modelId,
+        this.configManager.getConfig().embedderLlmInstructionPrefix,
+      )
 
       // Apply model-specific query prefix (e.g., "Query: " for jina retrieval models)
       const queryPrefix = getModelQueryPrefix(embedderProvider, modelId)

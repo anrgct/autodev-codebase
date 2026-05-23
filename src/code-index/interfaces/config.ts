@@ -157,7 +157,9 @@ export interface CodeIndexConfig {
   // Embedder - LlamaCPP LLM（通用 LLM 作为 embedder）
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
-  embedderPoolingMode?: "late-chunking" | "last-token"
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  embedderLlmInstructionPrefix?: boolean
+  // llamacpp-llm 指令前缀开关：为 query 添加 "Instruct: ..." 前缀以引导 LLM hidden states
 
   // Vector Store
   qdrantUrl?: string
@@ -246,7 +248,8 @@ export type PreviousConfigSnapshot = {
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
-  embedderPoolingMode?: "late-chunking" | "last-token"
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  embedderLlmInstructionPrefix?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number
@@ -342,7 +345,8 @@ export interface ConfigSnapshot {
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
-  embedderPoolingMode?: "late-chunking" | "last-token"
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  embedderLlmInstructionPrefix?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number

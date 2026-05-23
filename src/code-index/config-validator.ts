@@ -424,11 +424,13 @@ export class ConfigValidator {
     // Validate embedderPoolingMode enum
     if (config.embedderPoolingMode !== undefined &&
         config.embedderPoolingMode !== "late-chunking" &&
-        config.embedderPoolingMode !== "last-token") {
+        config.embedderPoolingMode !== "last-token" &&
+        config.embedderPoolingMode !== "mean" &&
+        config.embedderPoolingMode !== "qr-attention") {
       issues.push({
         path: 'embedderPoolingMode',
         code: 'invalid_value',
-        message: `Invalid pooling mode: ${config.embedderPoolingMode}. Must be "late-chunking" or "last-token".`
+        message: `Invalid pooling mode: ${config.embedderPoolingMode}. Must be "late-chunking", "last-token", "mean", or "qr-attention".`
       })
     }
 

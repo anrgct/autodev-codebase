@@ -89,9 +89,10 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   embedderConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent embedding requests for llamacpp-llm embedder' },
   embedderPoolingMode: {
     type: 'enum',
-    enumValues: ['late-chunking', 'last-token'] as const,
-    description: 'Pooling mode for LLM embedder: late-chunking (file-level context) or last-token (individual chunks)'
+    enumValues: ['late-chunking', 'last-token', 'mean', 'qr-attention'] as const,
+    description: 'Pooling mode for LLM embedder: late-chunking (file-level), last-token, mean, or qr-attention (attention-weighted)'
   },
+  embedderLlmInstructionPrefix: { type: 'boolean', description: 'Enable instruction prefix for llamacpp-llm queries (may not help all models)' },
 
   // Vector Store
   qdrantUrl: { type: 'string', description: 'Qdrant server URL' },
