@@ -374,6 +374,22 @@ export class CodeIndexManager implements ICodeIndexManager {
     return this._searchService!.searchIndex(query, filter)
   }
 
+  public async highlight(
+    query: string,
+    codeChunk: string,
+    startLine: number,
+    options?: import("./interfaces/highlighter").HighlightOptions,
+  ): Promise<import("./interfaces/highlighter").HighlightResult> {
+    if (!this.isFeatureEnabled) {
+      throw new Error("Code index feature is disabled. Cannot run highlight.")
+    }
+    this.assertInitialized()
+    if (!this._searchService) {
+      throw new Error("Search service is not initialized")
+    }
+    return this._searchService.highlight(query, codeChunk, startLine, options)
+  }
+
   /**
    * Private helper method to recreate services with current configuration.
    * Used by both initialize() and handleSettingsChange().

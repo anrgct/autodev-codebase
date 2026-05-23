@@ -1,5 +1,6 @@
 import { VectorStoreSearchResult, SearchFilter } from "./vector-store"
 import type { IndexingState } from "../state-manager"
+import type { HighlightResult, HighlightOptions } from "./highlighter"
 
 // Re-export IndexingState for external use
 export { IndexingState }
@@ -60,6 +61,18 @@ export interface ICodeIndexManager {
    * @returns Promise resolving to search results
    */
   searchIndex(query: string, filter?: SearchFilter): Promise<VectorStoreSearchResult[]>
+
+  /**
+   * Highlights code lines by semantic relevance to a query.
+   * This is a standalone pipeline that directly invokes the highlighter,
+   * bypassing embed / vector search / rerank.
+   * @param query Semantic query for line relevance scoring
+   * @param codeChunk Code text to highlight
+   * @param startLine Starting line number (1-based)
+   * @param options Runtime highlight options (mode, topK, threshold, etc.)
+   * @returns Highlight result with scored lines and formatted text
+   */
+  highlight(query: string, codeChunk: string, startLine: number, options?: HighlightOptions): Promise<HighlightResult>
 
   /**
    * Gets the current status of the indexing system

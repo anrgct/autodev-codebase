@@ -112,6 +112,16 @@ codebase outline "src/**/*.ts" --summarize                          # 生成 AI 
 codebase outline "src/**/*.ts" --dry-run                            # 预览匹配的文件
 codebase outline --clear-cache                                      # 清除摘要缓存
 
+# 代码行级高亮（独立管线，无需索引）
+codebase highlight "authentication" src/auth.ts                     # 单文件高亮
+codebase highlight "train method" "src/**/*.py"                     # glob 模式
+codebase highlight "authentication" src/auth.ts --demo              # demo 工作空间
+codebase highlight "login" src/auth.ts --debug                      # token 级热力图
+codebase highlight "login" src/auth.ts --json                       # JSON 输出
+codebase highlight "login" src/auth.ts --topk 15                    # 覆盖 Top-K
+codebase highlight "login" src/auth.ts --mode threshold --threshold 0.3  # threshold 模式
+cat src/auth.ts | codebase highlight "authentication"               # stdin 管道
+
 # 调用图分析
 # 完整数据模式（无 --query）
 codebase call                                   # 显示统计概览
