@@ -18,7 +18,8 @@ const mockEmbedder: IEmbedder = {
   createEmbeddings: vi.fn(),
   validateConfiguration: vi.fn(),
   embedderInfo: { name: 'openai' as const },
-  optimalBatchSize: 60
+  optimalBatchSize: 60,
+  poolingMode: "last-token" as const,
 }
 
 const mockVectorStore: IVectorStore = {

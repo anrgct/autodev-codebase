@@ -29,6 +29,7 @@ const REQUIRES_RESTART_KEYS: (keyof CodeIndexConfig)[] = [
   'embedderOpenRouterApiKey',            // OpenRouter configuration
   'embedderLlamaCppModelPath',           // LlamaCPP configuration
   'embedderGgufLlmPath',                // LlamaCPP LLM configuration
+  'embedderPoolingMode',               // Pooling mode change requires model reload
   'qdrantUrl',                          // Vector store location
   'qdrantApiKey',                       // Vector store authentication
 ]
@@ -245,6 +246,7 @@ export class CodeIndexConfigManager {
       rerankerBatchSize: config.rerankerBatchSize,
       rerankerConcurrency: config.rerankerConcurrency,
       embedderConcurrency: config.embedderConcurrency,
+      embedderPoolingMode: config.embedderPoolingMode,
       rerankerMaxRetries: config.rerankerMaxRetries,
       rerankerRetryDelayMs: config.rerankerRetryDelayMs,
       rerankerLlamaCppServer: config.rerankerLlamaCppServer,
@@ -370,6 +372,10 @@ export class CodeIndexConfigManager {
     }
 
     if ((prev?.embedderGgufLlmPath ?? "") !== currentEmbedderGgufLlmPath) {
+      return true
+    }
+
+    if ((prev?.embedderPoolingMode ?? "late-chunking") !== (this.config.embedderPoolingMode ?? "late-chunking")) {
       return true
     }
 

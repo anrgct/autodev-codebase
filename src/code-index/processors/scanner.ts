@@ -154,6 +154,8 @@ export class DirectoryScanner implements IDirectoryScanner {
     // Initialize block counter
     let totalBlockCount = 0
 
+    const isLateChunking = this.deps.embedder?.poolingMode === "late-chunking"
+
     this.debug(`[Scanner] Starting to process ${supportedPaths.length} supported files`)
 
     // Process all files in parallel with concurrency control
@@ -197,65 +199,83 @@ export class DirectoryScanner implements IDirectoryScanner {
 
           // Process embeddings if configured
           if (this.deps.embedder && this.deps.qdrantClient && blocks.length > 0) {
-            // Add to batch accumulators
-            let addedBlocksFromFile = false
-            for (const block of blocks) {
-              const trimmedContent = block.content.trim()
-              if (trimmedContent) {
-                const release = await mutex.acquire()
-                totalBlockCount += fileBlockCount
-                try {
-                  currentBatchBlocks.push(block)
-                  currentBatchTexts.push(trimmedContent)
-                  addedBlocksFromFile = true
+            if (isLateChunking) {
+              // Late-chunking: dispatch per-file (all blocks stay together)
+              const validBlocks = blocks.filter((b) => b.content.trim())
+              if (validBlocks.length === 0) return
 
-                  if (addedBlocksFromFile) {
+              totalBlockCount += fileBlockCount
+
+              // Wait if we've reached the maximum pending batches
+              while (pendingBatchCount >= MAX_PENDING_BATCHES) {
+                await Promise.race(activeBatchPromises)
+              }
+
+              pendingBatchCount++
+              const batchPromise = batchLimiter(() =>
+                this.processBatch(
+                  validBlocks,
+                  [{ filePath, fileHash: currentFileHash, isNew: !cachedFileHash }],
+                  scanWorkspace,
+                  onError,
+                  onBlocksIndexed,
+                ),
+              )
+              activeBatchPromises.add(batchPromise)
+              batchPromise.finally(() => {
+                activeBatchPromises.delete(batchPromise)
+                pendingBatchCount--
+              })
+            } else {
+              // Last-token: shared accumulator (existing logic)
+              // Add to batch accumulators
+              for (const block of blocks) {
+                const trimmedContent = block.content.trim()
+                if (trimmedContent) {
+                  const release = await mutex.acquire()
+                  totalBlockCount++
+                  try {
+                    currentBatchBlocks.push(block)
+                    currentBatchTexts.push(trimmedContent)
+
                     currentBatchFileInfos.push({
                       filePath,
                       fileHash: currentFileHash,
-                      isNew: !this.deps.cacheManager.getHash(filePath),
+                      isNew: !cachedFileHash,
                     })
-                  }
 
-                  // Check if batch threshold is met
-                  if (currentBatchBlocks.length >= this.batchSegmentThreshold) {
-                    // Wait if we've reached the maximum pending batches
-                    while (pendingBatchCount >= MAX_PENDING_BATCHES) {
-                      // Wait for at least one batch to complete
-                      await Promise.race(activeBatchPromises)
+                    // Check if batch threshold is met
+                    if (currentBatchBlocks.length >= this.batchSegmentThreshold) {
+                      while (pendingBatchCount >= MAX_PENDING_BATCHES) {
+                        await Promise.race(activeBatchPromises)
+                      }
+
+                      const batchBlocks = [...currentBatchBlocks]
+                      const batchTexts = [...currentBatchTexts]
+                      const batchFileInfos = [...currentBatchFileInfos]
+                      currentBatchBlocks = []
+                      currentBatchTexts = []
+                      currentBatchFileInfos = []
+
+                      pendingBatchCount++
+                      const batchPromise = batchLimiter(() =>
+                        this.processBatch(
+                          batchBlocks,
+                          batchFileInfos,
+                          scanWorkspace,
+                          onError,
+                          onBlocksIndexed,
+                        ),
+                      )
+                      activeBatchPromises.add(batchPromise)
+                      batchPromise.finally(() => {
+                        activeBatchPromises.delete(batchPromise)
+                        pendingBatchCount--
+                      })
                     }
-
-                    // Copy current batch data and clear accumulators
-                    const batchBlocks = [...currentBatchBlocks]
-                    const batchTexts = [...currentBatchTexts]
-                    const batchFileInfos = [...currentBatchFileInfos]
-                    currentBatchBlocks = []
-                    currentBatchTexts = []
-                    currentBatchFileInfos = []
-
-                    // Increment pending batch count
-                    pendingBatchCount++
-
-                    // Queue batch processing
-                    const batchPromise = batchLimiter(() =>
-                      this.processBatch(
-                        batchBlocks,
-                        batchFileInfos,
-                        scanWorkspace,
-                        onError,
-                        onBlocksIndexed,
-                      ),
-                    )
-                    activeBatchPromises.add(batchPromise)
-
-                    // Clean up completed promises to prevent memory accumulation
-                    batchPromise.finally(() => {
-                      activeBatchPromises.delete(batchPromise)
-                      pendingBatchCount--
-                    })
+                  } finally {
+                    release()
                   }
-                } finally {
-                  release()
                 }
               }
             }
@@ -381,7 +401,9 @@ export class DirectoryScanner implements IDirectoryScanner {
       vectorStore: this.deps.qdrantClient,
       cacheManager: this.deps.cacheManager,
 
-      itemToText: (block) => generateBlockEmbeddingText(block, scanWorkspace, documentPrefix),
+      itemToText: this.deps.embedder?.poolingMode === "late-chunking"
+        ? (block) => block.content
+        : (block) => generateBlockEmbeddingText(block, scanWorkspace, documentPrefix),
       itemToFilePath: (block) => block.file_path,
       getFileHash: (block) => {
         // Find the corresponding file info for this block

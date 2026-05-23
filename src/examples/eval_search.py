@@ -335,7 +335,7 @@ def parse_args():
                     help="不使用 demo 工作区")
     p.add_argument("--verbose", "-v", action="store_true",
                     help="显示详细日志")
-    p.add_argument("--limit", type=int, default=20,
+    p.add_argument("--limit", type=int, default=30,
                     help="每个查询返回的结果数 (默认: 20)")
     return p.parse_args()
 

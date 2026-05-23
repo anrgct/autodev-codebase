@@ -170,6 +170,35 @@ console.log('Application finished successfully.');
 `
         },
         {
+            path: 'city-facts.md',
+            content: `## One
+
+The city is the capital and largest urban center of the country, situated on a major
+river in the northeastern region. It has served as the seat of government since national
+reunification and is renowned worldwide for its cultural institutions and art scene.
+
+## Two
+
+As the seat of government, it hosts the federal parliament, the presidential residence,
+and most national ministries. The central district concentrates the political power of
+the entire federation, with embassies and administrative offices lining the historic
+boulevards of the old city center.
+
+## Three
+
+The metropolitan area is home to approximately six million residents, making it the most
+populous urban region in the country. The population has grown steadily since 2010, driven
+by a thriving technology sector that attracts skilled workers from across the continent.
+
+## Four
+
+Public transit is anchored by an extensive rail network that carries over one and a half
+billion passengers annually. A newly constructed international airport serves as the primary
+gateway, connecting the metropolitan region to more than one hundred fifty destinations on
+every inhabited continent.
+`
+        },
+        {
             path: 'model.py',
             content: `# Ultralytics YOLO 🚀, AGPL-3.0 license
 

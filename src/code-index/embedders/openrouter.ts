@@ -294,6 +294,10 @@ export class OpenRouterEmbedder implements IEmbedder {
         return this._optimalBatchSize
     }
 
+    get poolingMode(): "late-chunking" | "last-token" {
+        return "last-token"
+    }
+
     /**
      * Waits if there's an active global rate limit
      */

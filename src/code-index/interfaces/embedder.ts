@@ -23,6 +23,13 @@ export interface IEmbedder {
    * Gets the optimal batch size for this embedder
    */
   get optimalBatchSize(): number
+
+  /**
+   * Gets the pooling mode for this embedder.
+   * "late-chunking" - concatenate all chunks from one file, one forward pass, per-chunk mean pooling
+   * "last-token" - each chunk individually, last-token pooling (default for non-LLM embedders)
+   */
+  get poolingMode(): "late-chunking" | "last-token"
 }
 
 export interface EmbeddingResponse {

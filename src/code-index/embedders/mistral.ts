@@ -85,4 +85,8 @@ export class MistralEmbedder implements IEmbedder {
         // Return recommended batch size for Mistral
         return 30
     }
+
+    get poolingMode(): "late-chunking" | "last-token" {
+        return "last-token"
+    }
 }

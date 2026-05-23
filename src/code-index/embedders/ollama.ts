@@ -381,4 +381,8 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
     get optimalBatchSize(): number {
         return this.batchSize
     }
+
+    get poolingMode(): "late-chunking" | "last-token" {
+        return "last-token"
+    }
 }

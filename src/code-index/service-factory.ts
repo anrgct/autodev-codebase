@@ -165,6 +165,7 @@ export class CodeIndexServiceFactory {
         config.embedderLlamaCppGpuLayers,
         config.embedderConcurrency ?? 1,
         this.logger,
+        config.embedderPoolingMode,
       )
     }
 

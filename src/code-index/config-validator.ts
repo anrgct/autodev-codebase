@@ -421,6 +421,17 @@ export class ConfigValidator {
       })
     }
 
+    // Validate embedderPoolingMode enum
+    if (config.embedderPoolingMode !== undefined &&
+        config.embedderPoolingMode !== "late-chunking" &&
+        config.embedderPoolingMode !== "last-token") {
+      issues.push({
+        path: 'embedderPoolingMode',
+        code: 'invalid_value',
+        message: `Invalid pooling mode: ${config.embedderPoolingMode}. Must be "late-chunking" or "last-token".`
+      })
+    }
+
     // Validate embedder batch sizes
     if (config.embedderOllamaBatchSize !== undefined && config.embedderOllamaBatchSize <= 0) {
       issues.push({

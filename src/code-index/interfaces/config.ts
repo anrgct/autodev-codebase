@@ -157,6 +157,7 @@ export interface CodeIndexConfig {
   // Embedder - LlamaCPP LLM（通用 LLM 作为 embedder）
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
+  embedderPoolingMode?: "late-chunking" | "last-token"
 
   // Vector Store
   qdrantUrl?: string
@@ -245,6 +246,7 @@ export type PreviousConfigSnapshot = {
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
+  embedderPoolingMode?: "late-chunking" | "last-token"
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number
@@ -340,6 +342,7 @@ export interface ConfigSnapshot {
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
+  embedderPoolingMode?: "late-chunking" | "last-token"
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number

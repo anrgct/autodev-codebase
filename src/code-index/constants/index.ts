@@ -26,6 +26,7 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
   hybridSearchSparseWeight: 0.3,
   rerankerEnabled: false,
   embedderConcurrency: 1,
+  embedderPoolingMode: "late-chunking",
   rerankerConcurrency: 3,
   rerankerMaxRetries: 3,
   rerankerRetryDelayMs: 1000,

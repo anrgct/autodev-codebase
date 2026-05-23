@@ -245,4 +245,8 @@ export class JinaEmbedder implements IEmbedder {
   get optimalBatchSize(): number {
     return this._optimalBatchSize
   }
+
+  get poolingMode(): "late-chunking" | "last-token" {
+    return "last-token"
+  }
 }
