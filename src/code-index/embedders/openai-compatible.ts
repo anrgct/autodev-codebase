@@ -435,7 +435,7 @@ export class OpenAICompatibleEmbedder implements IEmbedder {
     return this._optimalBatchSize
   }
 
-  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention" {
+  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
     return "last-token"
   }
 

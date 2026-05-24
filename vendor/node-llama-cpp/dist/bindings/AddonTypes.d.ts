@@ -27,6 +27,7 @@ export type BindingModule = {
             logitsAll?: boolean;
             embeddings?: boolean;
             ranking?: boolean;
+            embdLayer?: number;
             threads?: number;
             performanceTracking?: boolean;
             kvCacheKeyType?: number;

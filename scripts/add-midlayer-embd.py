@@ -14,7 +14,7 @@ import sys
 MODELS_DIR = "src/models"
 
 # Files already modified (e.g., the reference implementation)
-ALREADY_MODIFIED = {"llama.cpp"}
+ALREADY_MODIFIED = set()
 
 
 def find_build_norm(context_lines, t_embd_line_idx):

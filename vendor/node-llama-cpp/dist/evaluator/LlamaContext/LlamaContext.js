@@ -77,7 +77,7 @@ export class LlamaContext {
     /** @internal */ _allocatedContextSize;
     /** @internal */ _disposed = false;
     onDispose = new EventRelay();
-    constructor({ _model }, { sequences, contextSize, batchSize, flashAttention = _model.defaultContextFlashAttention, threads, batching: { dispatchSchedule: batchingDispatchSchedule = "nextCycle", itemPrioritizationStrategy: batchingItemsPrioritizationStrategy = "maximumParallelism" } = {}, swaFullCache = _model.defaultContextSwaFullCache, performanceTracking = false, experimentalKvCacheKeyType, experimentalKvCacheValueType, _embeddings, _ranking, collectKqSoftMax = false }) {
+    constructor({ _model }, { sequences, contextSize, batchSize, flashAttention = _model.defaultContextFlashAttention, threads, batching: { dispatchSchedule: batchingDispatchSchedule = "nextCycle", itemPrioritizationStrategy: batchingItemsPrioritizationStrategy = "maximumParallelism" } = {}, swaFullCache = _model.defaultContextSwaFullCache, performanceTracking = false, experimentalKvCacheKeyType, experimentalKvCacheValueType, _embeddings, _ranking, collectKqSoftMax = false, _embdLayer }) {
         if (_model.disposed)
             throw new DisposedError();
         this._llama = _model._llama;
@@ -110,6 +110,7 @@ export class LlamaContext {
             threads: this._idealThreads,
             embeddings: _embeddings,
             ranking: _ranking,
+            embdLayer: _embdLayer,
             performanceTracking: this._performanceTracking,
             kvCacheKeyType: this._kvCacheKeyType,
             kvCacheValueType: this._kvCacheValueType,

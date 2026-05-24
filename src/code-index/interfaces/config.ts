@@ -151,13 +151,17 @@ export interface CodeIndexConfig {
   embedderOpenRouterBatchSize?: number
 
   // Embedder - LlamaCPP 特定参数
-  embedderLlamaCppModelPath?: string
+  embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
 
   // Embedder - LlamaCPP LLM（通用 LLM 作为 embedder）
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
-  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  embedderPoolingLayer?: "last" | number | string
+  // 查询端独立层配置（不设时回退到 embedderPoolingLayer）。
+  // 实验发现非对称层（index L22 + query L23）MRR 比对称层高 48%（0.55 vs 0.37）
+  embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
   // llamacpp-llm 指令前缀开关：为 query 添加 "Instruct: ..." 前缀以引导 LLM hidden states
 
@@ -244,11 +248,13 @@ export type PreviousConfigSnapshot = {
   embedderVercelAiGatewayApiKey?: string
   embedderOpenRouterApiKey?: string
   embedderOpenRouterBatchSize?: number
-  embedderLlamaCppModelPath?: string
+  embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
-  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  embedderPoolingLayer?: "last" | number | string
+  embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
@@ -341,11 +347,13 @@ export interface ConfigSnapshot {
   embedderVercelAiGatewayApiKey?: string
   embedderOpenRouterApiKey?: string
   embedderOpenRouterBatchSize?: number
-  embedderLlamaCppModelPath?: string
+  embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
   embedderConcurrency?: number
-  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  embedderPoolingLayer?: "last" | number | string
+  embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string

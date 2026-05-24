@@ -87,7 +87,7 @@ export class GeminiEmbedder implements IEmbedder {
         return 40
     }
 
-    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention" {
+    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
         return "last-token"
     }
 }

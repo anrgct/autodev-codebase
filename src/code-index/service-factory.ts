@@ -148,11 +148,11 @@ export class CodeIndexServiceFactory {
       }
       return new OpenRouterEmbedder(config.embedderOpenRouterApiKey, config.embedderModelId)
     } else if (provider === "llamacpp") {
-      if (!config.embedderLlamaCppModelPath) {
+      if (!config.embedderGgufPath) {
         throw new Error("LlamaCPP model path missing for embedder creation")
       }
       return new LlamaCppEmbedder(
-        config.embedderLlamaCppModelPath,
+        config.embedderGgufPath,
         config.embedderLlamaCppGpuLayers,
         this.logger,
       )
@@ -167,11 +167,69 @@ export class CodeIndexServiceFactory {
         this.logger,
         config.embedderPoolingMode,
         config.embedderLlmInstructionPrefix,
+        this._resolveIndexLayer(config),
       )
     }
 
     throw new Error(
       t("embeddings:serviceFactory.invalidEmbedderType", { embedderProvider: config.embedderProvider }),
+    )
+  }
+
+  /**
+   * Resolve index pooling layer: POOLING_LAYER env var > config.embedderPoolingLayer > "last"
+   */
+  private _resolveIndexLayer(config: Record<string, any>): "last" | number | string {
+    return this._resolveLayerFromEnv("POOLING_LAYER") ?? config["embedderPoolingLayer"] ?? "last"
+  }
+
+  /**
+   * Resolve query pooling layer: QUERY_POOLING_LAYER env var > config.embedderQueryPoolingLayer > config.embedderPoolingLayer > "last"
+   */
+  private _resolveQueryLayer(config: Record<string, any>): "last" | number | string {
+    return this._resolveLayerFromEnv("QUERY_POOLING_LAYER") ?? config["embedderQueryPoolingLayer"] ?? config["embedderPoolingLayer"] ?? "last"
+  }
+
+  /**
+   * Parse layer value from environment variable.
+   * Supports: "last", "15", "-1", "2/3"
+   */
+  private _resolveLayerFromEnv(envName: string): "last" | number | string | null {
+    if (typeof process === "undefined") return null
+    const v = process.env[envName]
+    if (!v) return null
+    if (v === "last") return "last"
+    const n = parseInt(v, 10)
+    if (!isNaN(n)) return n
+    if (/^\d+\/\d+$/.test(v)) return v
+    return null
+  }
+
+  /**
+   * Creates a query embedder instance with potentially different pooling layer.
+   * For llamacpp-llm, uses _resolveQueryLayer() (QUERY_POOLING_LAYER env > config).
+   * For all other providers, returns the same as createEmbedder().
+   */
+  public createQueryEmbedder(): IEmbedder {
+    const config = this.configManager.getConfig()
+    const provider = config.embedderProvider
+
+    if (provider !== "llamacpp-llm") {
+      return this.createEmbedder()
+    }
+
+    if (!config.embedderGgufLlmPath) {
+      throw new Error("LLM GGUF model path missing for llamacpp-llm query embedder creation")
+    }
+
+    return new LlamaCppLlmEmbedder(
+      config.embedderGgufLlmPath,
+      config.embedderLlamaCppGpuLayers,
+      config.embedderConcurrency ?? 1,
+      this.logger,
+      config.embedderPoolingMode,
+      config.embedderLlmInstructionPrefix,
+      this._resolveQueryLayer(config),
     )
   }
 
@@ -218,8 +276,8 @@ export class CodeIndexServiceFactory {
 
     // For llamacpp/llamacpp-llm, derive modelId from GGUF path (it's the source of truth)
     // This avoids global config leaking embedderModelId from a different provider
-    const modelId = provider === "llamacpp" && config.embedderLlamaCppModelPath
-      ? (this._deriveModelIdFromGgufPath(config.embedderLlamaCppModelPath) ?? getDefaultModelId(provider))
+    const modelId = provider === "llamacpp" && config.embedderGgufPath
+      ? (this._deriveModelIdFromGgufPath(config.embedderGgufPath) ?? getDefaultModelId(provider))
       : provider === "llamacpp-llm" && config.embedderGgufLlmPath
         ? (this._deriveModelIdFromGgufPath(config.embedderGgufLlmPath) ?? getDefaultModelId(provider))
         : (config.embedderModelId ?? getDefaultModelId(provider))
@@ -391,6 +449,7 @@ export class CodeIndexServiceFactory {
     pathUtils: IPathUtils
   ): Promise<{
     embedder: IEmbedder
+    queryEmbedder: IEmbedder
     vectorStore: IVectorStore
     parser: ICodeParser
     scanner: DirectoryScanner
@@ -402,12 +461,14 @@ export class CodeIndexServiceFactory {
 
     const vectorStore = await this.createVectorStore()
     const embedder = this.createEmbedder()
+    const queryEmbedder = this.createQueryEmbedder()
     const parser = codeParser
     const scanner = this.createDirectoryScanner(embedder, vectorStore, parser, fileSystem, workspace, pathUtils)
     const fileWatcher = this.createFileWatcher(fileSystem, eventBus, workspace, pathUtils, embedder, vectorStore, cacheManager)
 
     return {
       embedder,
+      queryEmbedder,
       vectorStore,
       parser,
       scanner,

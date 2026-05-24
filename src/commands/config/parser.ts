@@ -92,6 +92,25 @@ export function parseConfigValue(key: string, value: string): any {
     return value
   }
 
+  // Union type (e.g., "last" | number)
+  if (type === 'union' && metadata.unionTypes) {
+    // Try to parse as each member type in order
+    for (const memberType of metadata.unionTypes) {
+      if (memberType === 'string' && value === 'last') {
+        return value  // special keyword
+      }
+      if (memberType === 'integer' && /^-?\d+$/.test(value)) {
+        return parseInt(value, 10)
+      }
+      if (memberType === 'number' && /^-?\d+(?:\.\d+)?$/.test(value)) {
+        return parseFloat(value)
+      }
+    }
+    console.error(`Invalid union value for ${key}: ${value}`)
+    console.error(`Expected types: ${metadata.unionTypes.join(' | ')}`)
+    process.exit(1)
+  }
+
   // String type (default)
   return value
 }

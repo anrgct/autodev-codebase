@@ -15,7 +15,7 @@ type LoggerLike = Pick<Logger, "debug" | "info" | "warn" | "error">
  * 支持三种池化模式：
  * - "last-token": 每个 chunk 独立 forward pass，取 last-token hidden state
  * - "mean": 每个 chunk 独立 forward pass，对所有 token 做 mean pooling
- * - "qr-attention": 每个 chunk 独立 forward pass，用最后 token 与各 token 的
+ * - "qr-weighted": 每个 chunk 独立 forward pass，用最后 token 与各 token 的
  *   隐藏状态相似度（近似 attention 重要性权重）做加权 mean pooling
  * - "late-chunking": 拼接同文件所有 chunks，一次 forward pass，按 chunk 边界分别 pool
  *
@@ -30,26 +30,75 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   private readonly modelPath: string
   private readonly gpuLayers?: number
   private readonly concurrency: number
-  private readonly _poolingMode: "late-chunking" | "last-token" | "mean" | "qr-attention"
+  private readonly _poolingMode: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  private readonly _rawPoolingLayer: "last" | number | string  // raw spec: "last", 22, -1, -2, "2/3"
   private readonly _enableLlmPrefix: boolean
   private readonly logger?: LoggerLike
   private _model: LlamaModel | null = null
   private _loadingPromise: Promise<void> | null = null
+  private _resolvedPoolingLayer: number | null = null  // cached resolved layer index
 
   constructor(
     modelPath: string,
     gpuLayers?: number,
     concurrency?: number,
     logger?: LoggerLike,
-    poolingMode?: "late-chunking" | "last-token" | "mean" | "qr-attention",
+    poolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted",
     enableLlmPrefix?: boolean,
+    poolingLayer?: "last" | number | string,
   ) {
     this.modelPath = modelPath
     this.gpuLayers = gpuLayers
     this.concurrency = concurrency && concurrency > 0 ? concurrency : 1
-    this._poolingMode = poolingMode ?? "late-chunking"
+    this._poolingMode = poolingMode ?? "mean"
+    this._rawPoolingLayer = poolingLayer ?? "last"
     this._enableLlmPrefix = enableLlmPrefix ?? false
     this.logger = logger
+  }
+
+  /**
+   * Resolve the pooling layer spec to an actual layer index,
+   * using model metadata (total layer count) for fractions and negative indices.
+   * 
+   * Returns -1 for "last" layer (llama.cpp convention: extract final norm output).
+   */
+  private _resolveLayer(model: LlamaModel): number {
+    if (this._resolvedPoolingLayer !== null) return this._resolvedPoolingLayer
+
+    const raw = this._rawPoolingLayer
+    let resolved: number
+
+    if (raw === "last") {
+      resolved = -1  // llama.cpp embdLayer convention for last layer
+    } else if (typeof raw === "number") {
+      if (raw >= 0) {
+        resolved = raw  // positive: direct layer index
+      } else {
+        // negative: relative from end, e.g. -1 = last, -2 = second-to-last
+        // totalLayers includes output/embedding layers, so subtract 1 to get transformer count
+        const transformerLayers = model.fileInsights.totalLayers - 1
+        resolved = Math.max(transformerLayers + raw, 0)
+      }
+    } else if (typeof raw === "string" && raw.includes("/")) {
+      // fraction: "2/3" → transformerLayers * 2 / 3
+      const [numStr, denStr] = raw.split("/")
+      const num = parseInt(numStr, 10)
+      const den = parseInt(denStr, 10)
+      if (den === 0) {
+        throw new Error(`Invalid pooling layer fraction "${raw}": denominator cannot be zero`)
+      }
+      const transformerLayers = model.fileInsights.totalLayers - 1
+      resolved = Math.max(Math.floor(transformerLayers * num / den), 0)
+      this.logger?.info(
+        `[LlamaCppLlmEmbedder] Pooling layer fraction ${raw} = ${resolved} ` +
+        `(${transformerLayers} transformer layers)`
+      )
+    } else {
+      throw new Error(`Invalid pooling layer value: ${raw}`)
+    }
+
+    this._resolvedPoolingLayer = resolved
+    return resolved
   }
 
   /**
@@ -91,8 +140,8 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       }
     }
 
-    if (this._poolingMode === "mean" || this._poolingMode === "qr-attention") {
-      return this._poolingMode === "qr-attention"
+    if (this._poolingMode === "mean" || this._poolingMode === "qr-weighted") {
+      return this._poolingMode === "qr-weighted"
         ? this._qrAttentionCreateEmbeddings(model, texts)
         : this._meanPoolingCreateEmbeddings(model, texts)
     }
@@ -114,7 +163,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext()
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -244,7 +293,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     const spans = this._computeTokenSpans(prefixLen, sepLen, chunkTokenSeqs)
 
     // Step 4: forward pass 获取 per-token hidden states
-    const embedContext = await model.createEmbeddingContext()
+    const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
     try {
       const perTokenEmbs = await embedContext.getEmbeddingsForTokens(bodyText)
 
@@ -394,7 +443,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext()
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -432,7 +481,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   }
 
   /**
-   * QR-attention pooling：单次前向传播，用最后 token hidden state 与所有
+   * QR-weighted pooling：单次前向传播，用最后 token hidden state 与所有
    * token hidden states 的相似度（softmax 归一化）作为注意力权重，做加权
    * mean pooling。
    *
@@ -454,14 +503,14 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     texts: string[],
   ): Promise<EmbeddingResponse> {
     const embeddings: number[][] = new Array(texts.length)
-    // 温度参数：控制 softmax 锐度。1.0 为标准 QR-attention，
+    // 温度参数：控制 softmax 锐度。1.0 为标准 QR-weighted，
     // 较低值（如 0.5）更接近 last-token，较高值（如 2.0）更接近 mean-pooling
     // 可通过环境变量 QR_TEMPERATURE 覆盖（如 QR_TEMPERATURE=0.5）
     const QR_TEMPERATURE = (() => {
       if (typeof process !== "undefined" && process.env.QR_TEMPERATURE) {
         const v = parseFloat(process.env.QR_TEMPERATURE)
         if (!isNaN(v) && v > 0) {
-          this.logger?.info(`[qr-attention] Using QR_TEMPERATURE=${v} from env`)
+          this.logger?.info(`[qr-weighted] Using QR_TEMPERATURE=${v} from env`)
           return v
         }
       }
@@ -473,7 +522,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext()
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -598,7 +647,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       }
 
       // 尝试生成测试 embedding
-      const embedContext = await this._model.createEmbeddingContext()
+      const embedContext = await this._model.createEmbeddingContext({ embdLayer: this._resolveLayer(this._model) } as any)
       try {
         const perTokenEmbs = await embedContext.getEmbeddingsForTokens("test")
         if (!perTokenEmbs || perTokenEmbs.length === 0) {
@@ -633,14 +682,14 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     if (this._poolingMode === "late-chunking") {
       return 1024
     }
-    // For mean / qr-attention pooling, batch multiple independent chunks for efficiency
-    if (this._poolingMode === "mean" || this._poolingMode === "qr-attention") {
+    // For mean / qr-weighted pooling, batch multiple independent chunks for efficiency
+    if (this._poolingMode === "mean" || this._poolingMode === "qr-weighted") {
       return 32
     }
     return 1
   }
 
-  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention" {
+  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
     return this._poolingMode
   }
 

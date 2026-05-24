@@ -122,7 +122,7 @@ export class LlamaEmbeddingContext {
         return this._llamaContext.model;
     }
     /** @internal */
-    static async _create({ _model }, { contextSize, batchSize, threads = 6, createSignal, ignoreMemorySafetyChecks }) {
+    static async _create({ _model }, { contextSize, batchSize, threads = 6, createSignal, ignoreMemorySafetyChecks, embdLayer }) {
         if (_model.fileInsights.hasEncoder && _model.fileInsights.hasDecoder)
             throw new Error("Computing embeddings is not supported for encoder-decoder models.");
         const llamaContext = await _model.createContext({
@@ -131,7 +131,8 @@ export class LlamaEmbeddingContext {
             threads,
             createSignal,
             ignoreMemorySafetyChecks,
-            _embeddings: true
+            _embeddings: true,
+            _embdLayer: embdLayer
         });
         return new LlamaEmbeddingContext({
             _llamaContext: llamaContext

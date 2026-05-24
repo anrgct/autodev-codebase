@@ -559,6 +559,302 @@ Temperature 实验是"层深度"的不完美代理（只控制 pooling 注意力
 - 之后可从第 50%、66%、75% 深度提取 hidden states 做对比实验
 
 后续可探索：
-- 修改 llama.cpp 支持 `embd_layer` 参数，真正测试中间层 hidden states
+- ✅ llama.cpp `embd_layer` 参数已实现（见 `docs/plans/260524-llamacpp-midlayer-embd.md`）
+- ✅ Layer Sweep 已完成——L22 为最佳提取层
+- ✅ 层 × 池化交叉实验完成——L22-mean 为全局最佳 (MRR=0.55)
+- ✅ 多模型全层扫描完成（修正版）——悬崖是因果 LM 固有属性，与模型大小无关
 - 支持"最后 N 层加权平均"（Sentence-BERT 风格 pooling）
-- 换用专用 embedding 模型（Qwen3-Embedding）对比 layer-wise 行为差异
+- 换用专用 embedding 模型（Qwen3-Embedding / Qwen3.6-27B）跑完整 layer sweep eval
+
+## 探索记录：2026-05-24 中间层 Embedding 提取（Layer Sweep）
+
+### 背景
+
+Temperature sweep 的结论是"不支持中间层显著优于最后一层"，但明确指出这只是 pooling 注意力分布的实验，**没有改变 hidden states 本身的语义层来源**。真正的中间层实验需要从 llama.cpp C++ 层支持层选择。
+
+### 实现
+
+完整实现在 `docs/plans/260524-llamacpp-midlayer-embd.md` 中记录，跨越 3 个代码库：
+
+| 层次 | 改动 | 状态 |
+|------|------|:--:|
+| llama.cpp C++ | `llama_context_params.embd_layer` + 97 个模型架构 patch | ✅ |
+| node-llama-cpp JS | `LlamaEmbeddingContextOptions.embdLayer` → `AddonContext` 参数链路 | ✅ |
+| autodev-codebase | `embedderPoolingLayer` 配置项 + `POOLING_LAYER` 环境变量 | ✅ |
+
+### Layer Sweep 实验设计
+
+**前置**：全层 cosine 扫描——对 MiniCPM-V-4.6（24 层）逐层提取 embedding，5 个 prompt mean-pool L2 normalize，计算与最后一层 (L23) 的 cosine similarity。
+
+**全层扫描发现**：最后一层与所有其他层相似度极低（L22=0.41, L18=0.31, L0=0.09），存在明显的"最后一层悬崖"——L22→L23 的 Δcos=0.59，是相邻层平均变化的 14 倍。
+
+**检索评估**：对 9 个关键层（L23-L8）分别运行 `embedderPoolingLayer` + 重建索引 + `eval_search.py`（12 个查询，qr-attention pooling，无指令前缀）。
+
+### 结果
+
+| Layer | 命中 | MRR | R@1 | R@10 | 中位数 | vs L23 MRR |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **L23 (last)** | **11/12** | 0.2820 | 8.3% | 66.7% | 5 | baseline |
+| **L22** ★ | 9/12 | **0.5000** | **33.3%** | 75.0% | **2** | **+77%** |
+| L20 | 9/12 | 0.4355 | 25.0% | 75.0% | 2 | +54% |
+| L18 | 10/12 | 0.4097 | 16.7% | 75.0% | 3 | +45% |
+| L16 | 10/12 | 0.3463 | 16.7% | 75.0% | 5 | +23% |
+| L15 | 10/12 | 0.2301 | 0% | 58.3% | 8 | -18% |
+| L12 | 9/12 | 0.3071 | 16.7% | 58.3% | 4 | +9% |
+| L10 | 9/12 | 0.2528 | 16.7% | 50.0% | 9 | -10% |
+| L8 | 9/12 | 0.3677 | 25.0% | 58.3% | 2 | +30% |
+
+**★ L22 是最佳层：MRR 提升 77%，R@1 提升 4×**
+
+### 与 Temperature Sweep 结论的对比
+
+Temperature sweep 结论是"temp=1.0（最后层 + 标准 softmax）已是 Pareto 最优"。但 layer sweep 推翻了这一结论：
+
+| 实验 | 方法 | 最优参数 | MRR | vs Last-Layer |
+|------|------|:---:|:---:|:---:|
+| Temperature Sweep | 改变 QR-attention 温度 | temp=1.0 (last layer) | 0.2820 | — |
+| **Layer Sweep** | **改变 hidden states 语义层** | **L22** | **0.5000** | **+77%** |
+
+Temperature sweep 仅仅改变了 pooling 的注意力分布——也就是"如何利用同一个 hidden states"。Layer sweep 从根本上改变了 hidden states 的语义来源——L22 的 hidden states 比 L23 更适合语义检索。
+
+### 丢失查询分析
+
+| Layer | 丢失查询 | 说明 |
+|:---:|------|------|
+| L23 | #1 (is_hub_model) | 覆盖最广，仅丢 1 个 |
+| L22/L20 | #1, #3 (predict_cli), #11 (track) | 丢 3 个，但排序最优 |
+| L18/L16 | #1, #4 (train best/last weight) | 丢 2 个，平衡之选 |
+
+L22 丢失的 #3 和 #11 是极难查询（#3 在 L22 下 Top-30 中无任何结果），但换来了其余 9 个查询的排序质量大幅提升。
+
+### 结论
+
+1. **"最后一层悬崖"被检索实验证实**：L22→L23 的 MRR 从 0.50 跌到 0.28（-44%），与全层扫描 cos 0.41↗1.00 的跳跃一致
+2. **最佳提取区间为 L18-L22（75-92% 深度）**：MRR 比最后一层高 45-77%
+3. **Coverage vs Precision 权衡**：最后一层覆盖最广但排序最差，L22 排序最优但覆盖略降
+4. **Temperature sweep 的"不支持中间层"结论被推翻**——当时只是因为还没实现真正的中间层 hidden states 提取
+
+### 后续
+
+- `embedderPoolingLayer` 默认值建议从 `"last"` 改为自动检测（如模型 N 层，取 floor(N × 0.92)）
+- 多层平均实验：L20-L23 加权平均是否能同时保持覆盖率和排序质量
+- 不同模型验证：Qwen3-Embedding / jina-v5 上重复 layer sweep
+
+### 探索记录：2026-05-24 层 × 池化 交叉实验
+
+在完成单层 sweep（qr-attention 固定，变 layer）后，进一步测试三种池化方式 × 七个层深度的完整交叉矩阵。
+
+**实验设计**：MiniCPM-V-4.6, 7 layers (L23-L8) × 3 pooling modes (last-token, mean, qr-attention) = 21 组合
+
+**完整矩阵**：
+
+```
+                     ──────────── 池化方式 ────────────
+层                   last-token         mean              qr-attention
+──────────────────────────────────────────────────────────────────────────
+L23 (last, cos=1.00) 8/12 MRR=0.04      11/12 MRR=0.27    11/12 MRR=0.28
+L22 (92%,  cos=0.41) 6/12 MRR=0.12      9/12 MRR=0.55 ★   9/12 MRR=0.50
+L20 (83%,  cos=0.35) 2/12 ❌            9/12 MRR=0.43     9/12 MRR=0.44
+L18 (75%,  cos=0.31) 2/12 ❌            10/12 MRR=0.41    10/12 MRR=0.41
+L15 (62%,  cos=0.27) 1/12 ❌            10/12 MRR=0.33    10/12 MRR=0.23
+L12 (50%,  cos=0.23) 0/12 ☠             9/12 MRR=0.31     9/12 MRR=0.31
+L8  (33%,  cos=0.14) 0/12 ☠             9/12 MRR=0.36     9/12 MRR=0.37
+```
+
+**★ 新全局最佳：L22-mean, MRR=0.5486, 中位数排名 #1**
+
+**三个关键发现**：
+
+1. **last-token 极度依赖最后层**：作为"取一个点"的策略，它要求那个点正好在 lm_head 对齐层。离开 L23 后性能断崖式下跌（L22=6→L20=2→L12=0）。之前 late-chunking 实验中的 8/12 baseline 已经是 last-token 在 MiniCPM 上的天花板。
+
+2. **mean 被低估了**：之前实验中 mean 表现差（6/12），是因为默认用 L23。换到 L22 后，mean 的 MRR 从 0.27 暴涨到 0.55——甚至超过了 qr-attention。mean 的分布式特性使其对"干净但非对齐"的 hidden states（如 L22）有天然容错。
+
+3. **qr-attention 的有效性局限于最后层**：qr-attention 的核心——"最后 token 对前文的 cosine 相似度作为注意力权重"——依赖最后 token 携带真实的注意力信号。L23 时 qr > mean (0.28 > 0.27)，L22 时信号退化被 mean 反超 (0.50 < 0.55)，L8 时所有 token 相似度趋同、权重退化到 1/n、qr ≈ mean (0.37 ≈ 0.36)。
+
+**对池化策略的修正理解**：
+
+| 之前 | 之后 |
+|------|------|
+| qr-attention > mean > last-token | L22-mean > L22-qr > L23-qr > L23-mean > L23-last-token |
+| 池化和层是两个独立维度 | 池化的有效性依赖层的语义质量 |
+| 智能加权一定优于等权平均 | 当权重信号退化时，等权平均反而更好 |
+
+**后续**：L22-mean 作为新的默认推荐组合（`embedderPoolingLayer: 22` + `embedderPoolingMode: "mean"`），但覆盖率略低于 L23-qr-attention（9/12 vs 11/12），需在实际场景中权衡。
+
+### 探索记录：2026-05-24 多模型全层扫描（5 因果 LM + 1 嵌入模型，修正版）
+
+**⚠️ 早期扫描因层数检测 bug 只读了前 24 层，得出"悬崖随模型大小衰减"的错误结论。修正后重新扫描。**
+
+| 模型 | 参数量 | 层数 | 训练目标 | L0 | L(N-2) | L(N-1) | Δ(悬崖) |
+|------|:--:|:--:|------|:--:|:--:|:--:|:--:|
+| MiniCPM-V-4.6 | 0.5B | 24 | 通用 VLM | 0.09 | 0.41 | 0.41 | **0.59** |
+| Qwen3.5-4B | 4B | 32 | 通用 LLM | 0.08 | 0.43 | 0.47 | **0.53** |
+| Qwen3.5-9B | 9B | 32 | 通用 LLM | 0.17 | 0.41 | 0.60 | **0.40** |
+| Qwen3.6-27B | 27B | 64 | 通用 LLM | 0.09 | 0.56 | 0.56 | **0.44** |
+| Qwen3.6-35B-A3B | 35B | 40 | MoE LLM | 0.17 | 0.38 | 0.38 | **0.62** |
+| Qwen3-Embedding | 0.6B | 28 | 对比学习 | 0.03 | 0.70 | 0.70 | **0.30** |
+
+**修正后的结论：**
+
+1. **悬崖是因果 LM 的固有属性，与模型大小无关**：0.5B 和 35B 的悬崖都在 0.40-0.62 之间。next-token prediction 的 lm_head 对齐对所有大小的因果 LM 都会在最后层产生 hidden states 变形。
+
+2. **嵌入模型悬崖更小但仍存在**：Qwen3-Embedding 的 Δ=0.30，约为因果 LM 的一半。对比学习训练减轻了但仍未完全消除 last-layer 效应。
+
+3. **中层提取对所有因果 LM 都有价值**：不存在"大到不需要"的阈值——之前以为 27B 无悬崖是因为只看了前 24 层（实际有 64 层）。
+
+4. **Qwen3.6-27B 的 L22（36%深度）检索效果（MRR=0.64）优于 L23（MRR=0.55）**——说明即使对大模型，略过最后 1-2 层仍有提升。），但覆盖率略低于 L23-qr-attention（9/12 vs 11/12），需在实际场景中权衡。
+
+## 探索记录：2026-05-24 Chat Template 与 Embedding 提取
+
+### 问题
+
+MiniCPM-V-4.6 是 instruct-tuned VLM，训练时使用完整的 chat template（`<|im_start|>user\n...<|im_end|><|im_start|>assistant\n`）。在提取 hidden states 做 embedding 时，是否应该套用此模板？
+
+### 实际行为
+
+`getEmbeddingsForTokens()` 在 `node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js` 中定义，处理流程：
+
+```text
+text → tokenizeInput() → resolveBeginningTokenToPrepend (加 BOS)
+                       → resolveEndTokenToAppend (加 EOS)
+                       → evaluate({_noSampling: true})   // 1 token forward pass
+                       → getEmbedding(i)                  // 提取每 token hidden state
+```
+
+实际进入模型的文本是：
+
+```
+[BOS] raw_text [EOS]
+```
+
+**不是**完整的 chat template：
+
+```
+<|im_start|>user       ← 没有
+raw_text<|im_end|>     ← 没有
+<|im_start|>assistant  ← 没有
+```
+
+只加了 BOS/EOS 边界 token（由 `tokenizerUtils.js` 中的 `resolveBeginningTokenToPrepend` / `resolveEndTokenToAppend` 根据模型 vocab 类型和 `shouldPrependBosToken` / `shouldAppendEosToken` 标志决定）。
+
+### 实验验证
+
+文档早期实验 #4 测试过套完整 chat template（`<|im_start|>user\n...`），结果与 baseline 完全相同（10/12），对 MiniCPM 无效：
+
+> hidden state 提取不响应 chat format
+
+### 结论
+
+当前做法（裸文本 + BOS/EOS）是正确的。本质上是利用 MiniCPM **预训练 backbone 的语义表示能力**，绕开了 instruct tuning 加上的两层包装：
+
+| MiniCPM 的训练目标 | embedding 提取中的状态 |
+|------|------|
+| Chat template（role markers） | ❌ 不套，实验证实无效 |
+| Next-token generation（最后一层） | ❌ 跳过，用 L22 避开 lm_head 偏置 |
+| Backbone 语言理解 | ✅ 这是实际用到的 |
+
+这也解释了 0.5B 模型区分度有限的根本原因：它预训练时没见过"区分代码函数和城市交通文本"这种对比任务。专用 embedding 模型（Qwen3-Embedding、jina-v5）用对比学习训练过，hidden states 在所有层都更适合检索（悬崖仅 0.30 vs MiniCPM 的 0.59）。
+
+## 探索记录：2026-05-24 非对称层配置 & embedderPoolingLayer 拆分
+
+### 背景
+
+之前的 layer sweep 实验中，L22-mean 跑出 MRR=0.5486（全球最佳），但后来改用匹配层（index 和 search 同层）后只能到 MRR=0.37。排查发现历史高分是用**非对称层**（index L22 + search L23）跑出来的，而不是对称层。
+
+### Bug 发现：`"qr-attention"` → `"qr-weighted"` 重命名遗漏
+
+`qr-attention` 是旧名称，已重命名为 `qr-weighted`。代码中所有类型和判断逻辑已更新为新名：
+
+```typescript
+// createEmbeddings() 分发逻辑
+if (this._poolingMode === "qr-weighted") { ... }
+```
+
+但 `demo/autodev-config.json` 的注释行仍残留旧名 `"qr-attention"`。当 config 中误设为旧名时，因不匹配任何分支，静默回退到 `last-token` pooling——导致两次 sweep（误用旧名和 last-token）产生完全相同的指标。
+
+**修复**：更新 demo config 注释行为新名 `"qr-weighted"`。
+
+### 核心发现：非对称层优于对称层
+
+| 配置 | 命中 | MRR | R@1 | 中位数 |
+|------|:---:|:---:|:---:|:---:|
+| L22 index + **L23 query** (非对称) | 9/12 | **0.5486** | **41.7%** | #1 |
+| L22 index + L22 query (对称) | 10/12 | 0.3708 | 16.7% | #2 |
+| L20 index + L23 query (非对称) | 9/12 | 0.4286 | 25.0% | #2 |
+| L18 index + L23 query (非对称) | 10/12 | 0.4074 | 16.7% | #2 |
+
+**原因**：这是一种非对称双编码器效应——LM 的不同层捕捉不同粒度的语义信息：
+
+- **L22 (92% 深度)**：hidden states 更"干净"，少受 next-token prediction 偏置污染，适合编码"这段代码是什么"
+- **L23 (last layer)**：hidden states 经过 lm_head 对齐，更接近"提问/生成"的语义空间，适合编码"用户想问什么"
+
+两者组合比用同一层匹配得分更高（MRR 0.55 vs 0.37，+48%）。
+
+### 配置拆分：`embedderPoolingLayer` → index + query
+
+基于上述发现，将单一的 `embedderPoolingLayer` 拆分为两个独立配置项：
+
+| 配置项 | 用途 | 默认值 |
+|------|------|:---:|
+| `embedderPoolingLayer` | 索引端（文档 embedding）的提取层 | `"last"` |
+| `embedderQueryPoolingLayer` | 查询端（query embedding）的提取层 | `"last"`（回退到 `embedderPoolingLayer`） |
+
+**生产配置推荐**：
+
+```json
+{
+  "embedderPoolingLayer": 22,
+  "embedderQueryPoolingLayer": "last"
+}
+```
+
+### 环境变量重构
+
+原设计将 `POOLING_LAYER` 环境变量检查放在 `LlamaCppLlmEmbedder` 构造函数中，导致 index 和 query embedder 都受同一个变量影响，无法独立控制。
+
+**修复**：将环境变量逻辑从 constructor 移到 `service-factory.ts`：
+
+| 变量 | 控制 | 解析位置 |
+|------|------|------|
+| `POOLING_LAYER` | 索引 embedder 层 | `_resolveIndexLayer()` |
+| `QUERY_POOLING_LAYER` | 查询 embedder 层 | `_resolveQueryLayer()` |
+
+```typescript
+// service-factory.ts
+private _resolveIndexLayer(config) {
+  return this._resolveLayerFromEnv("POOLING_LAYER") 
+      ?? config["embedderPoolingLayer"] ?? "last"
+}
+
+private _resolveQueryLayer(config) {
+  return this._resolveLayerFromEnv("QUERY_POOLING_LAYER") 
+      ?? config["embedderQueryPoolingLayer"] ?? config["embedderPoolingLayer"] ?? "last"
+}
+```
+
+`LlamaCppLlmEmbedder` 构造函数不再读环境变量，只接受参数。`service-factory.createServices()` 创建两个独立的 embedder——index embedder 传给 scanner/fileWatcher，query embedder 传给 search service。
+
+### 实验脚本更新
+
+`layer-sweep.sh` 新增用法：
+
+```bash
+./layer-sweep.sh                    # 非对称：index 层变，search 固定 L23
+SYMMETRIC=1 ./layer-sweep.sh        # 对称：index 和 search 同层
+QUERY_POOLING_LAYER=20 ./layer-sweep.sh  # 自定义搜索层
+```
+
+### 涉及文件（本轮 12 文件）
+
+| 文件 | 改动 |
+|------|------|
+| `interfaces/config.ts` | `embedderQueryPoolingLayer` 类型定义（3 个 interface/type） |
+| `constants/index.ts` | 默认值 |
+| `config-manager.ts` | `REQUIRES_RESTART_KEYS`、snapshot 构建、change detection |
+| `config-validator.ts` | 类型校验（`"last"` / number / fraction） |
+| `metadata.ts` | 配置项元数据 |
+| `embedders/llamacpp-llm.ts` | 移除 constructor 中的 `POOLING_LAYER` env 检查 |
+| `service-factory.ts` | `_resolveIndexLayer()` / `_resolveQueryLayer()` / `createQueryEmbedder()` |
+| `manager.ts` | `createServices()` 返回 `queryEmbedder`，search service 使用它 |
+| `demo/autodev-config.json` | `embedderQueryPoolingLayer: "last"`，`qr-attention` → `qr-weighted` |
+| `layer-sweep.sh` | 支持 `QUERY_POOLING_LAYER` / `SYMMETRIC` / `LAYERS` 环境变量 |

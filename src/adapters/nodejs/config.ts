@@ -298,7 +298,7 @@ export class NodeConfigProvider implements IConfigProvider {
         return false
       }
     } else if (embedderProvider === "llamacpp") {
-      if (!this.config.embedderLlamaCppModelPath) {
+      if (!this.config.embedderGgufPath) {
         return false
       }
     } else if (embedderProvider === "llamacpp-llm") {
@@ -377,7 +377,7 @@ export class NodeConfigProvider implements IConfigProvider {
         }
         break
       case "llamacpp":
-        if (!config.embedderLlamaCppModelPath) {
+        if (!config.embedderGgufPath) {
           errors.push('LlamaCPP model path is required')
         }
         break

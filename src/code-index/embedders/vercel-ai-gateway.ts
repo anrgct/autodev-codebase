@@ -95,7 +95,7 @@ export class VercelAiGatewayEmbedder implements IEmbedder {
         return this.openAICompatibleEmbedder.optimalBatchSize
     }
 
-    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention" {
+    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
         return "last-token"
     }
 }

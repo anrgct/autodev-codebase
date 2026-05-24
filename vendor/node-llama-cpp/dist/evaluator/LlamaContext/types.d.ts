@@ -150,6 +150,13 @@ export type LlamaContextOptions = {
      */
     collectKqSoftMax?: boolean;
     /**
+     * Target transformer layer index for embedding extraction.
+     * `-1` = last layer (default), `0..n_layer-1` = target layer.
+     *
+     * @internal
+     */
+    _embdLayer?: number;
+    /**
      * Load the provided LoRA adapters onto the context.
      * LoRA adapters are used to modify the weights of a pretrained model to adapt to new tasks or domains
      * without the need for extensive retraining from scratch.

@@ -424,7 +424,7 @@ export class CodeIndexManager implements ICodeIndexManager {
     await this.dependencies.workspace.shouldIgnore(dummyPath)
 
     // (Re)Create shared service instances
-    const { embedder, vectorStore, scanner, fileWatcher } = await this._serviceFactory.createServices(
+    const { embedder, queryEmbedder, vectorStore, scanner, fileWatcher } = await this._serviceFactory.createServices(
       this.dependencies.fileSystem,
       this.dependencies.eventBus,
       this._cacheManager!,
@@ -479,11 +479,11 @@ export class CodeIndexManager implements ICodeIndexManager {
       this.dependencies.logger,
     )
 
-    // (Re)Initialize search service
+    // (Re)Initialize search service (uses query-specific embedder for asymmetric layer support)
     this._searchService = new CodeIndexSearchService(
       this._configManager!,
       this._stateManager,
-      embedder,
+      queryEmbedder,
       vectorStore,
       reranker, // Pass reranker to search service
       highlighter, // Pass highlighter to search service

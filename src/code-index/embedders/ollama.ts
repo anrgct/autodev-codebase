@@ -382,7 +382,7 @@ export class CodeIndexOllamaEmbedder implements IEmbedder {
         return this.batchSize
     }
 
-    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-attention" {
+    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
         return "last-token"
     }
 }

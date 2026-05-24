@@ -304,24 +304,248 @@ if (embd_layer == n_layer - 1) {
 
 ## 实施记录
 
-*(待填写)*
+### 2026-05-24：llama.cpp C++ 层完成
 
-## 修订记录
+**改动范围**：111 文件，+1672 / -5 行。
 
-*(待填写)*
+**API 层（4 文件）**
+- `include/llama.h`：`llama_context_params` 新增 `int32_t embd_layer` 字段（默认 -1）
+- `src/llama-cparams.h`：`llama_cparams` 新增 `int32_t embd_layer` 字段
+- `src/llama-context.cpp`：构造函数中拷贝 `embd_layer`，`llama_context_default_params()` 初始化为 -1
+- `src/llama-graph.h`：`llm_graph_params::allow_reuse()` 加入 `embd_layer` 比较
+
+**模型架构层（107 文件）**
+- 通过 Python 脚本 `scripts/add-midlayer-embd.py` 批量处理 97 个标准架构文件
+- 手动处理 10 个特殊架构（jais2、lfm2、t5、wavtokenizer-dec、bailingmoe2、deepseek2、exaone-moe、glm4、glm4-moe、mimo2）
+- llama.cpp 作为参考实现手动修改
+
+**改动模式（每个模型文件）：**
+1. for 循环前：计算 `embd_layer`（默认 -1 → 最后一层）
+2. for 循环内（`inpL = cur` 前）：检查 `il == embd_layer`，应用 output_norm 并设置 `res->t_embd`
+3. for 循环后：`res->t_embd = cur` 包装在 `if (embd_layer == n_layer - 1)` 中
+
+**特殊处理：**
+- BERT 类模型（bert、eurobert、neo-bert、modern-bert、wavtokenizer-dec、pangu-embed）：无 output_norm，直接设置 `res->t_embd = cur`
+- T5：encoder 和 decoder 两个 graph 构造函数分别处理
+- 使用 `n_transformer_layers` / `effective_n_layers` 替代 `n_layer` 的模型：调整最后层判断
+- jais2：循环变量不叫 `inpL = cur`，改为在 `cb(inpL, "l_out", il)` 后插入
+- lfm2：无 `inpL` 变量，直接在 `cb(cur, "l_out", il)` 后插入
+- wavtokenizer-dec：posnet + convnext 两层循环，全局层索引跨循环计算
+
+**编译验证：** `cmake --build build` 零错误通过。
+
+### 2026-05-24：node-llama-cpp TypeScript 层 + autodev-codebase 集成完成
+
+**node-llama-cpp（5 文件）：**
+- `src/bindings/AddonTypes.ts`：`AddonContext` params 新增 `embdLayer?: number`
+- `src/evaluator/LlamaContext/types.ts`：`LlamaContextOptions` 新增 `_embdLayer?: number`
+- `src/evaluator/LlamaContext/LlamaContext.ts`：构造函数 + AddonContext 传递
+- `src/evaluator/LlamaEmbeddingContext.ts`：`LlamaEmbeddingContextOptions` 新增 `embdLayer?: number`，传递给 context 创建
+- `llama/addon/AddonContext.cpp`：C++ 绑定读取 `embdLayer` 选项并写入 `llama_context_params.embd_layer`
+
+**autodev-codebase（7 文件）：**
+- `src/code-index/interfaces/config.ts`：`CodeIndexConfig` / `PreviousConfigSnapshot` / `ConfigSnapshot` 新增 `embedderPoolingLayer?: "last" | number`
+- `src/code-index/constants/index.ts`：`DEFAULT_CONFIG` 新增 `embedderPoolingLayer: "last"`
+- `src/code-index/config-validator.ts`：校验 `embedderPoolingLayer` 类型（"last" 或非负整数）
+- `src/code-index/config-manager.ts`：`REQUIRES_RESTART_KEYS` + `_createConfigSnapshot` + `doesConfigChangeRequireRestart` 加入新字段
+- `src/code-index/service-factory.ts`：`LlamaCppLlmEmbedder` 构造时传入 `embedderPoolingLayer`
+- `src/code-index/embedders/llamacpp-llm.ts`：接受 `poolingLayer` 参数，转换为 `embdLayer`（"last" → -1，数字 → 直接传入），传递给所有 `createEmbeddingContext()` 调用
+- `src/commands/config/metadata.ts` + `parser.ts`：支持 `union` 类型配置值解析
+
+**类型编译：** `tsc --noEmit` 零新增错误通过。
+
+### 2026-05-24：llama.cpp 工具链 & API 验证
+
+**common 框架（3 文件）：**
+- `common/common.h`：`common_params` 新增 `int32_t embd_layer = -1`
+- `common/arg.cpp`：新增 `--embd-layer N` 参数解析（LLAMA_EXAMPLE_EMBEDDING / LLAMA_EXAMPLE_DEBUG）
+- `common/common.cpp`：`common_context_params_to_llama()` 传递 `embd_layer`
+
+**API 测试：** `tests/test-embd-layer.cpp` 验证：
+- `llama_context_default_params().embd_layer == -1` ✅
+- 可设为任意非负整数（0, 15 等）✅
+- `llama-embedding --embd-layer 5` 参数解析正常 ✅
+
+**运行时验证（MiniCPM-V-4.6-Q8_0, 24 layers）：**
+
+不同层 embedding 余弦相似度矩阵（prompt: "The capital of France is Paris"）：
+
+| | L23(last) | L18(75%) | L12(50%) | L6(25%) | L0(0%) |
+|---|:---:|:---:|:---:|:---:|:---:|
+| **L23(last)** | 1.00 | 0.46 | 0.17 | 0.13 | 0.12 |
+| **L18(75%)** | 0.46 | 1.00 | 0.47 | 0.38 | 0.20 |
+| **L12(50%)** | 0.17 | 0.47 | 1.00 | 0.75 | 0.38 |
+| **L6(25%)** | 0.13 | 0.38 | 0.75 | 1.00 | 0.44 |
+| **L0(0%)** | 0.12 | 0.20 | 0.38 | 0.44 | 1.00 |
+
+**关键发现：**
+- 最后一层与中间层相似度极低（0.12-0.46），验证了"最后一层偏向 next-token prediction"的核心假设
+- 相邻层相似度符合预期：L6→L12=0.75，L12→L18=0.47——语义逐层漂移
+- L6-L12 形成语义簇（cos=0.75），是 embedding 提取的候选目标区间
+- 中间层嵌入提取功能端到端验证通过 ✅
+
+### 2026-05-24：node-llama-cpp 原生 addon 编译 ✅ 已完成
+
+**卡点回顾与解决：**
+
+原卡点：下载的 llama.cpp 版本（ggml 0.9.7）与 workspace llama.cpp（ggml 0.11.1）API 不兼容，5 个特殊模型文件编译失败。
+
+解决方式：`build.mjs` 重构为两遍编译流程——Pass 1 用原始 AddonContext 编译 llama.cpp，Pass 2 内联 patch header + 运行模型脚本 + 复制 patched AddonContext + cmake --build 增量重编。详见 `docs/plans/260524-llamacpp-node-build-flow.md`。
+
+**编译结果：**
+- ✅ `llama-addon.node` + `libllama.metal.*.dylib` 编译成功
+- ✅ 部署到 `node_modules/@node-llama-cpp/mac-arm64-metal/bins/`
+- ✅ `deploy-llamacpp-patch.ts` 实现 vendor → node_modules 完整文件覆盖部署
+
+### 2026-05-24：node-llama-cpp JS 层参数传递修复
+
+**问题：** vendor JS 文件中 `LlamaEmbeddingContextOptions.embdLayer` 仅在 `.d.ts` 中声明了类型，`LlamaEmbeddingContext.js` 的 `_create()` 方法没有把 `embdLayer` 传递到 `createContext()` → `LlamaContext` → `AddonContext`。C++ 二进制已正确编译，但 JS 层参数链路中断。
+
+**修复（4 个 vendor 文件）：**
+
+| 文件 | 改动 |
+|------|------|
+| `vendor/.../LlamaEmbeddingContext.js` | `_create()` 解构 `embdLayer`，传 `_embdLayer` 给 `createContext()` |
+| `vendor/.../LlamaContext/LlamaContext.js` | 构造函数解构 `_embdLayer`，传 `embdLayer` 给 `AddonContext` |
+| `vendor/.../LlamaContext/types.d.ts` | 新增 `_embdLayer?: number` |
+| `vendor/.../bindings/AddonTypes.d.ts` | `AddonContext` params 新增 `embdLayer?: number` |
+
+**完整调用链（打通后）：**
+```text
+createEmbeddingContext({embdLayer: 12})
+  → LlamaEmbeddingContext._create(_, {embdLayer: 12})
+    → createContext({_embdLayer: 12, _embeddings: true})
+      → LlamaContext._create(options)
+        → new LlamaContext({...options})  // _embdLayer=12
+          → new AddonContext(model, {embdLayer: 12, ...})
+            → context_params.embd_layer = 12
+              → graph building: il==12 时 t_embd=cur
+```
+
+### 2026-05-24：llama.cpp 模型文件 patch 修复（llama 架构遗漏）
+
+**问题：** `scripts/add-midlayer-embd.py` 中 `ALREADY_MODIFIED = {"llama.cpp"}` 导致 `llama` 架构被跳过——该脚本为 workspace llama.cpp 设计（llama.cpp 已手动 patch），但 build.mjs 对下载版 llama.cpp 运行时，llama.cpp 未被 patch。llama 架构被 MiniCPM、Qwen2、Mistral 等大量模型使用。
+
+**修复：**
+- `scripts/add-midlayer-embd.py`：`ALREADY_MODIFIED` 改为空 `set()`
+- 重新运行脚本 patch 下载版 llama.cpp → 97 个模型文件全部含 `embd_layer`
+- `cmake --build` 增量重编 → dylib 重新部署
+
+**验证：**
+```bash
+grep -c "embd_layer" node_modules/.../src/models/llama.cpp
+# → 4  (修复前: 0)
+grep -l "embd_layer" node_modules/.../src/models/*.cpp | wc -l
+# → 97 (修复前: 96)
+```
+
+### 2026-05-24：全层扫描验证（24 层 × 5 prompts）
+
+使用 `scripts/test-midlayer-embd.ts` 对 MiniCPM-V-4.6（24 层）逐层提取 embedding，
+5 个 prompt mean-pool 后 L2 normalize，计算每层与最后一层 (L23) 的 cosine similarity：
+
+```text
+L0   █████                                            0.09
+L1   ███████                                          0.11
+L2   ████████                                         0.13
+L3   ███████                                          0.12
+L4   █████████                                        0.15
+L5   █████████                                        0.15
+L6   ████████                                         0.14  ← 浅层 avg=0.13
+L7   ███████████                                      0.18
+L8   ██████████                                       0.17
+L9   ███████████                                      0.19
+L10  ████████████                                     0.21
+L11  █████████████                                    0.22
+L12  ██████████████                                   0.23
+L13  ███████████████                                  0.25
+L14  ██████████████                                   0.24
+L15  ████████████████                                 0.27
+L16  ██████████████████                               0.30
+L17  ███████████████████                              0.32
+L18  ███████████████████                              0.31  ← 中层 avg=0.24
+L19  █████████████████████                            0.35
+L20  █████████████████████                            0.35
+L21  ███████████████████████                          0.38
+L22  █████████████████████████                        0.41
+L23  ████████████████████████████████████████████████ 1.00  ◀ last
+```
+
+**三个语义区：**
+
+| 区域 | 层范围 | 平均 cos | 特征 |
+|------|------|:--:|------|
+| 浅层 | L0-L6 | 0.13 | 与最后层几乎正交——语法/表面特征 |
+| 中层 | L7-L18 | 0.24 | 语义逐步发育，过渡区 |
+| 深层 | L19-L23 | 0.50 | 趋近最后层，但 L22 仍只有 0.41 |
+
+**关键发现：**
+- **"最后一层悬崖"**：L22→L23 的 Δcos = 0.59，是相邻层平均变化（0.87→1.00 的差距）的 14 倍，说明最后一层经历了质变（next-token prediction head 对齐）
+- **相邻层平滑**：相邻层平均 cos = 0.87，表示逐层微调
+- **Embedding sweet spot**：L15-L18（62-75% 深度）语义丰富且未受 last-layer 偏置
+- 端到端验证通过 ✅
+
+### 2026-05-24：Layer Sweep 检索质量评估（9 层 × 12 查询）
+
+使用 `src/examples/layer-sweep.sh` 对 9 个关键层（L23-L8）分别重建索引 + 运行 `eval_search.py`，测量检索质量随层深度的变化。
+
+**结果汇总：**
+
+| Layer | 命中 | MRR | R@1 | R@10 | R@20 | 中位数排名 | 平均分数 |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **L23 (last)** | **11/12** | 0.2820 | 8.3% | 66.7% | 66.7% | 5 | 0.2552 |
+| **L22** ★ | 9/12 | **0.5000** | **33.3%** | 75.0% | 75.0% | **2** | 0.1632 |
+| L20 | 9/12 | 0.4355 | 25.0% | 75.0% | 75.0% | 2 | 0.1514 |
+| L18 | 10/12 | 0.4097 | 16.7% | 75.0% | 83.3% | 3 | 0.1578 |
+| L16 | 10/12 | 0.3463 | 16.7% | 75.0% | 83.3% | 5 | 0.1774 |
+| L15 | 10/12 | 0.2301 | 0% | 58.3% | 75.0% | 8 | 0.1623 |
+| L12 | 9/12 | 0.3071 | 16.7% | 58.3% | 75.0% | 4 | 0.1639 |
+| L10 | 9/12 | 0.2528 | 16.7% | 50.0% | 75.0% | 9 | 0.1383 |
+| L8 | 9/12 | 0.3677 | 25.0% | 58.3% | 75.0% | 2 | 0.1360 |
+
+**★ L22 是最佳层：MRR 提升 77%（0.28→0.50），R@1 提升 4×（8%→33%）**
+
+**丢失查询分析：**
+
+| Layer | 丢失查询 | 说明 |
+|:---:|------|------|
+| L23 | #1 (is_hub_model) | 仅丢 1 个，覆盖最广 |
+| L22/L20 | #1, #3 (predict_cli), #11 (track) | 丢 3 个，rank 质量最高 |
+| L18/L16 | #1, #4 (train best/last weight) | 丢 2 个，平衡之选 |
+
+**关键发现：**
+
+1. **"最后一层悬崖"被检索实验证实**：L22→L23 的 MRR 从 0.50 暴跌到 0.28（-44%），与全层扫描中 cos=0.41↗1.00 的跳跃一致。最后一层的 next-token prediction 对齐不仅改变了 hidden states 的几何方向，还显著损害了语义检索的排序质量。
+
+2. **Coverage vs Precision 的表示层权衡**：
+   - 最后一层：覆盖最广（11/12），但排序最差（MRR 0.28，中位数 #5）
+   - L22：覆盖降低（9/12），但排序大幅提升（MRR 0.50，中位数 #2）
+   - 这说明最后一层的 hidden states 被"稀释"了——能微弱匹配更多查询，但区分度不足
+
+3. **最佳提取区间为 L18-L22（75-92% 深度）**：
+   - MRR 0.41-0.50，显著优于最后一层的 0.28
+   - L22 的 R@1=33.3% vs L23 的 8.3%，说明 top-1 质量有质的提升
+   - L18 命中 10/12，是最接近 L23 命中数（11）的非最后层
+
+4. **浅层（≤L15）不适合检索**：MRR 和 Recall 均显著低于 L18-L22 区间
+
+5. **丢失查询 #1（is_hub_model）在所有层均未命中**：这可能是 MiniCPM-V-4.6 hidden states 对该代码模式的固有盲区，与层深度无关
 
 ## 总结
 
 ### 改动规模估算
 
-| 层次 | 文件数 | 预估行数 | 难度 |
+| 层次 | 文件数 | 实际行数 | 难度 |
 |------|:---:|:---:|:---:|
-| llama.cpp API 层 | 3 | ~20 | 低 |
-| llama.cpp Graph | 2 | ~30 | 中 |
-| llama.cpp 模型架构 | ~30 | ~150 | 中（机械重复） |
-| node-llama-cpp | 3 | ~30 | 低 |
-| autodev-codebase | 4 | ~30 | 低 |
-| **合计** | **~42** | **~260** | |
+| llama.cpp API 层 | 4 | +25 | 低 |
+| llama.cpp Graph | 1 | +5 | 低 |
+| llama.cpp 模型架构 | 107 | +1642 | 中（97 脚本 + 10 手动） |
+| llama.cpp 工具链 & 测试 | 4 | +80 | 低 |
+| node-llama-cpp TS 源码 | 5 | +40 | 低 |
+| node-llama-cpp vendor JS/DTS | 4 | +15 | 低（编译后文件直接修改） |
+| node-llama-cpp C++ addon 编译 | 3 | +200 | 高（两遍编译流程） |
+| autodev-codebase | 7 | +55 | 低 |
+| **合计** | **135** | **~2062** | |
 
 ### 风险点
 
@@ -332,6 +556,110 @@ if (embd_layer == n_layer - 1) {
 
 ### 后续工作
 
-- 中间层实验：在 MiniCPM-V-4.6 上用 `embedderPoolingLayer: 15, 20, 25, 30`（共 48 层）跑 eval 对比
-- 多层平均实验：如果单层效果不显著，测试"最后 N 层平均"的效果
-- 如果实验证实中间层有效，考虑在 llama.cpp 层面做"多层加权平均"的优化（单次 forward pass 内完成）
+- ✅ 全层扫描完成：24 层 embedding 余弦相似度分析，确认 L15-L18 为语义 sweet spot
+- ✅ Layer Sweep 检索评估完成：L22 为最佳提取层（MRR 提升 77%），L18-L22 为最佳区间
+
+### 2026-05-24：层 × 池化 交叉实验（MiniCPM-V-4.6, 3 pooling × 7 layers）
+
+测试 `last-token`、`mean`、`qr-attention` 三种池化方式在 L23-L8 七个层深度上的检索质量。
+
+**完整矩阵：**
+
+```
+                     ──────────── 池化方式 ────────────
+层    cos vs L23     last-token         mean              qr-attention
+──────────────────────────────────────────────────────────────────────────
+L23   1.00           8/12 MRR=0.04      11/12 MRR=0.27    11/12 MRR=0.28
+L22   0.41           6/12 MRR=0.12      9/12 MRR=0.55 ★   9/12 MRR=0.50
+L20   0.35           2/12 ❌            9/12 MRR=0.43     9/12 MRR=0.44
+L18   0.31           2/12 ❌            10/12 MRR=0.41    10/12 MRR=0.41
+L15   0.27           1/12 ❌            10/12 MRR=0.33    10/12 MRR=0.23
+L12   0.23           0/12 ☠             9/12 MRR=0.31     9/12 MRR=0.31
+L8    0.14           0/12 ☠             9/12 MRR=0.36     9/12 MRR=0.37
+```
+
+**★ L22-mean 是新王者：MRR=0.5486，中位数排名 #1**
+
+**关键发现：**
+
+1. **last-token 极度依赖层深度**：它只看最后一个 token 的 hidden state。离 lm_head 越远，这个 token 的语义方向越偏，L20 以下命中从 8 骤降到 2→0。
+
+2. **mean 出奇地强且对层不敏感**：L22-mean 的 MRR=0.55 是全场最高，且即使在 L8 仍然有 9/12 命中。mean pooling 的分布式特性（所有 token 平均）使其对单个 token 的层变换扭曲有天然容错。
+
+3. **qr-attention 只在最后层优于 mean**：qr-attention 依赖"最后 token 对前文的 cosine 相似度"作为注意力权重。这个信号只在接近 lm_head 对齐层时有意义——L23 时 qr (0.28) > mean (0.27)，L22 时就被 mean 反超 (0.55 > 0.50)。
+
+4. **qr-attention 在浅层的退化**：L8 时所有 token 的 hidden states 高度相似（都在编码表面特征），cosine 全部挤在 0.8 附近，softmax 拉不开差距，权重退化到 1/n → 等价于 mean pooling（L8: qr 0.37 ≈ mean 0.36）。
+
+**直觉模型：**
+
+| 池化 | 机制 | 层敏感度 | 最佳层 |
+|------|------|:--:|:--:|
+| last-token | 取一个点 | 极高 | L23 only |
+| qr-attention | 最后 token 加权 | 中 | L23 |
+| mean | 等权平均 | 低 | L22 |
+
+**结论：最佳组合 = 干净层 (L22) × 干净池化 (mean)**——两个维度都没有引入噪声。
+
+### 2026-05-24：多模型全层扫描对比（5 因果 LM + 1 嵌入模型）
+
+对 6 个不同大小和训练目标的模型运行完整的全层 cosine 扫描。
+
+**⚠️ 注意：早期扫描因层数检测 bug（`totalLayers - 1` 而非 `totalLayers - 2`）导致对大模型只扫了前 24 层，得出了"悬崖随模型大小衰减"的错误结论。以下为修正后数据。**
+
+**完整对比表：**
+
+| 模型 | 参数量 | 层数 | 训练目标 | L0 | L(N-2) | L(N-1) | Δ(悬崖) |
+|------|:--:|:--:|------|:--:|:--:|:--:|:--:|
+| MiniCPM-V-4.6 | 0.5B | 24 | 通用 VLM | 0.09 | 0.41 | 0.41 | **0.59** |
+| Qwen3.5-4B | 4B | 32 | 通用 LLM | 0.08 | 0.43 | 0.47 | **0.53** |
+| Qwen3.5-9B | 9B | 32 | 通用 LLM | 0.17 | 0.41 | 0.60 | **0.40** |
+| Qwen3.6-27B | 27B | 64 | 通用 LLM | 0.09 | 0.56 | 0.56 | **0.44** |
+| Qwen3.6-35B-A3B | 35B | 40 | MoE LLM | 0.17 | 0.38 | 0.38 | **0.62** |
+| Qwen3-Embedding | 0.6B | 28 | 对比学习 | 0.03 | 0.70 | 0.70 | **0.30** |
+
+**修正后的规律：**
+
+**1. 悬崖是因果 LM 的固有属性，与模型大小无关**
+
+```
+Δ(L(N-1)→L(N))：
+0.5B (24层)  ████████████████████████████████  0.59
+4B   (32层)  █████████████████████████████     0.53
+9B   (32层)  ████████████████████████           0.40
+27B  (64层)  ██████████████████████████         0.44
+35B  (40层)  ███████████████████████████████    0.62
+Emb  (28层)  ████████████████                   0.30  ← 嵌入模型悬崖小但仍存在
+```
+
+所有因果 LM 的悬崖在 0.40-0.62 之间，**与参数量无明显相关性**。0.5B 和 35B 的悬崖几乎一样大。悬崖来自 next-token prediction 训练目标，而非容量限制。
+
+**2. 嵌入模型也有悬崖，但更小**
+
+Qwen3-Embedding (0.6B, 对比学习) 的悬崖为 0.30，约是因果 LM 的一半。L26=0.70（vs MiniCPM 的 L22=0.41），说明嵌入模型的倒数第二层已经与最后层高度一致，悬崖更平缓。
+
+**3. L0 在 5 个因果 LM 中高度一致：0.08-0.17**
+
+与 MiniCPM L0=0.09 几乎相同——所有因果 LM 的浅层都与最终语义表示接近正交。只有 Qwen3-Embedding 的 L0=0.03 更低（嵌入模型不需要在浅层保留任何 next-token 结构）。
+
+**4. L(N-2) 的规律**
+
+| 模型类型 | L(N-2)→last cos | 含义 |
+|------|:--:|------|
+| 因果 LM <10B | 0.41-0.43 | 倒数第二层已远离最后层，必须跨过 |
+| 因果 LM >10B | 0.38-0.56 | 同样有显著差距 |
+| 嵌入模型 | 0.70 | 更接近，但仍有 0.30 悬崖 |
+
+**对中层提取的修正指导：**
+
+| 模型条件 | 是否需要中层提取 | 建议 |
+|------|:--:|------|
+| 因果 LM（任何大小） | 🔴 需要 | 至少 L(N-2)，悬崖大小不随模型增大而消失 |
+| 嵌入模型（任何大小） | 🟡 可选 | L(N-1) 足够，悬崖较小 |
+
+
+
+
+- `embedderPoolingLayer` 默认值建议从 `"last"` 改为具体层索引（如 22），或自动检测模型层数后取 92% 深度
+- 多层平均实验：测试"最后 N 层加权平均"（如 L20-L23 平均）是否能同时保持覆盖率和排序质量
+- 不同模型验证：在 Qwen3-Embedding / jina-v5 上重复 layer sweep 对比
+- `scripts/test-midlayer-embd.ts` 和 `src/examples/layer-sweep.sh` 可作为持续验证工具

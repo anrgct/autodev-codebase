@@ -44,7 +44,7 @@ function findModelPath(key: string): string | undefined {
   return undefined
 }
 
-const embedderModelPath = findModelPath("embedderLlamaCppModelPath")
+const embedderModelPath = findModelPath("embedderGgufPath")
 const rerankerModelPath = findModelPath("rerankerGgufPath")
 const llmModelPath = findModelPath("summarizerLlamaCppModelPath")
 // Skip cross-encoder test if model path is a semantic-highlight model (doesn't support ranking)

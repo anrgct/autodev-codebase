@@ -19,6 +19,20 @@ function formatValue(value: unknown): string {
 }
 
 /**
+ * JSON.stringify with keys sorted alphabetically for consistent, scannable output.
+ */
+function sortedStringify(obj: unknown, space?: number): string {
+  if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) {
+    return JSON.stringify(obj, null, space)
+  }
+  const sorted: Record<string, unknown> = {}
+  Object.keys(obj as Record<string, unknown>).sort().forEach(k => {
+    sorted[k] = (obj as Record<string, unknown>)[k]
+  })
+  return JSON.stringify(sorted, null, space)
+}
+
+/**
  * Print all configuration layers in detail
  */
 function printAllConfigLayers(layers: ConfigLayers): void {
@@ -27,13 +41,13 @@ function printAllConfigLayers(layers: ConfigLayers): void {
   console.log('\n=== Configuration Layers (Highest Priority First) ===\n')
 
   console.log('【1. Effective Configuration】(Final values after merging all layers)')
-  console.log(JSON.stringify(effective, null, 2))
+  console.log(sortedStringify(effective, 2))
   console.log()
 
   console.log('【2. Project Configuration】(Overrides global and default values)')
   if (project.config) {
     console.log(`File path: ${project.path}`)
-    console.log(JSON.stringify(project.config, null, 2))
+    console.log(sortedStringify(project.config, 2))
   } else {
     console.log('(Not configured)')
   }
@@ -42,14 +56,14 @@ function printAllConfigLayers(layers: ConfigLayers): void {
   console.log('【3. Global Configuration】(Overrides default values)')
   if (global.config) {
     console.log(`File path: ${global.path}`)
-    console.log(JSON.stringify(global.config, null, 2))
+    console.log(sortedStringify(global.config, 2))
   } else {
     console.log('(Not configured)')
   }
   console.log()
 
   console.log('【4. Default Values】(Built-in fallback values)')
-  console.log(JSON.stringify(defaultConfig, null, 2))
+  console.log(sortedStringify(defaultConfig, 2))
 }
 
 /**

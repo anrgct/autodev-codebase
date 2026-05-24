@@ -164,9 +164,9 @@ export class ConfigValidator {
         break
 
       case 'llamacpp':
-        if (!config.embedderLlamaCppModelPath) {
+        if (!config.embedderGgufPath) {
           issues.push({
-            path: 'embedderLlamaCppModelPath',
+            path: 'embedderGgufPath',
             code: 'required',
             message: 'LlamaCPP model path is required for LlamaCPP embedder'
           })
@@ -421,16 +421,57 @@ export class ConfigValidator {
       })
     }
 
+    // Validate embedderPoolingLayer type
+    if (config.embedderPoolingLayer !== undefined &&
+        config.embedderPoolingLayer !== "last" &&
+        typeof config.embedderPoolingLayer !== "number" &&
+        typeof config.embedderPoolingLayer !== "string") {
+      issues.push({
+        path: 'embedderPoolingLayer',
+        code: 'invalid_value',
+        message: `Invalid pooling layer: ${config.embedderPoolingLayer}. Must be "last", a number (positive/negative), or a fraction string like "2/3".`
+      })
+    } else if (typeof config.embedderPoolingLayer === "string" && config.embedderPoolingLayer !== "last") {
+      // Fraction format: "2/3", "3/4", etc.
+      if (!/^\d+\/\d+$/.test(config.embedderPoolingLayer)) {
+        issues.push({
+          path: 'embedderPoolingLayer',
+          code: 'invalid_value',
+          message: `Invalid pooling layer string: "${config.embedderPoolingLayer}". Use fraction format like "2/3" or "last".`
+        })
+      }
+    }
+
+    // Validate embedderQueryPoolingLayer type (same rules as embedderPoolingLayer)
+    if (config.embedderQueryPoolingLayer !== undefined &&
+        config.embedderQueryPoolingLayer !== "last" &&
+        typeof config.embedderQueryPoolingLayer !== "number" &&
+        typeof config.embedderQueryPoolingLayer !== "string") {
+      issues.push({
+        path: 'embedderQueryPoolingLayer',
+        code: 'invalid_value',
+        message: `Invalid query pooling layer: ${config.embedderQueryPoolingLayer}. Must be "last", a number, or a fraction string like "2/3".`
+      })
+    } else if (typeof config.embedderQueryPoolingLayer === "string" && config.embedderQueryPoolingLayer !== "last") {
+      if (!/^\d+\/\d+$/.test(config.embedderQueryPoolingLayer)) {
+        issues.push({
+          path: 'embedderQueryPoolingLayer',
+          code: 'invalid_value',
+          message: `Invalid query pooling layer string: "${config.embedderQueryPoolingLayer}". Use fraction format like "2/3" or "last".`
+        })
+      }
+    }
+
     // Validate embedderPoolingMode enum
     if (config.embedderPoolingMode !== undefined &&
         config.embedderPoolingMode !== "late-chunking" &&
         config.embedderPoolingMode !== "last-token" &&
         config.embedderPoolingMode !== "mean" &&
-        config.embedderPoolingMode !== "qr-attention") {
+        config.embedderPoolingMode !== "qr-weighted") {
       issues.push({
         path: 'embedderPoolingMode',
         code: 'invalid_value',
-        message: `Invalid pooling mode: ${config.embedderPoolingMode}. Must be "late-chunking", "last-token", "mean", or "qr-attention".`
+        message: `Invalid pooling mode: ${config.embedderPoolingMode}. Must be "late-chunking", "last-token", "mean", or "qr-weighted".`
       })
     }
 

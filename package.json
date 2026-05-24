@@ -12,7 +12,7 @@
     "vendor/llama-addon/binaries/**/*"
   ],
   "scripts": {
-    "dev": "npx tsx src/cli.ts --demo",
+    "dev": "npx tsx src/cli.ts",
     "build": "rollup -c rollup.config.cjs && chmod +x dist/cli.js",
     "build:llamacpp": "node vendor/llama-addon/build.mjs",
     "type-check": "npx tsc -p tsconfig.json --noEmit",
