@@ -90,4 +90,8 @@ export class LlamaCppEmbedder implements IEmbedder {
   get optimalBatchSize(): number {
     return 1
   }
+
+  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
+    return "last-token"
+  }
 }

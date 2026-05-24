@@ -7,16 +7,37 @@ import { EmbedderProvider } from "../interfaces/manager"
 export const QWEN_PREFILL_TEMPLATE = "Instruct: Given a codebase search query, retrieve relevant code snippets or document that answer the query.\nQuery: "
 
 /**
- * Applies query prefill for qwen3-embedding models.
- * Only applies to ollama provider with qwen3-embedding models.
+ * Query prefill template for general LLM-based embedders (llamacpp-llm).
+ * Adding a task instruction before the query helps the LLM's hidden states
+ * produce more retrieval-oriented representations.
+ */
+export const LLM_EMBEDDER_PREFILL_TEMPLATE = "Instruct: Given a code search query, retrieve relevant code snippets that answer the query.\nQuery: "
+
+/**
+ * Applies query prefill for embedding models that benefit from instruction prefixes.
+ * - qwen3-embedding models (ollama provider)
+ * - llamacpp-llm provider (general LLM-based embeddings)
  *
  * @param query The original search query
  * @param provider The embedder provider
  * @param modelId The model ID
  * @returns The query with prefill applied if applicable, otherwise the original query
  */
-export function applyQueryPrefill(query: string, provider: EmbedderProvider, modelId?: string): string {
-  // Only apply to ollama provider with qwen3-embedding models
+export function applyQueryPrefill(
+  query: string,
+  provider: EmbedderProvider,
+  modelId?: string,
+  enableLlmPrefix?: boolean,
+): string {
+  // llamacpp-llm: apply instruction prefill only when explicitly enabled
+  if (provider === "llamacpp-llm" && enableLlmPrefix) {
+    if (query.startsWith(LLM_EMBEDDER_PREFILL_TEMPLATE)) {
+      return query
+    }
+    return LLM_EMBEDDER_PREFILL_TEMPLATE + query
+  }
+
+  // ollama + qwen3-embedding models
   if (provider !== "ollama" || !modelId) {
     return query
   }

@@ -325,13 +325,16 @@ export class FileWatcher implements ICodeFileWatcher {
       if (blocksToUpsert.length > 0) {
         // Derive document prefix from embedder for models that need it (e.g., "Document: " for jina retrieval)
         const documentPrefix: string | undefined = resolveDocumentPrefix(this.embedder)
+        const isLateChunking = this.embedder?.poolingMode === "late-chunking"
 
         const options: BatchProcessorOptions<CodeBlock> = {
           embedder: this.embedder,
           vectorStore: this.vectorStore,
           cacheManager: this.cacheManager,
 
-          itemToText: (block) => generateBlockEmbeddingText(block, this.workspacePath, documentPrefix),
+          itemToText: isLateChunking
+            ? (block) => block.content
+            : (block) => generateBlockEmbeddingText(block, this.workspacePath, documentPrefix),
           itemToFilePath: (block) => block.file_path,
           getFileHash: (block) => {
             // Find the corresponding file info for this block
@@ -395,9 +398,42 @@ export class FileWatcher implements ICodeFileWatcher {
           }
         }
 
-        const result = await this.batchProcessor.processBatch(blocksToUpsert, options)
-        batchResults.push(...result.processedFiles)
-        processedBlocksInBatch.value += blocksToUpsert.length
+        if (isLateChunking) {
+          // Late-chunking: process each file's blocks individually
+          // Group blocksToUpsert by file_path
+          const blocksByFile = new Map<string, CodeBlock[]>()
+          for (const block of blocksToUpsert) {
+            const existing = blocksByFile.get(block.file_path)
+            if (existing) {
+              existing.push(block)
+            } else {
+              blocksByFile.set(block.file_path, [block])
+            }
+          }
+
+          for (const [filePath, fileBlocks] of blocksByFile) {
+            // Update getFilesToDelete to only include this file
+            const singleFileOptions: BatchProcessorOptions<CodeBlock> = {
+              ...options,
+              getFilesToDelete: () => {
+                const fileInfo = fileInfoMap.get(filePath)
+                if (fileInfo && !fileInfo.isNew) {
+                  return [this.workspace.getRelativePath(filePath)]
+                }
+                return []
+              },
+            }
+
+            const result = await this.batchProcessor.processBatch(fileBlocks, singleFileOptions)
+            batchResults.push(...result.processedFiles)
+            processedBlocksInBatch.value += fileBlocks.length
+          }
+        } else {
+          // Last-token: process all blocks together
+          const result = await this.batchProcessor.processBatch(blocksToUpsert, options)
+          batchResults.push(...result.processedFiles)
+          processedBlocksInBatch.value += blocksToUpsert.length
+        }
       }
     } else if (this.vectorStore && filesToDelete.length > 0) {
       await this.handleFileDeletions(

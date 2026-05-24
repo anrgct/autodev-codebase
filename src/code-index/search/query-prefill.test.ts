@@ -1,6 +1,28 @@
-import { applyQueryPrefill, QWEN_PREFILL_TEMPLATE } from "./query-prefill"
+import { applyQueryPrefill, QWEN_PREFILL_TEMPLATE, LLM_EMBEDDER_PREFILL_TEMPLATE } from "./query-prefill"
 
 describe("applyQueryPrefill", () => {
+  describe("llamacpp-llm provider", () => {
+    test("should apply instruction prefill when enableLlmPrefix=true", () => {
+      const query = "find authentication logic"
+      const result = applyQueryPrefill(query, "llamacpp-llm", undefined, true)
+
+      expect(result).toBe(LLM_EMBEDDER_PREFILL_TEMPLATE + query)
+    })
+
+    test("should NOT apply prefill when enableLlmPrefix=false (default)", () => {
+      const query = "find authentication logic"
+      const result = applyQueryPrefill(query, "llamacpp-llm", undefined, false)
+
+      expect(result).toBe(query)
+    })
+
+    test("should prevent duplicate prefill for llamacpp-llm", () => {
+      const prefillQuery = LLM_EMBEDDER_PREFILL_TEMPLATE + "existing query"
+      const result = applyQueryPrefill(prefillQuery, "llamacpp-llm", undefined, true)
+
+      expect(result).toBe(prefillQuery)
+    })
+  })
   describe("qwen3-embedding models with ollama provider", () => {
     test("should apply prefill to qwen3-embedding:0.6b model", () => {
       const query = "test function"

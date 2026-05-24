@@ -73,3 +73,4 @@ dev-debug.log
 command-history.sh
 .rooignore
 .worktrees
+experiment-results/

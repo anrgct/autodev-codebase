@@ -86,4 +86,8 @@ export class GeminiEmbedder implements IEmbedder {
         // Return recommended batch size for Gemini
         return 40
     }
+
+    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
+        return "last-token"
+    }
 }

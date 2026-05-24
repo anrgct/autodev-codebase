@@ -10,6 +10,7 @@ export type EmbedderProvider =
   | "vercel-ai-gateway"
   | "openrouter"
   | "llamacpp"
+  | "llamacpp-llm"
 
 /**
  * Ollama embedder configuration
@@ -150,8 +151,23 @@ export interface CodeIndexConfig {
   embedderOpenRouterBatchSize?: number
 
   // Embedder - LlamaCPP 特定参数
-  embedderLlamaCppModelPath?: string
+  embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
+
+  // Embedder - LlamaCPP LLM（通用 LLM 作为 embedder）
+  embedderGgufLlmPath?: string
+  embedderConcurrency?: number
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  embedderPoolingLayer?: "last" | number | string
+  // 查询端独立层配置（不设时回退到 embedderPoolingLayer）。
+  // 实验发现非对称层（index L22 + query L23）MRR 比对称层高 48%（0.55 vs 0.37）
+  embedderQueryPoolingLayer?: "last" | number | string
+  embedderLlmInstructionPrefix?: boolean
+  // llamacpp-llm 指令前缀开关：为 query 添加 "Instruct: ..." 前缀以引导 LLM hidden states
+  embedderUseChatTemplate?: boolean
+  // llamacpp-llm 聊天模板开关：将文本包装为完整 MiniCPM ChatML 格式
+  // (<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n) 再送入 getEmbeddingsForTokens，
+  // 让模型在 instruct-tuned 的语义空间下提取 hidden states
 
   // Vector Store
   qdrantUrl?: string
@@ -236,8 +252,15 @@ export type PreviousConfigSnapshot = {
   embedderVercelAiGatewayApiKey?: string
   embedderOpenRouterApiKey?: string
   embedderOpenRouterBatchSize?: number
-  embedderLlamaCppModelPath?: string
+  embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
+  embedderGgufLlmPath?: string
+  embedderConcurrency?: number
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  embedderPoolingLayer?: "last" | number | string
+  embedderQueryPoolingLayer?: "last" | number | string
+  embedderLlmInstructionPrefix?: boolean
+  embedderUseChatTemplate?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number
@@ -329,8 +352,15 @@ export interface ConfigSnapshot {
   embedderVercelAiGatewayApiKey?: string
   embedderOpenRouterApiKey?: string
   embedderOpenRouterBatchSize?: number
-  embedderLlamaCppModelPath?: string
+  embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
+  embedderGgufLlmPath?: string
+  embedderConcurrency?: number
+  embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
+  embedderPoolingLayer?: "last" | number | string
+  embedderQueryPoolingLayer?: "last" | number | string
+  embedderLlmInstructionPrefix?: boolean
+  embedderUseChatTemplate?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number

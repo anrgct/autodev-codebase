@@ -1,0 +1,214 @@
+import { Token } from "../types.js";
+import { LlamaNuma } from "./types.js";
+export type BindingModule = {
+    AddonModel: {
+        new (modelPath: string, params: {
+            addonExports?: BindingModule;
+            gpuLayers?: number;
+            vocabOnly?: boolean;
+            useMmap?: boolean;
+            useDirectIo?: boolean;
+            useMlock?: boolean;
+            checkTensors?: boolean;
+            onLoadProgress?(loadPercentage: number): void;
+            hasLoadAbortSignal?: boolean;
+            overridesList?: Array<[key: string, value: number | bigint | boolean | string, type: 0 | 1 | undefined]>;
+        }): AddonModel;
+    };
+    AddonModelLora: {
+        new (model: AddonModel, filePath: string): AddonModelLora;
+    };
+    AddonContext: {
+        new (model: AddonModel, params: {
+            contextSize?: number;
+            batchSize?: number;
+            sequences?: number;
+            flashAttention?: boolean;
+            logitsAll?: boolean;
+            embeddings?: boolean;
+            ranking?: boolean;
+            embdLayer?: number;
+            threads?: number;
+            performanceTracking?: boolean;
+            kvCacheKeyType?: number;
+            kvCacheValueType?: number;
+            swaFullCache?: boolean;
+        }): AddonContext;
+    };
+    AddonContextSequenceCheckpoint: {
+        new (): AddonContextSequenceCheckpoint;
+    };
+    AddonGrammar: {
+        new (grammarPath: string, params?: {
+            addonExports?: BindingModule;
+            rootRuleName?: string;
+        }): AddonGrammar;
+    };
+    AddonGrammarEvaluationState: {
+        new (model: AddonModel, grammar: AddonGrammar): AddonGrammarEvaluationState;
+        new (existingState: AddonGrammarEvaluationState): AddonGrammarEvaluationState;
+    };
+    AddonSampler: {
+        new (model: AddonModel): AddonSampler;
+        acceptGrammarEvaluationStateToken(grammarEvaluationState: AddonGrammarEvaluationState, token: Token): void;
+        canBeNextTokenForGrammarEvaluationState(grammarEvaluationState: AddonGrammarEvaluationState, token: Token): boolean;
+    };
+    markLoaded(): boolean;
+    systemInfo(): string;
+    getSupportsGpuOffloading(): boolean;
+    getSupportsMmap(): boolean;
+    getGpuSupportsMmap(): boolean;
+    getSupportsMlock(): boolean;
+    getMathCores(): number;
+    getBlockSizeForGgmlType(ggmlType: number): number | undefined;
+    getTypeSizeForGgmlType(ggmlType: number): number | undefined;
+    getGgmlGraphOverheadCustom(size: number, grads: boolean): number;
+    getConsts(): {
+        ggmlMaxDims: number;
+        ggmlTypeF16Size: number;
+        ggmlTypeF32Size: number;
+        ggmlTensorOverhead: number;
+        llamaPosSize: number;
+        llamaSeqIdSize: number;
+    };
+    setLogger(logger: (level: number, message: string) => void): void;
+    setLoggerLogLevel(level: number): void;
+    getGpuVramInfo(): {
+        total: number;
+        used: number;
+        unifiedSize: number;
+    };
+    getGpuDeviceInfo(): {
+        deviceNames: string[];
+    };
+    getGpuType(): "cuda" | "vulkan" | "metal" | false | undefined;
+    ensureGpuDeviceIsSupported(): void;
+    getSwapInfo(): {
+        total: number;
+        maxSize: number;
+        free: number;
+    };
+    getMemoryInfo(): {
+        total: number;
+    };
+    init(): Promise<void>;
+    setNuma(numa?: LlamaNuma): void;
+    loadBackends(forceLoadLibrariesSearchPath?: string): void;
+    dispose(): Promise<void>;
+};
+export type AddonModel = {
+    init(): Promise<boolean>;
+    loadLora(lora: AddonModelLora): Promise<void>;
+    abortActiveModelLoad(): void;
+    dispose(): Promise<void>;
+    tokenize(text: string, specialTokens: boolean): Uint32Array;
+    detokenize(tokens: Uint32Array, specialTokens?: boolean): string;
+    getTrainContextSize(): number;
+    getEmbeddingVectorSize(): number;
+    getTotalSize(): number;
+    getTotalParameters(): number;
+    getModelDescription(): ModelTypeDescription;
+    tokenBos(): Token;
+    tokenEos(): Token;
+    tokenNl(): Token;
+    prefixToken(): Token;
+    middleToken(): Token;
+    suffixToken(): Token;
+    eotToken(): Token;
+    sepToken(): Token;
+    getTokenString(token: number): string;
+    getTokenAttributes(token: Token): number;
+    isEogToken(token: Token): boolean;
+    getVocabularyType(): number;
+    shouldPrependBosToken(): boolean;
+    shouldAppendEosToken(): boolean;
+    getModelSize(): number;
+};
+export type AddonContext = {
+    init(): Promise<boolean>;
+    dispose(): Promise<void>;
+    getContextSize(): number;
+    initBatch(size: number): void;
+    addToBatch(sequenceId: number, firstTokenSequenceIndex: number, tokens: Uint32Array, logitIndexes: Uint32Array): Uint32Array;
+    decodeBatch(): Promise<void>;
+    sampleToken(batchLogitIndex: BatchLogitIndex, sampler: AddonSampler): Promise<Token | -1>;
+    sampleToken(batchLogitIndex: BatchLogitIndex, sampler: AddonSampler, probabilities: boolean, confidence?: boolean): Promise<[token: Token | -1, probabilities: (Token | number)[] | undefined, confidence: number | undefined]>;
+    disposeSequence(sequenceId: number): void;
+    removeTokenCellsFromSequence(sequenceId: number, startPos: number, endPos: number): boolean;
+    shiftSequenceTokenCells(sequenceId: number, startPos: number, endPos: number, shiftDelta: number): void;
+    getSequenceKvCacheMinPosition(sequenceId: number): number;
+    getSequenceKvCacheMaxPosition(sequenceId: number): number;
+    getEmbedding(inputTokensLength: number, maxVectorSize?: number): Float64Array;
+    getStateSize(): number;
+    getThreads(): number;
+    setThreads(threads: number): void;
+    printTimings(): void;
+    ensureDraftContextIsCompatibleForSpeculative(draftContext: AddonContext): void;
+    saveSequenceStateToFile(filePath: string, sequenceId: number, tokens: Uint32Array): Promise<number>;
+    loadSequenceStateFromFile(filePath: string, sequenceId: number, maxContextSize: number): Promise<Uint32Array>;
+    setLoras(loras: AddonModelLora[], scales: number[]): void;
+    restoreCheckpoint(checkpoint: AddonContextSequenceCheckpoint, maxPosIndex: number): Promise<boolean>;
+    /** QRRanker: get collected kq_soft_max attention tensor data for a layer (0-indexed). Returns Float32Array or undefined. */
+    getKqSoftMax(layer: number): Float32Array | undefined;
+    /** QRRanker: get shape metadata of collected kq_soft_max tensors. */
+    getKqSoftMaxShape(): { nKv: number; nTokens: number; nHead: number; nLayers: number; layers: number[] };
+    /** QRRanker: enable/disable kq_soft_max collection at runtime. */
+    setCollectKqSoftMax(val: boolean): void;
+    /** QRRanker: set query token range for slice-based kq_soft_max collection.
+     * Must be called before decode to avoid V8 ArrayBuffer 4GB limit on large inputs.
+     * When set, only query token rows are copied (not the full nTokens × nKv × nHead tensor). */
+    setKqSoftMaxQueryRange(queryStart: number, queryEnd: number): void;
+};
+export type AddonContextSequenceCheckpoint = {
+    init(context: AddonContext, sequenceId: number): Promise<void>;
+    dispose(): void;
+    get size(): number;
+    get minPos(): number;
+    get maxPos(): number;
+};
+export type BatchLogitIndex = number & {
+    readonly __batchLogitIndex: never;
+};
+export type AddonGrammar = {
+    isTextCompatible(testText: string): boolean;
+};
+export type AddonGrammarEvaluationState = "AddonGrammarEvaluationState" & {
+    readonly __brand: never;
+};
+export type AddonSampler = {
+    dispose(): void;
+    applyConfig(config: {
+        temperature?: number;
+        minP?: number;
+        topK?: number;
+        topP?: number;
+        seed?: number;
+        xtcProbability?: number;
+        xtcThreshold?: number;
+        repeatPenalty?: number;
+        repeatPenaltyMaxTokens?: number;
+        repeatPenaltyTokens?: Uint32Array;
+        repeatPenaltyPresencePenalty?: number;
+        repeatPenaltyFrequencyPenalty?: number;
+        dryRepeatPenaltyStrength?: number;
+        dryRepeatPenaltyBase?: number;
+        dryRepeatPenaltyAllowedLength?: number;
+        dryRepeatPenaltyLastTokens?: number;
+        dryRepeatPenaltySequenceBreakers?: false | string[];
+        grammarEvaluationState?: AddonGrammarEvaluationState;
+        tokenBiasKeys?: Uint32Array;
+        tokenBiasValues?: Float32Array;
+    }): void;
+};
+export type AddonModelLora = {
+    usages: number;
+    readonly filePath: string;
+    readonly disposed: boolean;
+    dispose(): Promise<void>;
+};
+export type ModelTypeDescription = `${AddonModelArchName} ${AddonModelTypeName} ${AddonModelFileTypeName}`;
+export type AddonModelArchName = "unknown" | "llama" | "falcon" | "gpt2" | "gptj" | "gptneox" | "mpt" | "baichuan" | "starcoder" | "persimmon" | "refact" | "bloom" | "stablelm";
+export type AddonModelTypeName = "1B" | "3B" | "7B" | "8B" | "13B" | "15B" | "30B" | "34B" | "40B" | "65B" | "70B" | "?B";
+export type AddonModelFileTypeName = _AddonModelFileTypeName | `${_AddonModelFileTypeName} (guessed)`;
+type _AddonModelFileTypeName = "all F32" | "mostly F16" | "mostly Q4_0" | "mostly Q4_1" | "mostly Q4_1, some F16" | "mostly Q5_0" | "mostly Q5_1" | "mostly Q8_0" | "mostly Q2_K" | "mostly Q3_K - Small" | "mostly Q3_K - Medium" | "mostly Q3_K - Large" | "mostly Q4_K - Small" | "mostly Q4_K - Medium" | "mostly Q5_K - Small" | "mostly Q5_K - Medium" | "mostly Q6_K" | "unknown, may not work";
+export {};

@@ -94,4 +94,8 @@ export class VercelAiGatewayEmbedder implements IEmbedder {
         // Delegate to the underlying OpenAI-compatible embedder's optimal batch size
         return this.openAICompatibleEmbedder.optimalBatchSize
     }
+
+    get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted" {
+        return "last-token"
+    }
 }

@@ -422,6 +422,10 @@ AddonContext::AddonContext(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Ad
             context_params.embeddings = options.Get("embeddings").As<Napi::Boolean>().Value();
         }
 
+        if (options.Has("embdLayer")) {
+            context_params.embd_layer = options.Get("embdLayer").As<Napi::Number>().Int32Value();
+        }
+
         if (options.Has("ranking") && options.Get("ranking").As<Napi::Boolean>().Value()) {
             context_params.pooling_type = LLAMA_POOLING_TYPE_RANK;
         }

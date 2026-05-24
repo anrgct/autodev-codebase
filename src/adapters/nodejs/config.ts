@@ -74,6 +74,13 @@ export class NodeConfigProvider implements IConfigProvider {
         apiKey: config.embedderJinaApiKey || "",
         baseUrl: config.embedderJinaBaseUrl || "https://api.jina.ai/v1"
       }
+    } else if (config.embedderProvider === "llamacpp" || config.embedderProvider === "llamacpp-llm") {
+      return {
+        provider: "ollama",
+        model: "llamacpp",
+        dimension: config.embedderModelDimension || 0,
+        baseUrl: "",
+      }
     }
 
     // Fallback
@@ -290,6 +297,14 @@ export class NodeConfigProvider implements IConfigProvider {
       if (!this.config.embedderJinaApiKey || !this.config.embedderModelId) {
         return false
       }
+    } else if (embedderProvider === "llamacpp") {
+      if (!this.config.embedderGgufPath) {
+        return false
+      }
+    } else if (embedderProvider === "llamacpp-llm") {
+      if (!this.config.embedderGgufLlmPath) {
+        return false
+      }
     }
 
     // Check Qdrant configuration
@@ -359,6 +374,16 @@ export class NodeConfigProvider implements IConfigProvider {
         }
         if (!config.embedderModelDimension || config.embedderModelDimension <= 0) {
           errors.push('Jina model dimension is required and must be positive')
+        }
+        break
+      case "llamacpp":
+        if (!config.embedderGgufPath) {
+          errors.push('LlamaCPP model path is required')
+        }
+        break
+      case "llamacpp-llm":
+        if (!config.embedderGgufLlmPath) {
+          errors.push('LLM GGUF model path is required for llamacpp-llm embedder')
         }
         break
     }

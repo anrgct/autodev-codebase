@@ -23,6 +23,21 @@ export interface IEmbedder {
    * Gets the optimal batch size for this embedder
    */
   get optimalBatchSize(): number
+
+  /**
+   * Gets the pooling mode for this embedder.
+   * "late-chunking" - concatenate all chunks from one file, one forward pass, per-chunk mean pooling
+   * "mean" - each chunk individually, mean pooling across all tokens
+   * "qr-weighted" - each chunk individually, softmax attention-weighted mean pooling
+   * "last-token" - each chunk individually, last-token pooling (default for non-LLM embedders)
+   */
+  get poolingMode(): "late-chunking" | "last-token" | "mean" | "qr-weighted"
+
+  /**
+   * Whether to apply instruction prefix on both query and document sides.
+   * Default false. Only effective for LLM-based embedders (llamacpp-llm).
+   */
+  enableLlmPrefix?: boolean
 }
 
 export interface EmbeddingResponse {
@@ -43,6 +58,7 @@ export type AvailableEmbedders =
   | "vercel-ai-gateway"
   | "openrouter"
   | "llamacpp"
+  | "llamacpp-llm"
 
 export interface EmbedderInfo {
   name: AvailableEmbedders

@@ -8,13 +8,15 @@
 import type { CodeIndexConfig } from '../../code-index/interfaces/config'
 
 type ConfigKey = keyof CodeIndexConfig
-type ConfigValueType = 'boolean' | 'integer' | 'number' | 'string' | 'enum'
+type ConfigValueType = 'boolean' | 'integer' | 'number' | 'string' | 'enum' | 'union'
 
 export interface ConfigKeyMetadata {
   /** Type of the configuration value */
   type: ConfigValueType
   /** Valid enum values (for enum type) */
   enumValues?: readonly string[]
+  /** Union member types (for union type) */
+  unionTypes?: readonly string[]
   /** Minimum value (for integer/number types) */
   minValue?: number
   /** Maximum value (for integer/number types) */
@@ -81,8 +83,29 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   embedderOpenRouterBatchSize: { type: 'integer', minValue: 1, description: 'Batch size for OpenRouter embeddings' },
 
   // Embedder - LlamaCPP
-  embedderLlamaCppModelPath: { type: 'string', description: 'Path to LlamaCPP GGUF model file for embeddings' },
+  embedderGgufPath: { type: 'string', description: 'Path to LlamaCPP GGUF model file for embeddings' },
   embedderLlamaCppGpuLayers: { type: 'integer', minValue: 0, description: 'Number of GPU layers for LlamaCPP (0 for CPU only)' },
+
+  // Embedder - LlamaCPP LLM
+  embedderGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model file for LLM-based embeddings (llamacpp-llm provider)' },
+  embedderConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent embedding requests for llamacpp-llm embedder' },
+  embedderPoolingMode: {
+    type: 'enum',
+    enumValues: ['late-chunking', 'last-token', 'mean', 'qr-weighted'] as const,
+    description: 'Pooling mode for LLM embedder: late-chunking (file-level), last-token, mean, or qr-weighted (attention-weighted)'
+  },
+  embedderPoolingLayer: {
+    type: 'union',
+    unionTypes: ['string', 'integer'] as const,
+    description: 'Target transformer layer for embedding extraction: "last" (default) or 0-based layer index (e.g., 15 for mid-layer)'
+  },
+  embedderQueryPoolingLayer: {
+    type: 'union',
+    unionTypes: ['string', 'integer'] as const,
+    description: 'Target transformer layer for QUERY embedding (falls back to embedderPoolingLayer if not set). Asymmetric layers (e.g., index=22, query=23) can improve MRR by 48%'
+  },
+  embedderLlmInstructionPrefix: { type: 'boolean', description: 'Enable instruction prefix for llamacpp-llm queries (may not help all models)' },
+  embedderUseChatTemplate: { type: 'boolean', description: 'Wrap text in MiniCPM ChatML format (<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n) before embedding extraction. Uses the model with its instruct-tuned distribution.' },
 
   // Vector Store
   qdrantUrl: { type: 'string', description: 'Qdrant server URL' },
