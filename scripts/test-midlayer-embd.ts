@@ -189,7 +189,7 @@ async function main() {
   }
 
   // 4. 输出：ASCII 柱状图
-  const maxSim = Math.max(...simToLast.map((s) => s.sim));
+  const maxSim = Math.max(...simToLast.map((s) => s.sim)) || 1; // avoid division by zero
   const chartWidth = 60;
 
   console.log("┌─────────────────────────────────────────────────────────────────────────────┐");
@@ -197,7 +197,7 @@ async function main() {
   console.log("├──────┬──────────────────────────────────────────────────────────────┬───────┤");
 
   for (const { layer, sim } of simToLast) {
-    const barLen = Math.round((sim / maxSim) * chartWidth);
+    const barLen = Math.max(0, Math.round((sim / maxSim) * chartWidth));
     const bar = "█".repeat(barLen);
     const marker = layer === lastLayer ? " ◀ last" : "";
     const pct = Math.round((layer / lastLayer) * 100);

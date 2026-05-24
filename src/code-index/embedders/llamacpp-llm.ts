@@ -59,7 +59,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   /**
    * Resolve the pooling layer spec to an actual layer index,
    * using model metadata (total layer count) for fractions and negative indices.
-   * 
+   *
    * Returns -1 for "last" layer (llama.cpp convention: extract final norm output).
    */
   private _resolveLayer(model: LlamaModel): number {
@@ -69,13 +69,12 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     let resolved: number
 
     if (raw === "last") {
-      resolved = -1  // llama.cpp embdLayer convention for last layer
+      resolved = model.fileInsights.totalLayers - 1 - 1  // last transformer layer
     } else if (typeof raw === "number") {
       if (raw >= 0) {
         resolved = raw  // positive: direct layer index
       } else {
-        // negative: relative from end, e.g. -1 = last, -2 = second-to-last
-        // totalLayers includes output/embedding layers, so subtract 1 to get transformer count
+        // negative: relative from end, -1 = last transformer, -2 = second-to-last
         const transformerLayers = model.fileInsights.totalLayers - 1
         resolved = Math.max(transformerLayers + raw, 0)
       }
@@ -98,6 +97,10 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     }
 
     this._resolvedPoolingLayer = resolved
+    const label = resolved === -1
+      ? `layer ${model.fileInsights.totalLayers - 1} (last, final output norm)`
+      : `layer index ${resolved} (第${resolved + 1}层, of ${model.fileInsights.totalLayers - 1} transformer layers)`
+    this.logger?.info(`[LlamaCppLlmEmbedder] Pooling layer: raw=${JSON.stringify(raw)} → ${label}`)
     return resolved
   }
 
