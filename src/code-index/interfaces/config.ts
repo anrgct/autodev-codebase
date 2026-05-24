@@ -164,6 +164,10 @@ export interface CodeIndexConfig {
   embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
   // llamacpp-llm 指令前缀开关：为 query 添加 "Instruct: ..." 前缀以引导 LLM hidden states
+  embedderUseChatTemplate?: boolean
+  // llamacpp-llm 聊天模板开关：将文本包装为完整 MiniCPM ChatML 格式
+  // (<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n) 再送入 getEmbeddingsForTokens，
+  // 让模型在 instruct-tuned 的语义空间下提取 hidden states
 
   // Vector Store
   qdrantUrl?: string
@@ -256,6 +260,7 @@ export type PreviousConfigSnapshot = {
   embedderPoolingLayer?: "last" | number | string
   embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
+  embedderUseChatTemplate?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number
@@ -355,6 +360,7 @@ export interface ConfigSnapshot {
   embedderPoolingLayer?: "last" | number | string
   embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
+  embedderUseChatTemplate?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorSearchMinScore?: number

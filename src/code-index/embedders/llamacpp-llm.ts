@@ -33,6 +33,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   private readonly _poolingMode: "late-chunking" | "last-token" | "mean" | "qr-weighted"
   private readonly _rawPoolingLayer: "last" | number | string  // raw spec: "last", 22, -1, -2, "2/3"
   private readonly _enableLlmPrefix: boolean
+  private readonly _useChatTemplate: boolean
   private readonly logger?: LoggerLike
   private _model: LlamaModel | null = null
   private _loadingPromise: Promise<void> | null = null
@@ -46,6 +47,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     poolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted",
     enableLlmPrefix?: boolean,
     poolingLayer?: "last" | number | string,
+    useChatTemplate?: boolean,
   ) {
     this.modelPath = modelPath
     this.gpuLayers = gpuLayers
@@ -53,6 +55,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     this._poolingMode = poolingMode ?? "mean"
     this._rawPoolingLayer = poolingLayer ?? "last"
     this._enableLlmPrefix = enableLlmPrefix ?? false
+    this._useChatTemplate = useChatTemplate ?? false
     this.logger = logger
   }
 
@@ -133,9 +136,14 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     await this._ensureModel()
     const model = this._model!
 
-    if (this._poolingMode === "late-chunking" && texts.length > 1) {
+    // 聊天模板包装：将每段文本包装为 MiniCPM ChatML 用户消息格式
+    const wrappedTexts = this._useChatTemplate
+      ? texts.map((t) => this._wrapInChatTemplate(t))
+      : texts
+
+    if (this._poolingMode === "late-chunking" && wrappedTexts.length > 1) {
       try {
-        return await this._lateChunkingCreateEmbeddings(model, texts)
+        return await this._lateChunkingCreateEmbeddings(model, wrappedTexts)
       } catch (error) {
         this.logger?.warn(
           `[LlamaCppLlmEmbedder] Late chunking failed, falling back to ${this._poolingMode}: ${error}`,
@@ -145,11 +153,11 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
 
     if (this._poolingMode === "mean" || this._poolingMode === "qr-weighted") {
       return this._poolingMode === "qr-weighted"
-        ? this._qrAttentionCreateEmbeddings(model, texts)
-        : this._meanPoolingCreateEmbeddings(model, texts)
+        ? this._qrAttentionCreateEmbeddings(model, wrappedTexts)
+        : this._meanPoolingCreateEmbeddings(model, wrappedTexts)
     }
 
-    return this._lastTokenCreateEmbeddings(model, texts)
+    return this._lastTokenCreateEmbeddings(model, wrappedTexts)
   }
 
   /**
@@ -699,5 +707,24 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   /** 指令前缀开关：query 和 document 两端联动 */
   get enableLlmPrefix(): boolean {
     return this._enableLlmPrefix
+  }
+
+  /** 聊天模板开关：将文本包装为 MiniCPM ChatML 格式 */
+  get useChatTemplate(): boolean {
+    return this._useChatTemplate
+  }
+
+  /**
+   * 将文本包装为 MiniCPM 完整 ChatML 对话格式。
+   * 模板：<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n
+   * 完整的 instruct 格式让模型在训练分布下提取 hidden states。
+   */
+  private _wrapInChatTemplate(text: string): string {
+    const wrapped = `<|im_start|>user\n${text}<|im_end|>\n<|im_start|>assistant\n`
+    if (!(this as any)._chatTemplateLogged) {
+      (this as any)._chatTemplateLogged = true
+      this.logger?.debug(`[LlamaCppLlmEmbedder] Chat template wrap (first 300 chars):\n${wrapped.slice(0, 300)}`)
+    }
+    return wrapped
   }
 }

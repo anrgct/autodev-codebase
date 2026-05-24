@@ -105,6 +105,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
     description: 'Target transformer layer for QUERY embedding (falls back to embedderPoolingLayer if not set). Asymmetric layers (e.g., index=22, query=23) can improve MRR by 48%'
   },
   embedderLlmInstructionPrefix: { type: 'boolean', description: 'Enable instruction prefix for llamacpp-llm queries (may not help all models)' },
+  embedderUseChatTemplate: { type: 'boolean', description: 'Wrap text in MiniCPM ChatML format (<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n) before embedding extraction. Uses the model with its instruct-tuned distribution.' },
 
   // Vector Store
   qdrantUrl: { type: 'string', description: 'Qdrant server URL' },

@@ -168,6 +168,7 @@ export class CodeIndexServiceFactory {
         config.embedderPoolingMode,
         config.embedderLlmInstructionPrefix,
         this._resolveIndexLayer(config),
+        config.embedderUseChatTemplate,
       )
     }
 
@@ -230,6 +231,7 @@ export class CodeIndexServiceFactory {
       config.embedderPoolingMode,
       config.embedderLlmInstructionPrefix,
       this._resolveQueryLayer(config),
+      config.embedderUseChatTemplate,
     )
   }
 

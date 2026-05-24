@@ -475,6 +475,26 @@ export class ConfigValidator {
       })
     }
 
+    // Validate embedderLlmInstructionPrefix type
+    if (config.embedderLlmInstructionPrefix !== undefined &&
+        typeof config.embedderLlmInstructionPrefix !== "boolean") {
+      issues.push({
+        path: 'embedderLlmInstructionPrefix',
+        code: 'invalid_type',
+        message: `embedderLlmInstructionPrefix must be a boolean, got: ${typeof config.embedderLlmInstructionPrefix}`
+      })
+    }
+
+    // Validate embedderUseChatTemplate type
+    if (config.embedderUseChatTemplate !== undefined &&
+        typeof config.embedderUseChatTemplate !== "boolean") {
+      issues.push({
+        path: 'embedderUseChatTemplate',
+        code: 'invalid_type',
+        message: `embedderUseChatTemplate must be a boolean, got: ${typeof config.embedderUseChatTemplate}`
+      })
+    }
+
     // Validate embedder batch sizes
     if (config.embedderOllamaBatchSize !== undefined && config.embedderOllamaBatchSize <= 0) {
       issues.push({
