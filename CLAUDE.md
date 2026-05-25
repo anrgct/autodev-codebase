@@ -169,6 +169,13 @@ codebase config --set key=value --global        # 设置全局配置
 - **项目配置**：`./autodev-config.json`
 - **全局配置**：`~/.autodev-cache/autodev-config.json`
 
+## 其他
+- 项目测试运行不需要build，直接npx tsx xxx.ts运行
+- 可以搜索docs目录了解项目wiki和之前的任务经验
+- 项目配置在autodev-config.json中，可以通过codebase config --get/--set命令进行查看和修改，demo目录有单独的autodev-config.json，需要用codebase config --path=demo来指定，项目根目录的autodev-config.json、~/.autodev-cache/autodev-config.json、demo/autodev-config.json是独立的
+- 测试脚本写在scripts/evidence目录，用YYMMDD-开头的文件名命名
+- 重命名文件时使用git mv命令
+
 <skills_system priority="1">
 
 ## Available Skills

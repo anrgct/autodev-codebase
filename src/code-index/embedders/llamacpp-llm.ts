@@ -38,6 +38,15 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   private _model: LlamaModel | null = null
   private _loadingPromise: Promise<void> | null = null
   private _resolvedPoolingLayer: number | null = null  // cached resolved layer index
+  private _lateChunkingNoopDetected = false  // detected that per-token embeddings are all identical (pooling_type != NONE)
+
+  /**
+   * batchSize for createEmbeddingContext.
+   * getEmbeddingsForTokens() 要求 batchSize >= 输入 token 数，
+   * 否则后排 token 的 embedding 会因 batch.logits[] 未设置而返回零向量。
+   * 设为模型最大 context size 以覆盖任何 late-chunking 拼接场景。
+   */
+  private static readonly _EMBEDDING_BATCH_SIZE = 8192
 
   constructor(
     modelPath: string,
@@ -174,7 +183,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -292,31 +301,63 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       ? documentPrefix + texts.join(separator)
       : texts.join(separator)
 
-    // Step 2: tokenize 全文和各 chunk
+    // Step 2: tokenize 全文
     const fullTokens = this._tokenizeToNumbers(model.tokenize(bodyText))
-    const chunkTokenSeqs = texts.map((t) => this._tokenizeToNumbers(model.tokenize(t)))
 
-    // Step 3: 按 token 计数计算 spans（不依赖子序列匹配，避免 separator 边界错位）
+    // Step 3: 用逐步前缀 tokenize 计算精确 span。
+    // BPE 分词器不满足加法性：tokenize(A) + tokenize(sep) + tokenize(B) ≠ tokenize(A+sep+B)
+    // 因为边界处的相邻 token 可能合并（如 "," + "\n" → ",\n" token）。
+    // 每多一个 chunk 边界就累积一次偏移，计数推断法对非首个 chunk 全是错的。
+    //
+    // 修复：每次 tokenize 完整的渐进前缀（包含 BPE 边界合并），然后相减得 span。
+    //   span[0] = tokenize(chunk0)                                       → [0, t0)
+    //   span[1] = tokenize(chunk0 + sep + chunk1)                        → [t0, t1)
+    //   span[2] = tokenize(chunk0 + sep + chunk1 + sep + chunk2)         → [t1, t2)
+    //   ...
+    // 每个前缀都准确反映了 BPE 合并结果，相减消除了边界效应。
     const prefixLen = documentPrefix
       ? this._tokenizeToNumbers(model.tokenize(documentPrefix)).length
       : 0
-    const sepLen = this._tokenizeToNumbers(model.tokenize(separator)).length
-    const spans = this._computeTokenSpans(prefixLen, sepLen, chunkTokenSeqs)
+    const spans: { start: number; end: number }[] = []
+    let prevEnd = prefixLen
+    for (let i = 0; i < texts.length; i++) {
+      const prefix = documentPrefix
+        ? documentPrefix + texts.slice(0, i + 1).join(separator)
+        : texts.slice(0, i + 1).join(separator)
+      const currEnd = this._tokenizeToNumbers(model.tokenize(prefix)).length
+      spans.push({ start: prevEnd, end: currEnd })
+      prevEnd = currEnd
+    }
 
     // Step 4: forward pass 获取 per-token hidden states
-    const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
+    const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
     try {
-      const perTokenEmbs = await embedContext.getEmbeddingsForTokens(bodyText)
+      let perTokenEmbs = await embedContext.getEmbeddingsForTokens(bodyText)
+
+      // Check if per-token embeddings are unique (late-chunking prerequisite).
+      // If the model's GGUF pooling_type is not NONE (e.g. MEAN, the default for BERT
+      // embedding models like jina-v5), llama.cpp returns the same pooled vector for
+      // every token position, making late-chunking a no-op.
+      if (!this._lateChunkingNoopDetected) {
+        this._checkPerTokenUniqueness(perTokenEmbs)
+      }
 
       if (!perTokenEmbs || perTokenEmbs.length === 0) {
         throw new Error("[LlamaCppLlmEmbedder] Late chunking: empty per-token embeddings")
       }
 
       if (perTokenEmbs.length !== fullTokens.length) {
-        throw new Error(
-          `[LlamaCppLlmEmbedder] Late chunking: embedding count (${perTokenEmbs.length}) ` +
-            `!= token count (${fullTokens.length})`,
-        )
+        // getEmbeddingsForTokens() 内部会对 BERT 模型（WPM vocab）自动 prepend [CLS] token，
+        // 而 model.tokenize() 默认不加特殊 token。这导致 embedding 数比 token 数多 1。
+        // 此时跳过第一个 embedding（CLS）即可对齐。
+        if (perTokenEmbs.length === fullTokens.length + 1) {
+          perTokenEmbs = perTokenEmbs.slice(1)
+        } else {
+          throw new Error(
+            `[LlamaCppLlmEmbedder] Late chunking: embedding count (${perTokenEmbs.length}) ` +
+              `!= token count (${fullTokens.length})`,
+          )
+        }
       }
 
       // Per-sequence centering to suppress DC offset
@@ -324,17 +365,77 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       // Uncomment to enable if queries also use mean pooling.
       // this._centerPerSequence(perTokenEmbs)
 
-      // Step 5: 按 span 取 last token + L2 normalize（与查询端 last-token 保持一致）
+      // Step 5: 按 span mean pool + L2 normalize。
+      // Mean pool 对 BPE span 偏移更鲁棒，且降低了后续 chunk 对当前 chunk
+      // 的 attention 影响——每个 token 平等投票，last-token 不再被后续内容"收割"。
       return spans.map(({ start, end }) => {
-        const lastIdx = Math.min(end - 1, perTokenEmbs.length - 1)
-        if (lastIdx < start || lastIdx >= perTokenEmbs.length) {
-          return this._l2Normalize(perTokenEmbs[Math.min(start, perTokenEmbs.length - 1)])
+        const clampedEnd = Math.min(end, perTokenEmbs.length)
+        const clampedStart = Math.max(start, 0)
+        if (clampedEnd <= clampedStart) return this._l2Normalize(perTokenEmbs[0])
+        const dim = perTokenEmbs[0].length
+        const pooled = new Array(dim).fill(0)
+        for (let i = clampedStart; i < clampedEnd; i++) {
+          for (let d = 0; d < dim; d++) pooled[d] += perTokenEmbs[i][d]
         }
-        return this._l2Normalize(perTokenEmbs[lastIdx])
+        for (let d = 0; d < dim; d++) pooled[d] /= (clampedEnd - clampedStart)
+        return this._l2Normalize(pooled)
       })
     } finally {
       await embedContext.dispose()
     }
+  }
+
+  /**
+   * Check that per-token embeddings are actually distinct (not just the same pooled
+   * vector replicated N times). This is required for late-chunking to be meaningful.
+   *
+   * Root cause: BERT embedding models (like jina-v5) default to pooling_type=MEAN
+   * in GGUF metadata. When pooling_type != NONE, llama.cpp's llama_get_embeddings_ith()
+   * returns the same pooled vector for every token position.
+   *
+   * Throws if all token embeddings are identical, triggering a fallback to last-token
+   * pooling in the caller.
+   */
+  private _checkPerTokenUniqueness(perTokenEmbs: number[][]): void {
+    if (perTokenEmbs.length < 2) return  // need at least 2 tokens to compare
+
+    const dim = perTokenEmbs[0].length
+    const allSame = perTokenEmbs.every((t) => {
+      for (let d = 0; d < dim; d++) {
+        if (Math.abs(t[d] - perTokenEmbs[0][d]) > 1e-6) return false
+      }
+      return true
+    })
+
+    if (!allSame) return  // per-token embeddings are distinct — late-chunking is viable
+
+    this._lateChunkingNoopDetected = true
+    this.logger?.warn(
+      `\n` +
+      `╔══════════════════════════════════════════════════════════════════╗\n` +
+      `║  ⚠️  Late-chunking 检测到所有 token hidden state 完全相同       ║\n` +
+      `╠══════════════════════════════════════════════════════════════════╣\n` +
+      `║  根因: GGUF 模型的 pooling_type 不是 NONE                      ║\n` +
+      `║  getEmbeddingsForTokens 返回的是池化向量而非逐 token           ║\n` +
+      `║  hidden states (BERT 嵌入模型的默认行为)。                     ║\n` +
+      `║                                                               ║\n` +
+      `║  Late-chunking 将自动退化为 last-token 池化模式。              ║\n` +
+      `║  要启用真正的 late-chunking，请用以下命令重新转换 GGUF:        ║\n` +
+      `║                                                               ║\n` +
+      `║  python convert_hf_to_gguf.py \\                               ║\n` +
+      `║    <huggingface-model-dir> \\                                   ║\n` +
+      `║    --outtype q8_0 \\                                            ║\n` +
+      `║    --pooling none                                               ║\n` +
+      `║                                                               ║\n` +
+      `║  注意: 重转换后 getEmbeddingFor() 也不再返回池化向量，        ║\n` +
+      `║        需要在应用层自行 pool。                                 ║\n` +
+      `╚══════════════════════════════════════════════════════════════════╝\n`,
+    )
+    throw new Error(
+      "Late chunking disabled: model GGUF pooling_type is not NONE. " +
+      "Per-token embeddings are identical (mean-pooled vector replicated N times). " +
+      "Falling back to last-token pooling.",
+    )
   }
 
   /**
@@ -454,7 +555,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -533,7 +634,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model) } as any)
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -658,7 +759,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       }
 
       // 尝试生成测试 embedding
-      const embedContext = await this._model.createEmbeddingContext({ embdLayer: this._resolveLayer(this._model) } as any)
+      const embedContext = await this._model.createEmbeddingContext({ embdLayer: this._resolveLayer(this._model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
       try {
         const perTokenEmbs = await embedContext.getEmbeddingsForTokens("test")
         if (!perTokenEmbs || perTokenEmbs.length === 0) {
