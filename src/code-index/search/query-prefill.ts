@@ -29,8 +29,15 @@ export function applyQueryPrefill(
   modelId?: string,
   enableLlmPrefix?: boolean,
 ): string {
-  // llamacpp-llm: apply instruction prefill only when explicitly enabled
+  // llamacpp-llm: apply prefix/prefill only when explicitly enabled
   if (provider === "llamacpp-llm" && enableLlmPrefix) {
+    // For jina retrieval models: apply "Query: " prefix (no instruction template needed)
+    if (modelId?.includes("jina-embeddings-v5")) {
+      const jinaPrefix = "Query: "
+      if (query.startsWith(jinaPrefix)) return query
+      return jinaPrefix + query
+    }
+    // For non-jina models: apply instruction prefill template
     if (query.startsWith(LLM_EMBEDDER_PREFILL_TEMPLATE)) {
       return query
     }

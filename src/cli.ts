@@ -11,6 +11,21 @@ import { createConfigCommand } from './commands/config/index';
 import { createCallCommand } from './commands/call';
 import { createCacheCommand } from './commands/cache';
 import { createHighlightCommand } from './commands/highlight';
+import { writeSync } from 'fs';
+
+// ============================================================================
+// Native crash (SIGSEGV) catch: llama.cpp native binding 崩溃时捕获退出码
+// 注意：如果 SEGV 发生在信号处理器无法恢复的位置（如栈溢出），此 hook 仍不可用
+// ============================================================================
+process.on('SIGSEGV', () => {
+  const ts = new Date().toISOString();
+  writeSync(2, `[CRASH] SIGSEGV at ${ts}\n`);
+  writeSync(2, `[CRASH] Likely a native addon crash (node-llama-cpp / llama.cpp)\n`);
+  writeSync(2, `[CRASH] Check your model GGUF batchSize/contextSize configuration\n`);
+  // 用 abort 替代 exit 以跳过 signal-exit 等 exit hook，
+  // 否则 hook 里的 cleanup 会触碰已崩溃的 native 模块导致死锁
+  process.abort();
+});
 
 /**
  * Main CLI program

@@ -22,6 +22,38 @@ describe("applyQueryPrefill", () => {
 
       expect(result).toBe(prefillQuery)
     })
+
+    test("should apply \"Query: \" prefix for jina retrieval models when enableLlmPrefix=true", () => {
+      const query = "find authentication logic"
+      const modelId = "jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-Q8_0.gguf"
+      const result = applyQueryPrefill(query, "llamacpp-llm", modelId, true)
+
+      expect(result).toBe("Query: " + query)
+    })
+
+    test("should NOT apply \"Query: \" prefix for jina models when enableLlmPrefix=false", () => {
+      const query = "find authentication logic"
+      const modelId = "jina-embeddings-v5-nano-retrieval"
+      const result = applyQueryPrefill(query, "llamacpp-llm", modelId, false)
+
+      expect(result).toBe(query)
+    })
+
+    test("should prevent duplicate \"Query: \" prefix for jina models", () => {
+      const query = "Query: find authentication logic"
+      const modelId = "jina-embeddings-v5-nano-retrieval"
+      const result = applyQueryPrefill(query, "llamacpp-llm", modelId, true)
+
+      expect(result).toBe(query)
+    })
+
+    test("should apply instruction prefill for non-jina models even with jina-like modelId", () => {
+      const query = "find auth logic"
+      const modelId = "mxbai-embed-large-v1-f16"
+      const result = applyQueryPrefill(query, "llamacpp-llm", modelId, true)
+
+      expect(result).toBe(LLM_EMBEDDER_PREFILL_TEMPLATE + query)
+    })
   })
   describe("qwen3-embedding models with ollama provider", () => {
     test("should apply prefill to qwen3-embedding:0.6b model", () => {

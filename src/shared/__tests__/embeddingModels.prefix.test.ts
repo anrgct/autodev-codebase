@@ -29,6 +29,7 @@ describe("getModelQueryPrefix", () => {
       "openai-compatible",
       "jina",
       "openai",
+      "llamacpp-llm",
     ]
 
     for (const provider of providers) {
@@ -79,7 +80,24 @@ describe("getModelDocumentPrefix", () => {
     })
   })
 
-  describe("non-llamacpp providers with jina-embeddings-v5 models", () => {
+  describe("llamacpp-llm with jina-embeddings-v5 models", () => {
+    it(`returns "Query: " for llamacpp-llm with jina-embeddings-v5-nano-retrieval (symmetric with query)`, () => {
+      expect(
+        getModelDocumentPrefix("llamacpp-llm", "jina-embeddings-v5-nano-retrieval"),
+      ).toBe("Query: ")
+    })
+
+    it(`returns "Query: " for llamacpp-llm with full GGUF path containing jina-embeddings-v5`, () => {
+      expect(
+        getModelDocumentPrefix(
+          "llamacpp-llm",
+          "jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-Q8_0",
+        ),
+      ).toBe("Query: ")
+    })
+  })
+
+  describe("non-llamacpp/llamacpp-llm providers with jina-embeddings-v5 models", () => {
     const providers: EmbedderProvider[] = [
       "ollama",
       "openai-compatible",
@@ -93,6 +111,20 @@ describe("getModelDocumentPrefix", () => {
         ).toBeNull()
       })
     }
+  })
+
+  describe("llamacpp-llm non-jina-v5 models", () => {
+    it(`returns null for llamacpp-llm with mxbai-embed-large (same as llamacpp)`, () => {
+      expect(getModelDocumentPrefix("llamacpp-llm", "mxbai-embed-large-v1-f16")).toBeNull()
+    })
+
+    it(`returns null for llamacpp-llm with all-MiniLM-L6 (same as llamacpp)`, () => {
+      expect(getModelDocumentPrefix("llamacpp-llm", "all-MiniLM-L6-v2-Q4_K_M")).toBeNull()
+    })
+
+    it(`returns null for llamacpp-llm with nomic-embed-text (same as llamacpp)`, () => {
+      expect(getModelDocumentPrefix("llamacpp-llm", "nomic-embed-text-v1.5-Q4_K_M")).toBeNull()
+    })
   })
 
   describe("non-jina-v5 models", () => {

@@ -41,12 +41,10 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   private _lateChunkingNoopDetected = false  // detected that per-token embeddings are all identical (pooling_type != NONE)
 
   /**
-   * batchSize for createEmbeddingContext.
-   * getEmbeddingsForTokens() 要求 batchSize >= 输入 token 数，
-   * 否则后排 token 的 embedding 会因 batch.logits[] 未设置而返回零向量。
-   * 设为模型最大 context size 以覆盖任何 late-chunking 拼接场景。
+   * 模型的最大 context size（token 数），在 _ensureModel() 中从模型元数据自动获取。
+   * 用于 createEmbeddingContext 的 batchSize，确保能一次性处理所有输入 token。
    */
-  private static readonly _EMBEDDING_BATCH_SIZE = 8192
+  private _contextSize: number = 0  // will be set from model metadata in _ensureModel()
 
   constructor(
     modelPath: string,
@@ -130,6 +128,10 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
         modelPath: this.modelPath,
         gpuLayers: this.gpuLayers,
       })
+      this._contextSize = this._model.trainContextSize ?? 4096
+      this.logger?.info(
+        `[LlamaCppLlmEmbedder] Model loaded, context size: ${this._contextSize} tokens`
+      )
       this.logger?.debug(`[LlamaCppLlmEmbedder] LLM model loaded: ${this.modelPath}`)
     })()
 
@@ -183,7 +185,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -231,7 +233,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const totalTokens = prefixTokens.length +
         chunkTokenSeqs.reduce((sum, t) => sum + t.length, 0) +
         sepTokens.length * (texts.length - 1)
-      const contextSize = (model as any).trainContextSize ?? 4096
+      const contextSize = this._contextSize
 
       // Safety margin: reserve 128 tokens for separator/prefix boundary effects
       const maxBatchTokens = Math.max(contextSize - 128, 512)
@@ -330,7 +332,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     }
 
     // Step 4: forward pass 获取 per-token hidden states
-    const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
+    const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
     try {
       let perTokenEmbs = await embedContext.getEmbeddingsForTokens(bodyText)
 
@@ -555,7 +557,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -634,7 +636,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
+          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
           try {
             const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
 
@@ -759,7 +761,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       }
 
       // 尝试生成测试 embedding
-      const embedContext = await this._model.createEmbeddingContext({ embdLayer: this._resolveLayer(this._model), batchSize: LlamaCppLlmEmbedder._EMBEDDING_BATCH_SIZE } as any)
+      const embedContext = await this._model.createEmbeddingContext({ embdLayer: this._resolveLayer(this._model), batchSize: this._contextSize } as any)
       try {
         const perTokenEmbs = await embedContext.getEmbeddingsForTokens("test")
         if (!perTokenEmbs || perTokenEmbs.length === 0) {

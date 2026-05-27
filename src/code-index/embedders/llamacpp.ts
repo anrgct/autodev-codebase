@@ -36,7 +36,12 @@ export class LlamaCppEmbedder implements IEmbedder {
         modelPath: this.modelPath,
         gpuLayers: this.gpuLayers,
       })
-      this._embeddingContext = await this._model.createEmbeddingContext()
+      this._embeddingContext = await this._model.createEmbeddingContext({
+        batchSize: this._model.trainContextSize,
+      })
+      this.logger?.info(
+        `LlamaCPP model loaded, context size: ${this._model.trainContextSize} tokens`
+      )
       this.logger?.debug(`LlamaCPP model loaded: ${this.modelPath}`)
     })()
 

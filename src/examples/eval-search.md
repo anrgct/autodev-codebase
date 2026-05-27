@@ -532,7 +532,73 @@ npx tsx src/cli.ts index --force --demo --log-level=error 2>&1 && ./src/examples
   #3 [进行模型推理时，流式输出和命令行输出走的不同路径]
       期望: code_kw='predict_cli', hierarchy='predict'
       Top-3 最高分: 0.3050, 0.3050, 0.2980
-      
+
+## MiniCPM5-1B-Q8_0.gguf
+"embedderConcurrency": 4,
+"embedderPoolingMode": "mean", // last-token, mean, late-chunking, qr-weighted
+  "embedderPoolingLayer": -4,
+  "embedderQueryPoolingLayer": -2,
+  "embedderLlmInstructionPrefix":false,
+╭─   ~/w/autodev-codebase on   master ⇡39 *4 +14 !25  ✘ INT took  8s  base
+╰─❯ python src/examples/eval_search.py
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  语义搜索召回率评估                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+搜索命令:   npx tsx src/cli.ts
+工作区:     demo (autodev-codebase/demo)
+测试用例数: 12
+每查询结果: Top-30
+
+[1/12] 初始化时 HUB/Triton/本地文件判断分支 ... ✓  #5  score=0.5810  (2.4s)
+[2/12] is_triton_model 静态方法 ... ✓  #3  score=0.5280  (2.4s)
+[3/12] predict_cli vs predictor() 分支 ... ✓  #11  score=0.5630  (2.5s)
+[4/12] train 末尾用 best/last 权重更新模型 ... ✓  #22  score=0.5140  (2.5s)
+[5/12] export 文档中的 format/half/int8 等参数 ... ✓  #1  score=0.5740  (2.4s)
+[6/12] tune 方法: use_ray vs Tuner 分支 ... ✓  #2  score=0.5190  (2.4s)
+[7/12] 保存模型时的 license/version/docs 信息 ... ✓  #5  score=0.5670  (2.4s)
+[8/12] _reset_ckpt_args 保留 imgsz/data/task ... ✓  #5  score=0.6520  (2.4s)
+[9/12] add_callback/clear_callback/reset_callbacks ... ✓  #1  score=0.5850  (2.4s)
+[10/12] embed 默认取倒数第二层 ... ✓  #4  score=0.5460  (2.4s)
+[11/12] track 注册跟踪器、低置信度阈值 ... ✓  #2  score=0.5150  (2.5s)
+[12/12] 通过 task_map 动态加载 model/trainer 等 ... ✓  #2  score=0.5450  (2.4s)
+
+====================================================================================================
+单项结果明细
+====================================================================================================
+#  查询描述                             命中       排名       分数 Top-结果  
+------------------------------------------------------------------------------------------------
+1  初始化时 HUB/Triton/本地文件判断分支         ✓        #5   0.5810  [0.589, 0.586, 0.585, 0.584, 0.581]
+2  is_triton_model 静态方法             ✓        #3   0.5280  [0.530, 0.528, 0.528, 0.527, 0.526]
+3  predict_cli vs predictor() 分支    ✓       #11   0.5630  [0.578, 0.572, 0.568, 0.568, 0.568]
+4  train 末尾用 best/last 权重更新模型       ✓       #22   0.5140  [0.536, 0.536, 0.534, 0.534, 0.533]
+5  export 文档中的 format/half/int8 等参数   ✓        #1   0.5740  [0.574, 0.570, 0.564, 0.563, 0.561]
+6  tune 方法: use_ray vs Tuner 分支     ✓        #2   0.5190  [0.522, 0.519, 0.515, 0.515, 0.512]
+7  保存模型时的 license/version/docs 信息   ✓        #5   0.5670  [0.573, 0.572, 0.569, 0.569, 0.567]
+8  _reset_ckpt_args 保留 imgsz/data/task   ✓        #5   0.6520  [0.657, 0.657, 0.655, 0.652, 0.652]
+9  add_callback/clear_callback/reset_callbacks   ✓        #1   0.5850  [0.585, 0.578, 0.575, 0.574, 0.568]
+10  embed 默认取倒数第二层                   ✓        #4   0.5460  [0.569, 0.550, 0.547, 0.546, 0.537]
+11  track 注册跟踪器、低置信度阈值               ✓        #2   0.5150  [0.527, 0.515, 0.515, 0.514, 0.514]
+12  通过 task_map 动态加载 model/trainer 等   ✓        #2   0.5450  [0.548, 0.545, 0.541, 0.537, 0.534]
+
+====================================================================================================
+聚合指标
+====================================================================================================
+总用例数:          12
+命中数:            12 / 12  (100.0%)
+未命中数:          0
+
+Recall@1:           16.7%  (2 个)
+Recall@3:           50.0%  (6 个)
+Recall@5:           83.3%  (10 个)
+Recall@10:          83.3%  (10 个)
+Recall@20:          91.7%  (11 个)
+
+MRR (Mean Reciprocal Rank):  0.4016
+目标平均分数:                0.5574
+命中结果中位数排名:          4
+
 ## gpustack/bge-m3-GGUF/bge-m3-Q8_0.gguf
 
 ╭─   ~/w/autodev-codebase on   master ⇡6 *4 !4
@@ -1268,7 +1334,82 @@ npx tsx src/cli.ts index --force --demo --log-level=error 2>&1 && ./src/examples
   MRR (Mean Reciprocal Rank):  1.0000
   目标平均分数:                0.4893
   命中结果中位数排名:          1
+  
+# v5-nano-retrieval-Q8_0-pooling-NONE.gguf
 
+  "embedderProvider": "llamacpp-llm", //llamacpp-llm llamacpp
+  "embedderPoolingMode": "late-chunking",
+  "embedderPoolingLayer": -1,
+  "embedderQueryPoolingLayer": -1,
+  "embedderLlmInstructionPrefix":true,
+  
+╭─   ~/w/autodev-codebase on   master ⇡39 *4 !4
+╰─❯ python src/examples/eval_search.py
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  语义搜索召回率评估                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  搜索命令:   npx tsx src/cli.ts
+  工作区:     demo (autodev-codebase/demo)
+  测试用例数: 12
+  每查询结果: Top-30
+
+  [1/12] 初始化时 HUB/Triton/本地文件判断分支 ... ✓  #1  score=0.2120  (2.4s)
+  [2/12] is_triton_model 静态方法 ... ✓  #5  score=0.1720  (2.4s)
+  [3/12] predict_cli vs predictor() 分支 ... ✓  #19  score=0.1060  (2.4s)
+  [4/12] train 末尾用 best/last 权重更新模型 ... ✓  #24  score=0.1140  (2.4s)
+  [5/12] export 文档中的 format/half/int8 等参数 ... ✓  #8  score=0.1300  (2.4s)
+  [6/12] tune 方法: use_ray vs Tuner 分支 ... ✓  #7  score=0.1040  (2.4s)
+  [7/12] 保存模型时的 license/version/docs 信息 ... ✓  #2  score=0.1480  (2.5s)
+  [8/12] _reset_ckpt_args 保留 imgsz/data/task ... ✓  #4  score=0.1500  (2.4s)
+  [9/12] add_callback/clear_callback/reset_callbacks ... ✓  #3  score=0.1560  (2.4s)
+  [10/12] embed 默认取倒数第二层 ... ✗  未命中  (2.5s)
+  [11/12] track 注册跟踪器、低置信度阈值 ... ✓  #4  score=0.1480  (2.4s)
+  [12/12] 通过 task_map 动态加载 model/trainer 等 ... ✓  #2  score=0.1210  (2.5s)
+
+====================================================================================================
+  单项结果明细
+====================================================================================================
+    #  查询描述                             命中       排名       分数 Top-结果
+  ------------------------------------------------------------------------------------------------
+    1  初始化时 HUB/Triton/本地文件判断分支         ✓        #1   0.2120  [0.212, 0.200, 0.194, 0.194, 0.193]
+    2  is_triton_model 静态方法             ✓        #5   0.1720  [0.195, 0.173, 0.173, 0.173, 0.172]
+    3  predict_cli vs predictor() 分支    ✓       #19   0.1060  [0.140, 0.137, 0.134, 0.134, 0.133]
+    4  train 末尾用 best/last 权重更新模型       ✓       #24   0.1140  [0.158, 0.145, 0.143, 0.143, 0.140]
+    5  export 文档中的 format/half/int8 等参数   ✓        #8   0.1300  [0.265, 0.148, 0.143, 0.139, 0.137]
+    6  tune 方法: use_ray vs Tuner 分支     ✓        #7   0.1040  [0.172, 0.132, 0.113, 0.112, 0.108]
+    7  保存模型时的 license/version/docs 信息   ✓        #2   0.1480  [0.239, 0.148, 0.147, 0.142, 0.140]
+    8  _reset_ckpt_args 保留 imgsz/data/task   ✓        #4   0.1500  [0.288, 0.161, 0.155, 0.150, 0.142]
+    9  add_callback/clear_callback/reset_callbacks   ✓        #3   0.1560  [0.175, 0.170, 0.156, 0.155, 0.149]
+   10  embed 默认取倒数第二层                   ✗         -        -  [0.229, 0.118]
+   11  track 注册跟踪器、低置信度阈值               ✓        #4   0.1480  [0.183, 0.155, 0.152, 0.148, 0.145]
+   12  通过 task_map 动态加载 model/trainer 等   ✓        #2   0.1210  [0.153, 0.121, 0.114, 0.108, 0.101]
+
+====================================================================================================
+  聚合指标
+====================================================================================================
+  总用例数:          12
+  命中数:            11 / 12  (91.7%)
+  未命中数:          1
+
+  Recall@1:            8.3%  (1 个)
+  Recall@3:           33.3%  (4 个)
+  Recall@5:           58.3%  (7 个)
+  Recall@10:          75.0%  (9 个)
+  Recall@20:          83.3%  (10 个)
+
+  MRR (Mean Reciprocal Rank):  0.2830
+  目标平均分数:                0.1419
+  命中结果中位数排名:          4
+
+====================================================================================================
+  未命中用例详情
+====================================================================================================
+  #10 [提取特征向量时默认使用哪一层的输出]
+      期望: code_kw='len(self.model.model)', hierarchy='embed'
+      Top-3 最高分: 0.2290, 0.1180
+      
 # /Users/anrgct/llm_models/jinaai/jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-F16.gguf
 
 ```
