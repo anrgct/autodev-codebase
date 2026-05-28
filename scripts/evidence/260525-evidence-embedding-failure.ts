@@ -19,7 +19,7 @@
  * 前置条件：GGUF 需先手动改为 NONE。脚本末尾会恢复为 LAST。
  */
 
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 import { execSync } from "node:child_process";
 
 const MODEL_PATH =

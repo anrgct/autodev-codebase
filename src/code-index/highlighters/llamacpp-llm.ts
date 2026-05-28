@@ -1,4 +1,4 @@
-import { getLlama, LlamaModel, LlamaChatSession, QwenChatWrapper, LlamaLogLevel } from "node-llama-cpp"
+import { getLlama, LlamaModel, LlamaChatSession, QwenChatWrapper, LlamaLogLevel } from "@realtimex/node-llama-cpp"
 import type {
   IHighlighter,
   HighlightLine,

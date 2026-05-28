@@ -1,4 +1,4 @@
-import { getLlama, LlamaModel, LlamaContext, LlamaLogLevel, Token } from "node-llama-cpp";
+import { getLlama, LlamaModel, LlamaContext, LlamaLogLevel, Token } from "@realtimex/node-llama-cpp";
 import type {
   IHighlighter,
   HighlightLine,

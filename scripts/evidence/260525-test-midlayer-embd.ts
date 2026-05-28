@@ -14,7 +14,7 @@
  * 默认模型: MiniCPM-V-4.6-Q8_0.gguf (24 layers)
  */
 
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 
 // ── 配置 ──────────────────────────────────────────────────────────
 

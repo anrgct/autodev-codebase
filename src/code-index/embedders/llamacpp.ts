@@ -1,11 +1,11 @@
-import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel } from "node-llama-cpp"
+import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel } from "@realtimex/node-llama-cpp"
 import { EmbedderInfo, EmbeddingResponse, IEmbedder } from "../interfaces"
 import { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 
 /**
- * Implements the IEmbedder interface using a local LlamaCPP model via node-llama-cpp.
+ * Implements the IEmbedder interface using a local LlamaCPP model via @realtimex/node-llama-cpp.
  * The model is lazily loaded on the first createEmbeddings() call.
  */
 export class LlamaCppEmbedder implements IEmbedder {

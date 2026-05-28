@@ -1,5 +1,5 @@
 // 验证长文本下 getEmbeddingsForTokens 的零向量问题
-import { getLlama, LlamaLogLevel } from "node-llama-cpp"
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp"
 
 const MODEL_PATH = "/Users/anrgct/llm_models/jinaai/jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-Q8_0-pooling-NONE.gguf"
 

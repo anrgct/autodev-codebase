@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Worker: 测试单个 batchSize 的 createEmbeddingContext
 // 通过环境变量 _BS 接收 batchSize
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 import { writeSync } from "fs";
 
 const MODEL = "/Users/anrgct/llm_models/openbmb/MiniCPM5-1B-GGUF/MiniCPM5-1B-Q8_0.gguf";

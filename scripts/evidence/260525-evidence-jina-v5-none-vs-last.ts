@@ -22,7 +22,7 @@
  *   - A (CLS) 不可用 — 同类 chunk cos=0.67
  */
 
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 import { execSync } from "node:child_process";
 
 const MODEL_PATH =

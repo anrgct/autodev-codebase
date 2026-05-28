@@ -1,4 +1,4 @@
-import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel, Token } from "node-llama-cpp"
+import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel, Token } from "@realtimex/node-llama-cpp"
 import { EmbedderInfo, EmbeddingResponse, IEmbedder } from "../interfaces"
 import { Logger } from "../../utils/logger"
 
@@ -442,7 +442,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
 
   /**
    * 将 Token 数组转换为纯数字 token ID 数组。
-   * node-llama-cpp 的 Token 类型可能是对象（有 .id 属性）或直接是数字。
+   * @realtimex/node-llama-cpp 的 Token 类型可能是对象（有 .id 属性）或直接是数字。
    */
   private _tokenizeToNumbers(tokens: (Token | number)[]): number[] {
     return tokens.map((t) => {

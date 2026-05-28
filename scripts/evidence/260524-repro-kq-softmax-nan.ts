@@ -12,7 +12,7 @@
  * or the query range's batch position.
  */
 
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 
 const MODEL_PATH = "/Users/anrgct/workspace/open_provence_demo/output/QRRanker/QRRanker-q8_0.gguf";
 const DEFAULT_BATCH_SIZE = 8192;

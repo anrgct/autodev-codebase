@@ -4,8 +4,8 @@ import {
   LlamaEmbeddingContext,
   LlamaLogLevel,
   readGgufFileInfo,
-} from "node-llama-cpp"
-import type { GgufFileInfo } from "node-llama-cpp"
+} from "@realtimex/node-llama-cpp"
+import type { GgufFileInfo } from "@realtimex/node-llama-cpp"
 import type {
   IHighlighter,
   HighlightLine,

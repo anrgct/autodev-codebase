@@ -12,7 +12,7 @@ import { LlamaCppEmbedder } from "../llamacpp"
 import { LlamaCppReranker } from "../../rerankers/llamacpp-rerank"
 import { SemanticHighlightReranker } from "../../rerankers/semantic-highlight"
 import { LlamaCppSummarizer } from "../../summarizers/llamacpp"
-import { getLlama } from "node-llama-cpp"
+import { getLlama } from "@realtimex/node-llama-cpp"
 
 const CONFIG_DIRS = [
   process.cwd(),

@@ -2,7 +2,7 @@ import { spawn, ChildProcess } from "child_process"
 import path from "path"
 import net from "net"
 import fs from "fs"
-import { getLlama, LlamaModel, LlamaRankingContext, LlamaLogLevel } from "node-llama-cpp"
+import { getLlama, LlamaModel, LlamaRankingContext, LlamaLogLevel } from "@realtimex/node-llama-cpp"
 import { IReranker, RerankerCandidate, RerankerResult, RerankerInfo } from "../interfaces"
 import { Logger } from "../../utils/logger"
 
@@ -23,7 +23,7 @@ function _sigmoid(x: number): number {
  * Implements the IReranker interface using a dedicated LlamaCPP reranker model.
  *
  * Two modes:
- * 1. **Direct mode** (default): Uses node-llama-cpp's createRankingContext + rank() for cross-encoder reranking.
+ * 1. **Direct mode** (default): Uses @realtimex/node-llama-cpp's createRankingContext + rank() for cross-encoder reranking.
  * 2. **Server mode** (server=true): Auto-starts a llama.cpp server process and uses its /v1/rerank HTTP endpoint.
  */
 export class LlamaCppReranker implements IReranker {
@@ -32,7 +32,7 @@ export class LlamaCppReranker implements IReranker {
   private readonly serverBinPath: string
   private readonly logger?: LoggerLike
 
-  // Direct mode (node-llama-cpp)
+  // Direct mode (@realtimex/node-llama-cpp)
   private _model: LlamaModel | null = null
   private _rankingContext: LlamaRankingContext | null = null
   private _loadingPromise: Promise<void> | null = null
@@ -50,7 +50,7 @@ export class LlamaCppReranker implements IReranker {
     this.logger = logger
   }
 
-  // ─── Direct Mode (node-llama-cpp) ──────────────────────────────────────
+  // ─── Direct Mode (@realtimex/node-llama-cpp) ──────────────────────────────────────
 
   private async _ensureModel(): Promise<void> {
     if (this.server) return
@@ -90,7 +90,7 @@ export class LlamaCppReranker implements IReranker {
   }
 
   /**
-   * Find the llama-server binary path bundled with node-llama-cpp.
+   * Find the llama-server binary path bundled with @realtimex/node-llama-cpp.
    */
   private async _findServerBinary(): Promise<string> {
     // If user configured a path, use it
@@ -295,7 +295,7 @@ export class LlamaCppReranker implements IReranker {
         payload: candidate.payload,
       }))
     } else {
-      // ── Direct mode (node-llama-cpp) ──
+      // ── Direct mode (@realtimex/node-llama-cpp) ──
       await this._ensureModel()
 
       const docs = candidates.map((c) => c.content)

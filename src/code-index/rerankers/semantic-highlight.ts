@@ -7,7 +7,7 @@
  * 3. [Step 3] 同时计算 PruningHead keep probs，存入 payload 供 highlighter 复用
  */
 
-import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel, readGgufFileInfo } from "node-llama-cpp"
+import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel, readGgufFileInfo } from "@realtimex/node-llama-cpp"
 import type { IReranker, RerankerCandidate, RerankerResult, RerankerInfo } from "../interfaces"
 import type { Logger } from "../../utils/logger"
 

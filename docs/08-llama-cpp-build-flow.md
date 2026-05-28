@@ -1,6 +1,11 @@
-# node-llama-cpp Patch 构建与部署流程
+# @realtimex/node-llama-cpp Patch 构建与部署流程
 
-autodev-codebase 对 node-llama-cpp 有两层修改，对应两套部署机制。
+autodev-codebase 对 @realtimex/node-llama-cpp 有两层修改，对应两套部署机制。
+
+> **包替换说明：** 原使用 `node-llama-cpp` v3.18.1（内置 llama.cpp b8390），
+> 2026-05-28 替换为 `@realtimex/node-llama-cpp` v0.163.0（内置 llama.cpp b9370）。
+> 理由是 `@realtimex/node-llama-cpp` 预编译了最新 llama.cpp，支持 `gemma4` 分词器。
+> 迁移变更：`docs/plans/260528-node-llama-cpp-gemma4-tokenizer.md`
 
 ---
 
@@ -22,9 +27,9 @@ npm install
 # → postinstall 自动执行：
 #   npx tsx scripts/deploy-llamacpp-patch.ts
 #     ├── JS/DTS 层：扫描 vendor/node-llama-cpp/dist/ →
-#     │   逐文件覆盖到 node_modules/node-llama-cpp/dist/
+#     │   逐文件覆盖到 node_modules/@realtimex/node-llama-cpp/dist/
 #     │   （替换了旧方案 patch-package）
-#     └── C++ 层：复制 .node + dylib 到 @node-llama-cpp/<platform>/bins/
+#     └── C++ 层：复制 .node + dylib 到 @realtimex/node-llama-cpp-<platform>/bins/
 ```
 
 ### 部署策略：完整文件覆盖（替代 patch-package）
@@ -41,7 +46,7 @@ npm install
 | 文件 | 说明 |
 |------|------|
 | `vendor/node-llama-cpp/dist/` | 修改过的 JS/DTS 文件完整副本（7 个文件） |
-| `vendor/node-llama-cpp/.version` | 基线版本（如 `3.18.1`），deploy 时做版本比对 |
+| `vendor/node-llama-cpp/.version` | 基线版本（如 `0.163.0`），deploy 时做版本比对 |
 | `scripts/deploy-llamacpp-patch.ts` | 部署脚本：JS 覆盖 + C++ 二进制复制 + 版本检查 |
 | `vendor/llama-addon/binaries/<platform>/llama-addon.node` | 预编译 C++ addon |
 | `vendor/llama-addon/binaries/<platform>/libggml-*.dylib` | 预编译 Metal dylib（含 hash 版本） |
@@ -50,10 +55,10 @@ npm install
 
 ```bash
 # 1. 直接改 node_modules 中的文件（开发调试）
-vim node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
+vim node_modules/@realtimex/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
 
 # 2. 验证通过后，复制回 vendor（持久化）
-cp node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js    vendor/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
+cp node_modules/@realtimex/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js    vendor/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
 
 # 3. 如果新增了文件，同样复制并在 deploy 脚本中确认覆盖逻辑
 ```
@@ -61,10 +66,10 @@ cp node_modules/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js    vendor
 ### 版本升级时的处理
 
 ```bash
-# 当 package.json 中 node-llama-cpp 版本号变更后：
+# 当 package.json 中 @realtimex/node-llama-cpp 版本号变更后：
 npm install              # 安装新版本
 # deploy 脚本会输出版本不匹配告警：
-#   ⚠️  installed: 3.19.0  vendor baseline: 3.18.1
+#   ⚠️  installed: 0.164.0  vendor baseline: 0.163.0
 # 此时需要：
 # 1. review 新版本改动，确认 vendor 中的 patch 是否仍需调整
 # 2. 更新 vendor/node-llama-cpp/dist/ 中的文件
@@ -107,15 +112,19 @@ npm run build:llamacpp
   7. cmake-js build → 产出原始 AddonContext + 上游未 patch 的 llama.cpp
          │  此时 cmake build 目录就绪，cache 保留全部平台参数
          ↓
-[build.mjs: Pass 2 — 内联 patch header + 可选模型脚本]
-  8. 检查 llama.h 是否含 embd_layer
+[build.mjs: Pass 2 — 逐个检查并 patch header + 模型文件]
+  8. 对 4 个 header 文件逐一执行 patchFile()：
+     - 检查 newText 是否已存在（原生支持或已 patch 过）→ 跳过
+     - 否 → 替换 oldText → 应用 patch
+     - 4 个 target：llama.h / llama-cparams.h / llama-context.cpp ×2
+         │
+         ↓
+  9. 检查模型文件是否需要 patch（检查 gemma.cpp 是否已含 embd_layer）
          │
          ├─ 已含 → 跳过
          │
-         └─ 缺失 → 内联 patch 4 个文件：
-              llama.h / llama-cparams.h / llama-context.cpp
-              + 可选：运行 add-midlayer-embd.py patch 模型文件
-              （模型脚本可能因上游代码变化而失败，不影响编译）
+         └─ 缺失 → 运行 add-midlayer-embd.py patch 所有模型文件
+              （脚本依赖上游代码模式，可能因更新而失败，但不影响编译）
          │
          ↓
 [build.mjs: 复制 patched AddonContext + 增量重编]
@@ -144,18 +153,23 @@ vim vendor/llama-addon/AddonContext.h
 
 #### 步骤 2：llama.cpp 源码 patch（自动处理）
 
-**不需要手动操作。** `build.mjs` 在 Pass 2 中自动检测 `llama.h` 是否包含 `embd_layer`，若缺失则：
+**不需要手动操作。** `build.mjs` 在 Pass 2 中逐文件检查和 patch：
 
-1. **内联 patch 4 个 header 文件**（`patchFile()` 函数，替换固定文本模式）：
-   - `include/llama.h` — 给 `llama_context_params` 添加 `int32_t embd_layer`
-   - `src/llama-cparams.h` — 给 `llama_cparams` 添加 `int32_t embd_layer = -1`
-   - `src/llama-context.cpp` — 构造函数中拷贝 `cparams.embd_layer = params.embd_layer`，默认参数中设 `-1`
-2. **可选：运行模型 patch 脚本**（按顺序查找）：
-   - `../llama.cpp/scripts/add-midlayer-embd.py`
-   - `scripts/add-midlayer-embd.py`
-   - ⚠️ 模型脚本依赖上游代码模式，可能因上游更新而失败。失败时仅影响模型层 `embd_layer` 功能，不影响 AddonContext 编译。
-3. 复制 patched `AddonContext.h/cpp` 到 node_modules
-4. `cmake --build` 增量重编
+1. **内联 patch 4 个 header 文件**（`patchFile()` 函数）：
+   - 检测策略：每处 patch 检查其 `newText` 是否已存在文件内容中
+     - 若存在 → 跳过（已原生支持或已 patch 过）
+     - 若不存在 → 查找 `oldText` 并替换
+   - 4 个 target：
+     - `include/llama.h` — 给 `llama_context_params` 添加 `int32_t embd_layer`
+     - `src/llama-cparams.h` — 给 `llama_cparams` 添加 `int32_t embd_layer = -1`
+     - `src/llama-context.cpp` — 构造函数中拷贝 `cparams.embd_layer = params.embd_layer`
+     - `src/llama-context.cpp` — 默认参数中设 `embd_layer = -1`
+   - ⚠️ 上游 llama.cpp **并未**原生支持 `embd_layer`，所有 patch 都是项目自有的
+2. **运行模型 patch 脚本**：
+   - 先检测 `src/models/gemma.cpp` 是否已含 `embd_layer`
+   - 若已含 → 跳过（避免重复 patch 导致脚本失败）
+   - 若缺失 → 运行 `add-midlayer-embd.py` patch 全部模型文件
+   - ⚠️ 模型脚本依赖上游代码模式，可能因上游更新而失败。header patch 是编译必需的（保证 AddonContext 通过），模型脚本失败仅影响运行时中间层 embedding 功能，不影响编译。
 
 > **为什么 AddonContext 在 Pass 2 才复制？** patched AddonContext 引用了 `embd_layer`，该字段仅在 patch 后的 `llama.h` 中存在。Pass 1 使用 npm 自带的原始 AddonContext 让 `getLlama` 先编译通过，Pass 2 patched header 后再复制 patched AddonContext 并重编。
 
@@ -187,7 +201,7 @@ Pass 1 用原始 AddonContext 编译（`embd_layer` 字段尚不存在于上游 
 |------|------|
 | 能不能在 Pass 1 中直接 patch？ | ❌ `getLlama()` 内 `compileLlamaCpp()` 把 clone + cmake 编译包在同一个 `withLockfile` 中，中间没有 hook。 |
 | 能不能只跑一遍？ | ❌ patched AddonContext 引用 `embd_layer`，该字段仅在 patch 后的 header 中存在。Pass 1 必须先让原始 AddonContext 编译通过。 |
-| 模型 patch 脚本失败了怎么办？ | ⚠️ 模型脚本依赖上游代码模式，可能因 llama.cpp 更新而失败。内联 header patch 是编译必需的（保证 AddonContext 通过），模型脚本失败仅影响运行时 `embd_layer` 功能在模型层的支持，不影响编译。 |
+| 模型 patch 脚本失败了怎么办？ | ⚠️ 模型脚本依赖上游代码模式，可能因 llama.cpp 更新而失败。内联 header patch 是编译必需的（保证 AddonContext 通过），模型脚本失败仅影响运行时 `embd_layer` 功能在模型层的支持，不影响编译。`build.mjs` 会自动检测模型文件是否已 patch 过（检查 `gemma.cpp` 是否含 `embd_layer`），避免重复执行导致误报失败。 |
 | 为什么用 `cmake --build` 而不是再跑 `cmake-js`？ | ✅ Pass 1 的 `cmake-js configure` 已经正确设置了平台、Metal、variant、架构等全部参数，增量编译只需 `cmake --build`，不需要重新 configure，也不需要手写 cmake-js 参数（避免平台硬编码）。 |
 
 **为什么需要 hash 版 dylib？**
@@ -209,12 +223,12 @@ Pass 1 用原始 AddonContext 编译（`embd_layer` 字段尚不存在于上游 
 | `vendor/llama-addon/AddonContext.h` / `.cpp` | C++ addon 源码（N-API 绑定层），累积多个功能的改动 |
 | `scripts/deploy-llamacpp-patch.ts` | 将 vendor 下的二进制部署到 node_modules 加载路径 |
 | `vendor/node-llama-cpp/dist/` | 修改过的 JS/DTS 文件完整副本（7 个文件） |
-| `scripts/add-midlayer-embd.py` | 模型文件 patch 脚本（可选，内联 header patch 是主要的） |
+| `scripts/add-midlayer-embd.py` | 模型文件 patch 脚本（对 97 个模型文件添加中间层 embedding 支持） |
 
 ### build-trigger.mjs
 
 ```js
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 
 const llama = await getLlama({
     logLevel: LlamaLogLevel.warn,
@@ -237,7 +251,7 @@ const llama = await getLlama({
 ### Q: 如何查看改动了哪些 JS/DTS 文件？
 
 ```bash
-diff -rq vendor/node-llama-cpp/dist/ node_modules/node-llama-cpp/dist/
+diff -rq vendor/node-llama-cpp/dist/ node_modules/@realtimex/node-llama-cpp/dist/
 # 或查看 vendor 目录直接看完整源码：
 ls -R vendor/node-llama-cpp/dist/
 ```

@@ -14,7 +14,7 @@
  *   四种 pooling 模式效果完全一致——late-chunking 是 no-op。
  */
 
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 
 const MODEL_PATH =
   "/Users/anrgct/llm_models/jinaai/jina-embeddings-v5-text-nano-retrieval-GGUF/v5-nano-retrieval-Q8_0-pooling-NONE.gguf";

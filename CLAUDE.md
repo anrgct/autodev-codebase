@@ -199,21 +199,21 @@ Usage notes:
 <available_skills>
 
 <skill>
-<name>analyzing-codebase</name>
-<description>Semantic search, structure extraction, and call graph analysis for codebases using vector embeddings and tree-sitter. Use when working with code search, understanding code structure, or analyzing function call relationships.</description>
-<location>project</location>
-</skill>
-
-<skill>
-<name>chatting-ai</name>
-<description>Interact with local AI assistants for conversational dialogue, automatically managing multi-turn conversation state. Use when you need to analyze code, refactor and optimize, write new features, debug issues, or seek technical consultation. Supports multiple input methods (direct input, files, pipes).</description>
-<location>project</location>
-</skill>
-
-<skill>
 <name>creating-smart-docs</name>
 <description>Creates code docs (with smart references and text charts) and task docs for development tracking. Use for architecture docs, flow diagrams, implementation planning, or when users mention code documentation, task docs, ASCII diagrams, smart references, or code flow visualization.</description>
-<location>project</location>
+<location>global</location>
+</skill>
+
+<skill>
+<name>handoff</name>
+<description>Compact the current conversation into a handoff document for another agent to pick up.</description>
+<location>global</location>
+</skill>
+
+<skill>
+<name>task-doc</name>
+<description>Creates structured task documentation (Task Doc) for development tracking, recording requirements, decisions, and implementation progress. Use for feature development, technical design, issue investigation, or refactoring planning.</description>
+<location>global</location>
 </skill>
 
 </available_skills>

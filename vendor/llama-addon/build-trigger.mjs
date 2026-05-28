@@ -1,6 +1,6 @@
 // Build helper: triggers node-llama-cpp source compilation via getLlama()
 // Called by vendor/llama-addon/build.sh
-import { getLlama, LlamaLogLevel } from "node-llama-cpp";
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp";
 
 const llama = await getLlama({
     logLevel: LlamaLogLevel.warn,

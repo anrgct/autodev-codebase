@@ -26,10 +26,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../..");
-const LLAMA_DIR = join(PROJECT_ROOT, "node_modules/node-llama-cpp/llama");
+const LLAMA_DIR = join(PROJECT_ROOT, "node_modules/@realtimex/node-llama-cpp/llama");
 const ADDON_SRC_DIR = join(LLAMA_DIR, "addon");
 const LLAMA_CPP_DIR = join(LLAMA_DIR, "llama.cpp");
-const PREBUILT_DIR = join(PROJECT_ROOT, "node_modules/@node-llama-cpp");
+const PREBUILT_DIR = join(PROJECT_ROOT, "node_modules/@realtimex");
+const PLATFORM_PKG_PREFIX = "node-llama-cpp-";
 
 // ---- Platform detection (mirrors node-llama-cpp naming) ----
 
@@ -86,10 +87,30 @@ function findFirst(dir, pattern) {
     return findFiles(dir, pattern)[0] ?? null;
 }
 
+// ---- Pre-pass: patch original AddonContext (fix upstream API changes) ----
+
+function prePass_patchAddonContext() {
+    const addonCpp = join(ADDON_SRC_DIR, "AddonContext.cpp");
+    if (!existsSync(addonCpp)) {
+        log("Pre-pass: AddonContext.cpp not found, skipping");
+        return;
+    }
+    let c = readFileSync(addonCpp, "utf8");
+    if (c.includes("cpu_get_num_math")) {
+        log("Pre-pass: fixing cpu_get_num_math references (removed in newer llama.cpp)...");
+        c = c.replace(/cpu_get_num_math\(\)/g, "(int32_t)std::thread::hardware_concurrency()");
+        writeFileSync(addonCpp, c);
+        log("Pre-pass: AddonContext.cpp patched");
+    } else {
+        log("Pre-pass: AddonContext.cpp already patched, skipping");
+    }
+}
+
 // ---- Pass 1: download + compile ----
 
 async function pass1_downloadAndCompile() {
     log("Pass 1: downloading llama.cpp + compiling via node-llama-cpp...");
+    prePass_patchAddonContext();
     const triggerPath = join(__dirname, "build-trigger.mjs");
     execSync(`node "${triggerPath}"`, {
         cwd: PROJECT_ROOT,
@@ -100,7 +121,6 @@ async function pass1_downloadAndCompile() {
 // ---- Pass 2: patch + rebuild ----
 
 function pass2_patchAndRebuild(tag) {
-    const PATCH_MARKER = "embd_layer";
     const llamaHeader = join(LLAMA_CPP_DIR, "include", "llama.h");
 
     if (!existsSync(llamaHeader)) {
@@ -108,13 +128,7 @@ function pass2_patchAndRebuild(tag) {
         return;
     }
 
-    const headerContent = readFileSync(llamaHeader, "utf8");
-    if (headerContent.includes(PATCH_MARKER)) {
-        log("Pass 2: llama.h already patched, skipping");
-        return;
-    }
-
-    log("Pass 2: llama.h lacks '" + PATCH_MARKER + "', patching headers...");
+    log("Pass 2: checking and patching headers...");
 
     // Patch 1: llama.h — add embd_layer to llama_context_params
     patchFile(
@@ -133,8 +147,8 @@ function pass2_patchAndRebuild(tag) {
     // Patch 3: llama-context.cpp — copy embd_layer in constructor
     patchFile(
         join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "cparams.embeddings       = params.embeddings;",
-        "cparams.embeddings       = params.embeddings;\n    cparams.embd_layer       = params.embd_layer;",
+        "    cparams.embeddings                  = params.embeddings;",
+        "    cparams.embeddings                  = params.embeddings;\n    cparams.embd_layer                  = params.embd_layer;",
     );
 
     // Patch 4: llama-context.cpp — add embd_layer to default params
@@ -146,24 +160,34 @@ function pass2_patchAndRebuild(tag) {
 
     log("Headers patched.");
 
-    // Patch 5: model files — external script (may fail on newer upstream)
-    const candidates = [
-        join(PROJECT_ROOT, "..", "llama.cpp", "scripts", "add-midlayer-embd.py"),
-        join(PROJECT_ROOT, "scripts", "add-midlayer-embd.py"),
-    ];
-    const patchScript = candidates.find((c) => existsSync(c));
+    // Patch 5: model files — external script (adds mid-layer embd extraction)
+    // Check if model files already have embd_layer support (from previous run)
+    const checkModelFile = join(LLAMA_CPP_DIR, "src", "models", "gemma.cpp");
+    const modelAlreadyPatched = existsSync(checkModelFile)
+        ? readFileSync(checkModelFile, "utf8").includes("embd_layer")
+        : false;
 
-    if (patchScript) {
-        log("Running model patch script: " + patchScript);
-        try {
-            execSync('python3 "' + patchScript + '" --llamacpp-dir "' + LLAMA_CPP_DIR + '"', {
-                stdio: "inherit",
-            });
-        } catch {
-            log("WARNING: model patch script failed (likely upstream changes). Headers are patched; models will use default behavior.");
-        }
+    if (modelAlreadyPatched) {
+        log("Model files already have embd_layer support; skipping model patch script.");
     } else {
-        log("WARNING: no model patch script found. Headers patched; models use default behavior.");
+        const candidates = [
+            join(PROJECT_ROOT, "..", "llama.cpp", "scripts", "add-midlayer-embd.py"),
+            join(PROJECT_ROOT, "scripts", "add-midlayer-embd.py"),
+        ];
+        const patchScript = candidates.find((c) => existsSync(c));
+
+        if (patchScript) {
+            log("Running model patch script: " + patchScript);
+            try {
+                execSync('python3 "' + patchScript + '" --llamacpp-dir "' + LLAMA_CPP_DIR + '"', {
+                    stdio: "inherit",
+                });
+            } catch {
+                log("WARNING: model patch script failed (likely upstream changes). Models use default behavior.");
+            }
+        } else {
+            log("WARNING: no model patch script found. Models will use default behavior.");
+        }
     }
 
     log("Pass 2 complete.");
@@ -176,8 +200,8 @@ function patchFile(filePath, oldText, newText) {
         return;
     }
     let c = readFileSync(filePath, "utf8");
-    if (c.includes("embd_layer")) {
-        return; // already patched
+    if (c.includes(newText)) {
+        return; // already patched or natively supported
     }
     if (!c.includes(oldText)) {
         log("  WARNING: pattern not found in " + filePath + " — upstream may have changed");
@@ -185,13 +209,14 @@ function patchFile(filePath, oldText, newText) {
     }
     c = c.replace(oldText, newText);
     writeFileSync(filePath, c);
+    log("  patched: " + filePath);
 }
 
 // ---- Collect artifacts ----
 
 function collectBinary(tag) {
     // Priority 1: platform-specific prebuilt dir
-    const prebuiltBin = join(PREBUILT_DIR, tag, "bins", tag, "llama-addon.node");
+    const prebuiltBin = join(PREBUILT_DIR, PLATFORM_PKG_PREFIX + tag, "bins", tag, "llama-addon.node");
     if (existsSync(prebuiltBin)) return prebuiltBin;
 
     // Priority 2: localBuilds
@@ -201,9 +226,9 @@ function collectBinary(tag) {
     );
     if (localBuild) return localBuild;
 
-    // Priority 3: anywhere under node-llama-cpp
+    // Priority 3: anywhere under @realtimex/node-llama-cpp
     const fallback = findFirst(
-        join(PROJECT_ROOT, "node_modules", "node-llama-cpp"),
+        join(PROJECT_ROOT, "node_modules", "@realtimex", "node-llama-cpp"),
         /^llama-addon\.node$/,
     );
     if (fallback) return fallback;
@@ -263,7 +288,7 @@ async function main() {
     log(`Platform: ${tag}`);
 
     // Remove prebuilt binary to force source compilation
-    const prebuiltBin = join(PREBUILT_DIR, tag, "bins", tag, "llama-addon.node");
+    const prebuiltBin = join(PREBUILT_DIR, PLATFORM_PKG_PREFIX + tag, "bins", tag, "llama-addon.node");
     if (existsSync(prebuiltBin)) {
         log(`Removing prebuilt binary: ${prebuiltBin}`);
         rmSync(prebuiltBin);

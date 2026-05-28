@@ -4,7 +4,7 @@
  * 核心问题：同一段代码在"独立编码"(last-token)和"拼接编码"(late-chunking)
  * 下的 last-token embedding 余弦相似度是多少？
  */
-import { getLlama, LlamaLogLevel } from "node-llama-cpp"
+import { getLlama, LlamaLogLevel } from "@realtimex/node-llama-cpp"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 

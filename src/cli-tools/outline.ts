@@ -798,7 +798,7 @@ async function generateSummariesWithRetry(
   };
 
   // Process batches with concurrency control
-  // createContext on node-llama-cpp is thread-safe (verified experimentally).
+  // createContext on @realtimex/node-llama-cpp is thread-safe (verified experimentally).
   // Each batch creates its own context so concurrent execution is safe.
   for (let i = 0; i < batches.length; i += validatedConcurrency) {
     const batchGroup = batches.slice(i, i + validatedConcurrency);

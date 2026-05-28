@@ -4,7 +4,7 @@
  * 只测试关键的正例/反例代码片段，复用 context 加速。
  * 用法: npx tsx _test_prompts.ts
  */
-import { getLlama, LlamaChatSession, QwenChatWrapper, LlamaLogLevel } from "node-llama-cpp"
+import { getLlama, LlamaChatSession, QwenChatWrapper, LlamaLogLevel } from "@realtimex/node-llama-cpp"
 import * as fs from "fs"
 import * as path from "path"
 

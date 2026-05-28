@@ -1,4 +1,4 @@
-import { LlamaModel, LlamaChatSession, QwenChatWrapper } from "node-llama-cpp"
+import { LlamaModel, LlamaChatSession, QwenChatWrapper } from "@realtimex/node-llama-cpp"
 import { IReranker, RerankerCandidate, RerankerResult, RerankerInfo } from "../interfaces"
 import { Logger } from "../../utils/logger"
 
@@ -109,7 +109,7 @@ export class LlamaCppLLMReranker implements IReranker {
     return []
   }
 
-  private async rerankSingleBatch(query: string, candidates: RerankerCandidate[], context: import("node-llama-cpp").LlamaContext): Promise<RerankerResult[]> {
+  private async rerankSingleBatch(query: string, candidates: RerankerCandidate[], context: import("@realtimex/node-llama-cpp").LlamaContext): Promise<RerankerResult[]> {
     const prompt = this.buildScoringPrompt(query, candidates)
     const scores = await this.generateScores(prompt, context, candidates.length)
 
@@ -188,7 +188,7 @@ ${this.buildExampleScores(candidates.length)}`
     return parts.join(" ")
   }
 
-  private async generateScores(prompt: string, context: import("node-llama-cpp").LlamaContext, expectedCount: number): Promise<number[]> {
+  private async generateScores(prompt: string, context: import("@realtimex/node-llama-cpp").LlamaContext, expectedCount: number): Promise<number[]> {
     const sequence = context.getSequence()
     const chatWrapper = new QwenChatWrapper({
       variation: "3.5",

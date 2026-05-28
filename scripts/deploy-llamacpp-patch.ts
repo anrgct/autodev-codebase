@@ -1,4 +1,4 @@
-// Deploy patched node-llama-cpp files to node_modules.
+// Deploy patched @realtimex/node-llama-cpp files to node_modules.
 // Called from postinstall.
 //
 // Two layers:
@@ -8,10 +8,9 @@
 import { existsSync, copyFileSync, mkdirSync, readdirSync, rmSync, readFileSync } from "fs";
 import { join, dirname, relative } from "path";
 import { platform, arch } from "process";
-import { createRequire } from "module";
 
 const PROJECT_ROOT = join(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
+const PLATFORM_PKG_PREFIX = "node-llama-cpp-";
 
 // ---- Platform detection ----
 
@@ -30,8 +29,9 @@ function detectPlatformTag(): string {
 
 function getInstalledVersion(): string | null {
     try {
-        const pkg = require("node-llama-cpp/package.json") as { version: string };
-        return pkg.version;
+        const pkgPath = join(PROJECT_ROOT, "node_modules", "@realtimex", "node-llama-cpp", "package.json");
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+        return pkg.version ?? null;
     } catch {
         return null;
     }
@@ -52,14 +52,14 @@ function deployJsLayer() {
         return;
     }
 
-    const destRoot = join(PROJECT_ROOT, "node_modules", "node-llama-cpp", "dist");
+    const destRoot = join(PROJECT_ROOT, "node_modules", "@realtimex", "node-llama-cpp", "dist");
 
     // Version check
     const installed = getInstalledVersion();
     const base = getBaseVersion();
     if (installed && base && installed !== base) {
         console.warn(
-            `[deploy] ⚠️  node-llama-cpp version mismatch!\n` +
+            `[deploy] ⚠️  @realtimex/node-llama-cpp version mismatch!\n` +
             `  installed: ${installed}\n` +
             `  vendor baseline: ${base}\n` +
             `  JS files will still be deployed, but please review changes and update vendor/.version.`
@@ -101,11 +101,11 @@ function deployCppLayer() {
         return;
     }
 
-    const destDir = join(PROJECT_ROOT, "node_modules", "@node-llama-cpp", tag, "bins", tag);
+    const destDir = join(PROJECT_ROOT, "node_modules", "@realtimex", `${PLATFORM_PKG_PREFIX}${tag}`, "bins", tag);
 
     // Remove stale localBuilds (getLlama priority: localBuilds > prebuilt)
     const localBuildsDir = join(
-        PROJECT_ROOT, "node_modules", "node-llama-cpp", "llama", "localBuilds",
+        PROJECT_ROOT, "node_modules", "@realtimex", "node-llama-cpp", "llama", "localBuilds",
     );
     if (existsSync(localBuildsDir)) {
         rmSync(localBuildsDir, { recursive: true, force: true });

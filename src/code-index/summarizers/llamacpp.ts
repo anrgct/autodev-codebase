@@ -1,5 +1,5 @@
 import { ISummarizer, SummarizerRequest, SummarizerResult, SummarizerInfo, SummarizerBatchRequest, SummarizerBatchResult } from "../interfaces"
-import { LlamaModel, LlamaChatSession, QwenChatWrapper } from "node-llama-cpp"
+import { LlamaModel, LlamaChatSession, QwenChatWrapper } from "@realtimex/node-llama-cpp"
 import { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
