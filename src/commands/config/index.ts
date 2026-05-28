@@ -17,6 +17,7 @@ export function createConfigCommand(): Command {
     .option('-c, --config <path>', 'Configuration file path')
     .option('--json', 'Output in JSON format')
     .option('--global', 'Set global configuration (only for --set)')
+    .option('--demo', 'Use demo workspace')
     .action(async (options) => {
       if (options.get !== undefined) {
         // Handle --get

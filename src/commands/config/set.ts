@@ -65,7 +65,7 @@ export default async function configSetHandler(
   }
 
   // Determine config path
-  const workspacePath = resolveWorkspacePath(options['path'] as string, false)
+  const workspacePath = resolveWorkspacePath(options['path'] as string, options['demo'] as boolean)
   const projectConfigPath = (options['config'] as string) || path.join(workspacePath, 'autodev-config.json')
   const globalConfigPath = path.join(os.homedir(), '.autodev-cache', 'autodev-config.json')
   const configPath = options['global'] ? globalConfigPath : projectConfigPath

@@ -43,7 +43,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   // Embedder - General
   embedderProvider: {
     type: 'enum',
-    enumValues: ['openai', 'ollama', 'openai-compatible', 'jina', 'gemini', 'mistral', 'vercel-ai-gateway', 'openrouter'] as const,
+    enumValues: ['openai', 'ollama', 'openai-compatible', 'jina', 'gemini', 'mistral', 'vercel-ai-gateway', 'openrouter', 'llamacpp', 'llamacpp-llm'] as const,
     description: 'Embedding provider to use'
   },
   embedderModelId: { type: 'string', description: 'Model identifier for embeddings' },

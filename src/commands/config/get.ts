@@ -91,7 +91,7 @@ function printConfigItemLayers(keys: string[], layers: ConfigLayers): void {
  * Config get handler
  */
 export default async function configGetHandler(items: string[], options: Record<string, unknown>): Promise<void> {
-  const workspacePath = resolveWorkspacePath(options['path'] as string, false)
+  const workspacePath = resolveWorkspacePath(options['path'] as string, options['demo'] as boolean)
   const projectConfigPath = (options['config'] as string) || path.join(workspacePath, 'autodev-config.json')
   const globalConfigPath = path.join(os.homedir(), '.autodev-cache', 'autodev-config.json')
 
