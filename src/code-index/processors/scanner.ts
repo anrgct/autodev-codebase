@@ -23,7 +23,7 @@ import {
   BATCH_PROCESSING_CONCURRENCY,
   MAX_PENDING_BATCHES,
 } from "../constants"
-import { resolveDocumentPrefix } from "../shared/resolve-document-prefix"
+import { resolveDocumentPrefix } from "../search/instruction-prefix"
 
 // Type-compatible logger interface using Pick to extract only required methods from Logger
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>

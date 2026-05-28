@@ -158,48 +158,7 @@ export function getDefaultModelId(provider: EmbedderProvider): string {
   }
 }
 
-/**
- * Gets model-specific query prefix for embedding models that require it
- * Currently, no models require prefixes, but this function is kept for future extensibility
- * @param provider The embedder provider
- * @param modelId The model ID
- * @returns Query prefix string or null if no prefix is required
- */
-export function getModelQueryPrefix(provider: EmbedderProvider, modelId: string): string | null {
-  // Jina retrieval models loaded via LlamaCPP require "Query:" prefix for search queries.
-  // For llamacpp-llm, this is handled by applyQueryPrefill() in query-prefill.ts.
-  if (provider === "llamacpp" && modelId.includes("jina-embeddings-v5")) {
-    return "Query: "
-  }
 
-  return null
-}
-
-/**
- * Gets model-specific document prefix for embedding models that require it
- * during indexing (e.g., "Document: " for jina retrieval models)
- * @param provider The embedder provider
- * @param modelId The model ID
- * @returns Document prefix string or null if no prefix is required
- */
-export function getModelDocumentPrefix(provider: EmbedderProvider, modelId: string): string | null {
-  // Jina retrieval models loaded via LlamaCPP: use same "Query: " prefix
-  // for both query and document to match MLX's symmetric retrieval.query behavior.
-  if (provider === "llamacpp" && modelId.includes("jina-embeddings-v5")) {
-    return "Query: "
-  }
-
-  // llamacpp-llm: jina retrieval models same as llamacpp - use "Query: " for symmetric behavior.
-  // Non-jina models: no prefix (same behavior as llamacpp provider).
-  if (provider === "llamacpp-llm") {
-    if (modelId.includes("jina-embeddings-v5")) {
-      return "Query: "
-    }
-    return null
-  }
-
-  return null
-}
 
 /**
  * Gets model-specific score threshold for semantic search

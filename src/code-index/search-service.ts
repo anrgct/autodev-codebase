@@ -4,8 +4,8 @@ import { IEmbedder } from "./interfaces/embedder"
 import { IVectorStore } from "./interfaces/vector-store"
 import { CodeIndexConfigManager } from "./config-manager"
 import { CodeIndexStateManager } from "./state-manager"
-import { applyQueryPrefill } from "./search/query-prefill"
-import { getDefaultModelId, getModelQueryPrefix } from "../shared/embeddingModels"
+import { resolveQueryPrefix } from "./search/instruction-prefix"
+import { getDefaultModelId } from "../shared/embeddingModels"
 import { validateLimit, validateMinScore } from "./validate-search-params"
 
 /**
@@ -70,22 +70,15 @@ export class CodeIndexSearchService {
     // 所有过滤条件都通过pathFilters参数传递
 
     try {
-      // Apply query prefill for embedding generation
+      // 统一 prefix 解析：一次调用覆盖所有 provider
       const embedderProvider = this.configManager.currentEmbedderProvider
-      // Get modelId with fallback to default if not configured
       const modelId = this.configManager.currentModelId ?? getDefaultModelId(embedderProvider)
-      let prefillQuery = applyQueryPrefill(
+      const prefillQuery = resolveQueryPrefix(
         query,
         embedderProvider,
         modelId,
         this.configManager.getConfig().embedderLlmInstructionPrefix,
       )
-
-      // Apply model-specific query prefix (e.g., "Query: " for jina retrieval models)
-      const queryPrefix = getModelQueryPrefix(embedderProvider, modelId)
-      if (queryPrefix && !prefillQuery.startsWith(queryPrefix)) {
-        prefillQuery = `${queryPrefix}${prefillQuery}`
-      }
 
       // Generate embedding for query (with prefill if applicable)
       const embeddingResponse = await this.embedder.createEmbeddings([prefillQuery])

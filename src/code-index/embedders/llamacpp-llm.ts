@@ -1,6 +1,7 @@
 import { getLlama, LlamaModel, LlamaEmbeddingContext, LlamaLogLevel, Token } from "@realtimex/node-llama-cpp"
 import { EmbedderInfo, EmbeddingResponse, IEmbedder } from "../interfaces"
 import { Logger } from "../../utils/logger"
+import { wrapInChatTemplate } from "../search/instruction-prefix"
 
 type LoggerLike = Pick<Logger, "debug" | "info" | "warn" | "error">
 
@@ -149,7 +150,14 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
 
     // 聊天模板包装：将每段文本包装为 MiniCPM ChatML 用户消息格式
     const wrappedTexts = this._useChatTemplate
-      ? texts.map((t) => this._wrapInChatTemplate(t))
+      ? texts.map((t) => {
+          if (!(this as any)._chatTemplateLogged) {
+            ;(this as any)._chatTemplateLogged = true
+            const wrapped = wrapInChatTemplate(t)
+            this.logger?.debug(`[LlamaCppLlmEmbedder] Chat template wrap (first 300 chars):\n${wrapped.slice(0, 300)}`)
+          }
+          return wrapInChatTemplate(t)
+        })
       : texts
 
     if (this._poolingMode === "late-chunking" && wrappedTexts.length > 1) {
@@ -817,17 +825,5 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     return this._useChatTemplate
   }
 
-  /**
-   * 将文本包装为 MiniCPM 完整 ChatML 对话格式。
-   * 模板：<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n
-   * 完整的 instruct 格式让模型在训练分布下提取 hidden states。
-   */
-  private _wrapInChatTemplate(text: string): string {
-    const wrapped = `<|im_start|>user\n${text}<|im_end|>\n<|im_start|>assistant\n`
-    if (!(this as any)._chatTemplateLogged) {
-      (this as any)._chatTemplateLogged = true
-      this.logger?.debug(`[LlamaCppLlmEmbedder] Chat template wrap (first 300 chars):\n${wrapped.slice(0, 300)}`)
-    }
-    return wrapped
-  }
+
 }

@@ -6,7 +6,7 @@ import {
   MAX_BATCH_RETRIES as MAX_RETRIES,
   INITIAL_RETRY_DELAY_MS as INITIAL_DELAY_MS,
 } from "../constants"
-import { getDefaultModelId, getModelQueryPrefix } from "../../shared/embeddingModels"
+import { getDefaultModelId } from "../../shared/embeddingModels"
 import { withValidationErrorHandling, HttpError, formatEmbeddingError } from "../shared/validation-helpers"
 import { handleOpenAIError } from "../shared/openai-error-handler"
 import { Mutex } from "async-mutex"
@@ -127,26 +127,8 @@ export class OpenAICompatibleEmbedder implements IEmbedder {
   async createEmbeddings(texts: string[], model?: string): Promise<EmbeddingResponse> {
     const modelToUse = model || this.defaultModelId
 
-    // Apply model-specific query prefix if required
-    const queryPrefix = getModelQueryPrefix("openai-compatible", modelToUse)
-    const processedTexts = queryPrefix
-      ? texts.map((text, index) => {
-          // Prevent double-prefixing
-          if (text.startsWith(queryPrefix)) {
-            return text
-          }
-          const prefixedText = `${queryPrefix}${text}`
-          const estimatedTokens = Math.ceil(prefixedText.length / 4)
-          if (estimatedTokens > MAX_ITEM_TOKENS) {
-            console.warn(
-              `Text at index ${index} with prefix exceeds token limit (${estimatedTokens} > ${MAX_ITEM_TOKENS}). Using original text.`,
-            )
-            // Return original text if adding prefix would exceed limit
-            return text
-          }
-          return prefixedText
-        })
-      : texts
+    // 前缀由上层（search-service / scanner）统一处理，embedder 内部不需要重复添加
+        const processedTexts = texts
 
     const allEmbeddings: number[][] = []
     const usage = { promptTokens: 0, totalTokens: 0 }

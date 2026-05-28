@@ -1129,9 +1129,144 @@ MRR (Mean Reciprocal Rank):  0.4016
       期望: code_kw='len(self.model.model)', hierarchy='embed'
       Top-3 最高分: 0.2920, 0.2800, 0.2570
 
+## F2LLM-v2-330M.Q8_0-pooling-NONE.gguf
+
+  "embedderProvider": "llamacpp-llm",
+  "embedderPoolingMode": "late-chunking", // last-token, mean, late-chunking, qr-weighted
+  "embedderPoolingLayer": -2,
+  "embedderQueryPoolingLayer": -2,
+  "embedderLlmInstructionPrefix": false,
+  
+╭─   ~/w/autodev-codebase on   master ⇡42 *4 !13 ?3
+╰─❯ python src/examples/eval_search.py
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  语义搜索召回率评估                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  搜索命令:   npx tsx src/cli.ts
+  工作区:     demo (autodev-codebase/demo)
+  测试用例数: 12
+  每查询结果: Top-30
+
+  [1/12] 初始化时 HUB/Triton/本地文件判断分支 ... ✓  #4  score=0.8560  (7.2s)
+  [2/12] is_triton_model 静态方法 ... ✓  #1  score=0.9030  (6.6s)
+  [3/12] predict_cli vs predictor() 分支 ... ✓  #10  score=0.8690  (6.5s)
+  [4/12] train 末尾用 best/last 权重更新模型 ... ✓  #19  score=0.8310  (7.0s)
+  [5/12] export 文档中的 format/half/int8 等参数 ... ✓  #1  score=0.9000  (6.5s)
+  [6/12] tune 方法: use_ray vs Tuner 分支 ... ✓  #1  score=0.8560  (7.0s)
+  [7/12] 保存模型时的 license/version/docs 信息 ... ✓  #1  score=0.8620  (7.0s)
+  [8/12] _reset_ckpt_args 保留 imgsz/data/task ... ✓  #1  score=0.8720  (7.0s)
+  [9/12] add_callback/clear_callback/reset_callbacks ... ✓  #1  score=0.9160  (6.6s)
+  [10/12] embed 默认取倒数第二层 ... ✓  #7  score=0.8490  (6.7s)
+  [11/12] track 注册跟踪器、低置信度阈值 ... ✓  #2  score=0.8710  (7.0s)
+  [12/12] 通过 task_map 动态加载 model/trainer 等 ... ✓  #1  score=0.8900  (6.6s)
+
+====================================================================================================
+  单项结果明细
+====================================================================================================
+    #  查询描述                             命中       排名       分数 Top-结果
+  ------------------------------------------------------------------------------------------------
+    1  初始化时 HUB/Triton/本地文件判断分支         ✓        #4   0.8560  [0.867, 0.863, 0.859, 0.856, 0.854]
+    2  is_triton_model 静态方法             ✓        #1   0.9030  [0.903, 0.884, 0.883, 0.882, 0.881]
+    3  predict_cli vs predictor() 分支    ✓       #10   0.8690  [0.890, 0.883, 0.882, 0.875, 0.875]
+    4  train 末尾用 best/last 权重更新模型       ✓       #19   0.8310  [0.877, 0.865, 0.856, 0.854, 0.852]
+    5  export 文档中的 format/half/int8 等参数   ✓        #1   0.9000  [0.900, 0.883, 0.875, 0.871, 0.867]
+    6  tune 方法: use_ray vs Tuner 分支     ✓        #1   0.8560  [0.856, 0.841, 0.840, 0.835, 0.834]
+    7  保存模型时的 license/version/docs 信息   ✓        #1   0.8620  [0.862, 0.854, 0.851, 0.851, 0.849]
+    8  _reset_ckpt_args 保留 imgsz/data/task   ✓        #1   0.8720  [0.872, 0.842, 0.839, 0.838, 0.833]
+    9  add_callback/clear_callback/reset_callbacks   ✓        #1   0.9160  [0.916, 0.899, 0.895, 0.891, 0.885]
+   10  embed 默认取倒数第二层                   ✓        #7   0.8490  [0.857, 0.856, 0.851, 0.851, 0.850]
+   11  track 注册跟踪器、低置信度阈值               ✓        #2   0.8710  [0.877, 0.871, 0.868, 0.866, 0.856]
+   12  通过 task_map 动态加载 model/trainer 等   ✓        #1   0.8900  [0.890, 0.873, 0.865, 0.862, 0.858]
+
+====================================================================================================
+  聚合指标
+====================================================================================================
+  总用例数:          12
+  命中数:            12 / 12  (100.0%)
+  未命中数:          0
+
+  Recall@1:           58.3%  (7 个)
+  Recall@3:           66.7%  (8 个)
+  Recall@5:           75.0%  (9 个)
+  Recall@10:          91.7%  (11 个)
+  Recall@20:         100.0%  (12 个)
+
+  MRR (Mean Reciprocal Rank):  0.6705
+  目标平均分数:                0.8729
+  命中结果中位数排名:          1
+
+## F2LLM-v2-80M.Q8_0-pooling-NONE.gguf
+
+  "embedderProvider": "llamacpp-llm"
+  "embedderConcurrency": 2,
+  "embedderPoolingMode": "late-chunking", // last-token, mean, late-chunking, qr-weighted
+  "embedderPoolingLayer": -2,
+  "embedderQueryPoolingLayer": -1,
+  "embedderLlmInstructionPrefix": false,
+  
+╭─   ~/workspace/autodev-codebase on   master ⇡42 *4 !14 ?3         base
+╰─ ⚡ 6.88s ❯ python src/examples/eval_search.py
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  语义搜索召回率评估                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  搜索命令:   npx tsx src/cli.ts
+  工作区:     demo (autodev-codebase/demo)
+  测试用例数: 12
+  每查询结果: Top-30
+
+  [1/12] 初始化时 HUB/Triton/本地文件判断分支 ... ✓  #3  score=0.2850  (6.6s)
+  [2/12] is_triton_model 静态方法 ... ✓  #1  score=0.2920  (6.6s)
+  [3/12] predict_cli vs predictor() 分支 ... ✓  #17  score=0.1850  (6.4s)
+  [4/12] train 末尾用 best/last 权重更新模型 ... ✓  #10  score=0.1920  (6.6s)
+  [5/12] export 文档中的 format/half/int8 等参数 ... ✓  #2  score=0.2470  (7.0s)
+  [6/12] tune 方法: use_ray vs Tuner 分支 ... ✓  #6  score=0.2160  (7.0s)
+  [7/12] 保存模型时的 license/version/docs 信息 ... ✓  #6  score=0.1230  (6.6s)
+  [8/12] _reset_ckpt_args 保留 imgsz/data/task ... ✓  #4  score=0.1730  (6.9s)
+  [9/12] add_callback/clear_callback/reset_callbacks ... ✓  #1  score=0.3020  (6.6s)
+  [10/12] embed 默认取倒数第二层 ... ✓  #24  score=0.1550  (6.6s)
+  [11/12] track 注册跟踪器、低置信度阈值 ... ✓  #1  score=0.1900  (7.0s)
+  [12/12] 通过 task_map 动态加载 model/trainer 等 ... ✓  #1  score=0.3000  (6.6s)
+
+====================================================================================================
+  单项结果明细
+====================================================================================================
+    #  查询描述                             命中       排名       分数 Top-结果
+  ------------------------------------------------------------------------------------------------
+    1  初始化时 HUB/Triton/本地文件判断分支         ✓        #3   0.2850  [0.301, 0.293, 0.285, 0.284, 0.277]
+    2  is_triton_model 静态方法             ✓        #1   0.2920  [0.292, 0.282, 0.281, 0.269, 0.265]
+    3  predict_cli vs predictor() 分支    ✓       #17   0.1850  [0.226, 0.212, 0.210, 0.207, 0.203]
+    4  train 末尾用 best/last 权重更新模型       ✓       #10   0.1920  [0.280, 0.223, 0.219, 0.203, 0.202]
+    5  export 文档中的 format/half/int8 等参数   ✓        #2   0.2470  [0.250, 0.247, 0.247, 0.243, 0.229]
+    6  tune 方法: use_ray vs Tuner 分支     ✓        #6   0.2160  [0.248, 0.243, 0.241, 0.235, 0.234]
+    7  保存模型时的 license/version/docs 信息   ✓        #6   0.1230  [0.145, 0.145, 0.140, 0.133, 0.132]
+    8  _reset_ckpt_args 保留 imgsz/data/task   ✓        #4   0.1730  [0.198, 0.179, 0.176, 0.173, 0.165]
+    9  add_callback/clear_callback/reset_callbacks   ✓        #1   0.3020  [0.302, 0.285, 0.277, 0.274, 0.270]
+   10  embed 默认取倒数第二层                   ✓       #24   0.1550  [0.216, 0.201, 0.188, 0.188, 0.187]
+   11  track 注册跟踪器、低置信度阈值               ✓        #1   0.1900  [0.190, 0.183, 0.178, 0.175, 0.163]
+   12  通过 task_map 动态加载 model/trainer 等   ✓        #1   0.3000  [0.300, 0.277, 0.260, 0.247, 0.241]
+
+====================================================================================================
+  聚合指标
+====================================================================================================
+  总用例数:          12
+  命中数:            12 / 12  (100.0%)
+  未命中数:          0
+
+  Recall@1:           33.3%  (4 个)
+  Recall@3:           50.0%  (6 个)
+  Recall@5:           58.3%  (7 个)
+  Recall@10:          83.3%  (10 个)
+  Recall@20:          91.7%  (11 个)
+
+  MRR (Mean Reciprocal Rank):  0.4681
+  目标平均分数:                0.2217
+  命中结果中位数排名:          4
+  
 ## hf.co/mradermacher/F2LLM-v2-0.6B-GGUF:iq4_xs
-
-
 
 ╭─   ~/w/autodev-codebase on   master *4 !4 ?4
 ╰─❯ python3 src/examples/eval_search.py

@@ -25,7 +25,7 @@ import { codeParser } from "./parser"
 import { CacheManager } from "../cache-manager"
 import { generateNormalizedAbsolutePath, generateRelativeFilePath } from "../shared/get-relative-path"
 import { generateBlockEmbeddingText } from "../shared/block-text-generator"
-import { resolveDocumentPrefix } from "../shared/resolve-document-prefix"
+import { resolveDocumentPrefix } from "../search/instruction-prefix"
 import { IEventBus, IFileSystem } from "../../abstractions/core"
 import { IWorkspace, IPathUtils } from "../../abstractions/workspace"
 

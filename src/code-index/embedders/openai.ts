@@ -1,13 +1,12 @@
 import { OpenAI } from "openai"
 import { ApiHandlerOptions } from "../../shared/api"
-import { IEmbedder, EmbeddingResponse, EmbedderInfo } from "../interfaces/embedder"
+import { EmbedderInfo, EmbeddingResponse, IEmbedder } from "../interfaces/embedder"
 import {
   MAX_BATCH_TOKENS,
   MAX_ITEM_TOKENS,
   MAX_BATCH_RETRIES as MAX_RETRIES,
   INITIAL_RETRY_DELAY_MS as INITIAL_DELAY_MS,
 } from "../constants"
-import { getModelQueryPrefix } from "../../shared/embeddingModels"
 import { withValidationErrorHandling, formatEmbeddingError, HttpError } from "../shared/validation-helpers"
 import { handleOpenAIError } from "../shared/openai-error-handler"
 import { fetch, ProxyAgent } from "undici"
@@ -83,26 +82,8 @@ export class OpenAiEmbedder implements IEmbedder {
   async createEmbeddings(texts: string[], model?: string): Promise<EmbeddingResponse> {
     const modelToUse = model || this.defaultModelId
 
-    // Apply model-specific query prefix if required
-    const queryPrefix = getModelQueryPrefix("openai", modelToUse)
-    const processedTexts = queryPrefix
-      ? texts.map((text, index) => {
-          // Prevent double-prefixing
-          if (text.startsWith(queryPrefix)) {
-            return text
-          }
-          const prefixedText = `${queryPrefix}${text}`
-          const estimatedTokens = Math.ceil(prefixedText.length / 4)
-          if (estimatedTokens > MAX_ITEM_TOKENS) {
-            console.warn(
-              `Text at index ${index} with prefix exceeds token limit (${estimatedTokens} > ${MAX_ITEM_TOKENS}). Using original text.`,
-            )
-            // Return original text if adding prefix would exceed limit
-            return text
-          }
-          return prefixedText
-        })
-      : texts
+    // 前缀由上层（search-service / scanner）统一处理，embedder 内部不需要重复添加
+    const processedTexts = texts
 
     const allEmbeddings: number[][] = []
     const usage = { promptTokens: 0, totalTokens: 0 }
