@@ -30,6 +30,7 @@ export interface RerankerConfig {
   openAiCompatibleModelId?: string
   openAiCompatibleApiKey?: string
   ggufPath?: string
+  ggufQrrankerPath?: string
   ggufLlmPath?: string
   llamaCppServer?: boolean
   llamaCppServerBinPath?: string

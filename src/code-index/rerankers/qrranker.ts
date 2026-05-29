@@ -36,6 +36,8 @@ export class QRRankerReranker implements IReranker {
   private readonly retryDelayMs: number;
   private _model: LlamaModel | null = null;
   private _loadingPromise: Promise<LlamaModel> | null = null;
+  private _contexts: LlamaContext[] = [];
+  private _contextPoolPromise: Promise<void> | null = null;
 
   constructor(
     modelPath: string,
@@ -68,6 +70,47 @@ export class QRRankerReranker implements IReranker {
     })();
 
     return this._loadingPromise;
+  }
+
+  // ─── Context Pool ───────────────────────────────────────────────────
+
+  private async _ensureContexts(): Promise<LlamaContext[]> {
+    if (this._contexts.length > 0) return this._contexts;
+    if (this._contextPoolPromise) {
+      await this._contextPoolPromise;
+      return this._contexts;
+    }
+
+    this._contextPoolPromise = (async () => {
+      const model = await this._ensureModel();
+      const rawSize = model.trainContextSize ?? 32768;
+      const contextSize = Math.min(rawSize, 32768);
+      this.logger?.debug(
+        `[QRRanker] Creating ${this.concurrency} context(s) for pool (contextSize=${contextSize})`,
+      );
+      // Create contexts sequentially to avoid simultaneous VRAM spikes.
+      // If some fail due to VRAM pressure, we still get partial pool.
+      for (let i = 0; i < this.concurrency; i++) {
+        try {
+          const ctx = await model.createContext({
+            contextSize,
+            sequences: 1,
+            flashAttention: false,
+            collectKqSoftMax: true,
+          });
+          this._contexts.push(ctx);
+        } catch (err) {
+          this.logger?.warn(
+            `[QRRanker] Failed to create context ${i + 1}/${this.concurrency}: ${(err as Error).message}`,
+          );
+          break;
+        }
+      }
+      this.logger?.info(`[QRRanker] Created ${this._contexts.length} context(s) for pool`);
+    })();
+
+    await this._contextPoolPromise;
+    return this._contexts;
   }
 
   // ─── Prompt Construction ────────────────────────────────────────────
@@ -253,12 +296,23 @@ export class QRRankerReranker implements IReranker {
   async rerank(query: string, candidates: RerankerCandidate[]): Promise<RerankerResult[]> {
     if (candidates.length === 0) return [];
 
-    const model = await this._ensureModel();
+    await this._ensureModel();
+    const contexts = await this._ensureContexts();
     const t0 = Date.now();
+
+    if (contexts.length === 0) {
+      this.logger?.warn("[QRRanker] No pooled contexts available, returning original scores");
+      return candidates.map(c => ({
+        id: c.id,
+        score: c.score ?? 0,
+        originalScore: c.score,
+        payload: c.payload,
+      }));
+    }
 
     // Single batch — fast path
     if (candidates.length <= this.batchSize) {
-      const results = await this._rerankBatch(model, query, candidates);
+      const results = await this._rerankBatch(contexts[0], query, candidates);
       this._logResults(results, candidates, Date.now() - t0);
       return results;
     }
@@ -273,7 +327,9 @@ export class QRRankerReranker implements IReranker {
     for (let i = 0; i < batches.length; i += this.concurrency) {
       const group = batches.slice(i, i + this.concurrency);
       const groupResults = await Promise.all(
-        group.map((batch) => this._rerankBatchWithRetry(model, query, batch)),
+        group.map((batch, j) =>
+          this._rerankBatchWithRetry(query, batch, contexts[j % contexts.length]),
+        ),
       );
       for (const results of groupResults) {
         allResults.push(...results);
@@ -285,147 +341,170 @@ export class QRRankerReranker implements IReranker {
     return allResults;
   }
 
-  /** Run QRRanker on a single batch of candidates. */
+  /** Run QRRanker on a single batch of candidates using a pooled context. */
   private async _rerankBatch(
-    model: LlamaModel,
+    context: LlamaContext,
     query: string,
     batch: RerankerCandidate[],
   ): Promise<RerankerResult[]> {
+    const model = this._model!;
+
     // Tokenize and compute chunk ranges
     const { tokens, chunkRanges, queryStart, queryEnd } =
       this.tokenizeWithChunkRanges(model, query, batch);
 
-    // Create context with kq_soft_max collection enabled.
-    // Keep Metal kq_soft_max tensors below the range where tensor reads return NaN.
-    // C++ cbEval accumulates query slices across JS decode batches.
+    // Ensure context is large enough for this batch.
+    // If the pooled context (at trainContextSize) is sufficient, use it directly;
+    // otherwise create a one-off larger context.
+    const neededSize = tokens.length + 1024;
+    if (context.contextSize < neededSize) {
+      this.logger?.warn(
+        `[QRRanker] Batch tokens (${tokens.length}) exceed pooled context size (${context.contextSize}), ` +
+        `creating temporary context of size ${neededSize}`,
+      );
+      const tempContext = await model.createContext({
+        contextSize: Math.min(model.trainContextSize ?? 32768, neededSize),
+        batchSize: Math.min(tokens.length, 4096),
+        sequences: 1,
+        flashAttention: false,
+        collectKqSoftMax: true,
+      }) as LlamaContext;
+      try {
+        return await this._runQrPass(tempContext, model, tokens, chunkRanges, queryStart, queryEnd, batch);
+      } finally {
+        await tempContext.dispose();
+      }
+    }
+
     const ubatch = Math.min(tokens.length, 4096);
     this.logger?.info(
       `[QRRanker] Processing ${tokens.length} tokens with batchSize=${ubatch}`,
     );
-    const context = await model.createContext({
-      contextSize: Math.max(32768, tokens.length + 256),
-      batchSize: ubatch,
-      sequences: 1,
-      flashAttention: false,
-      collectKqSoftMax: true,
-    }) as LlamaContext;
+    return await this._runQrPass(context, model, tokens, chunkRanges, queryStart, queryEnd, batch);
+  }
 
-    try {
-      const sequence = context.getSequence();
-      // Set query range so C++ cbEval only copies query token rows,
-      // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
-      // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
-      context.setKqSoftMaxQueryRange(queryStart, queryEnd);
-      await sequence.evaluateWithoutGeneratingNewTokens(tokens);
-      this.logger?.debug(
-        `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs`,
-      );
+  /** Execute the QR forward pass and produce results. */
+  private async _runQrPass(
+    context: LlamaContext,
+    model: LlamaModel,
+    tokens: Token[],
+    chunkRanges: Array<{ start: number; end: number }>,
+    queryStart: number,
+    queryEnd: number,
+    batch: RerankerCandidate[],
+  ): Promise<RerankerResult[]> {
+    const sequence = context.getSequence();
+    // Set query range so C++ cbEval only copies query token rows,
+    // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
+    // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
+    context.setKqSoftMaxQueryRange(queryStart, queryEnd);
+    await sequence.evaluateWithoutGeneratingNewTokens(tokens);
+    this.logger?.debug(
+      `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs`,
+    );
 
-      const { chunkScores, perChunkTokenScores } = this.computeQRScores(context, chunkRanges, queryStart, queryEnd);
+    const { chunkScores, perChunkTokenScores } = this.computeQRScores(context, chunkRanges, queryStart, queryEnd);
 
-      const results: RerankerResult[] = batch.map((candidate, i) => {
-        // Slice per-token scores to code region only, so the highlighter can
-        // map directly from code tokens to lines without needing to know the
-        // chunk's prefix/suffix format (which varies per chunk by title/hierarchy).
-        let codeScores = perChunkTokenScores[i];
-    let codeTokenIds: number[] = [];
-        if (codeScores.length > 0) {
-          const chunkStr = this.chunkText(candidate, i);
-          const chunkTok = model.tokenize(chunkStr);
-          const contentTok = model.tokenize(candidate.content);
-          if (contentTok.length > 0 && contentTok.length <= chunkTok.length) {
-            const firstId = Number(contentTok[0]);
-            const maxStart = chunkTok.length - contentTok.length;
-            let codeStart = -1;
-            for (let j = 0; j <= maxStart; j++) {
-              if (Number(chunkTok[j]) !== firstId) continue;
-              let match = true;
-              for (let k = 1; k < contentTok.length; k++) {
-                if (Number(chunkTok[j + k]) !== Number(contentTok[k])) { match = false; break; }
-              }
-              if (match) { codeStart = j; break; }
+    const results: RerankerResult[] = batch.map((candidate, i) => {
+      // Slice per-token scores to code region only, so the highlighter can
+      // map directly from code tokens to lines without needing to know the
+      // chunk's prefix/suffix format (which varies per chunk by title/hierarchy).
+      let codeScores = perChunkTokenScores[i];
+      let codeTokenIds: number[] = [];
+      if (codeScores.length > 0) {
+        const chunkStr = this.chunkText(candidate, i);
+        const chunkTok = model.tokenize(chunkStr);
+        const contentTok = model.tokenize(candidate.content);
+        if (contentTok.length > 0 && contentTok.length <= chunkTok.length) {
+          const firstId = Number(contentTok[0]);
+          const maxStart = chunkTok.length - contentTok.length;
+          let codeStart = -1;
+          for (let j = 0; j <= maxStart; j++) {
+            if (Number(chunkTok[j]) !== firstId) continue;
+            let match = true;
+            for (let k = 1; k < contentTok.length; k++) {
+              if (Number(chunkTok[j + k]) !== Number(contentTok[k])) { match = false; break; }
             }
-            if (codeStart >= 0) {
+            if (match) { codeStart = j; break; }
+          }
+          if (codeStart >= 0) {
+            const codeLen = Math.min(contentTok.length, codeScores.length - codeStart);
+            if (codeLen > 0 && codeLen < codeScores.length) {
+              const sliced = new Float32Array(codeLen);
+              for (let j = 0; j < codeLen; j++) sliced[j] = codeScores[codeStart + j];
+              codeScores = sliced;
+            }
+            const chunkStart = chunkRanges[i].start;
+            codeTokenIds = Array.from(
+              { length: codeLen },
+              (_, j) => Number(tokens[chunkStart + codeStart + j]),
+            );
+          } else {
+            // Use CONTEXTUAL token positions to find code start within chunk.
+            // perChunkTokenScores[i] is indexed at [chunkRanges[i].start, chunkRanges[i].end),
+            // but these ranges were computed from isolated tokenization. BPE boundary merging
+            // means the contextual token count and IDs may differ from isolated tokenization.
+            // Strategy: group-detokenize the contextual chunk tokens, find the code content's
+            // exact character position in the reconstructed text, then map back to token index
+            // by re-detokenizing individually and accumulating character lengths.
+            const chunkStart = chunkRanges[i].start;
+            const chunkEnd = chunkRanges[i].end;
+            const contextualChunkTokens = tokens.slice(chunkStart, chunkEnd);
+            const detokFull = model.detokenize(contextualChunkTokens);
+            const codeCharOffset = detokFull.indexOf(candidate.content.trim());
+            let codeStart = -1;
+            if (codeCharOffset >= 0) {
+              let charPos = 0;
+              for (let ti = 0; ti < contextualChunkTokens.length; ti++) {
+                const text = model.detokenize([contextualChunkTokens[ti]]);
+                charPos += text.length;
+                if (charPos >= codeCharOffset) {
+                  codeStart = ti;
+                  break;
+                }
+              }
+            }
+            if (codeStart < 0) codeStart = 0;
+            if (codeStart < codeScores.length) {
               const codeLen = Math.min(contentTok.length, codeScores.length - codeStart);
-              if (codeLen > 0 && codeLen < codeScores.length) {
+              if (codeLen > 0) {
                 const sliced = new Float32Array(codeLen);
                 for (let j = 0; j < codeLen; j++) sliced[j] = codeScores[codeStart + j];
                 codeScores = sliced;
-              }
-              const chunkStart = chunkRanges[i].start;
-              codeTokenIds = Array.from(
-                { length: codeLen },
-                (_, j) => Number(tokens[chunkStart + codeStart + j]),
-              );
-            } else {
-              // Use CONTEXTUAL token positions to find code start within chunk.
-              // perChunkTokenScores[i] is indexed at [chunkRanges[i].start, chunkRanges[i].end),
-              // but these ranges were computed from isolated tokenization. BPE boundary merging
-              // means the contextual token count and IDs may differ from isolated tokenization.
-              // Strategy: group-detokenize the contextual chunk tokens, find the code content's
-              // exact character position in the reconstructed text, then map back to token index
-              // by re-detokenizing individually and accumulating character lengths.
-              const chunkStart = chunkRanges[i].start;
-              const chunkEnd = chunkRanges[i].end;
-              const contextualChunkTokens = tokens.slice(chunkStart, chunkEnd);
-              const detokFull = model.detokenize(contextualChunkTokens);
-              const codeCharOffset = detokFull.indexOf(candidate.content.trim());
-              let codeStart = -1;
-              if (codeCharOffset >= 0) {
-                let charPos = 0;
-                for (let ti = 0; ti < contextualChunkTokens.length; ti++) {
-                  const text = model.detokenize([contextualChunkTokens[ti]]);
-                  charPos += text.length;
-                  if (charPos >= codeCharOffset) {
-                    codeStart = ti;
-                    break;
-                  }
-                }
-              }
-              if (codeStart < 0) codeStart = 0;
-              if (codeStart < codeScores.length) {
-                const codeLen = Math.min(contentTok.length, codeScores.length - codeStart);
-                if (codeLen > 0) {
-                  const sliced = new Float32Array(codeLen);
-                  for (let j = 0; j < codeLen; j++) sliced[j] = codeScores[codeStart + j];
-                  codeScores = sliced;
-                  codeTokenIds = Array.from(
-                    { length: codeLen },
-                    (_, j) => Number(tokens[chunkStart + codeStart + j]),
-                  );
-                }
+                codeTokenIds = Array.from(
+                  { length: codeLen },
+                  (_, j) => Number(tokens[chunkStart + codeStart + j]),
+                );
               }
             }
           }
         }
-        return {
-          id: candidate.id,
-          score: chunkScores[i] ?? 0,
-          originalScore: candidate.score,
-          payload: {
-            ...candidate.payload,
-            _qrrankerPerTokenScores: codeScores,
-            _qrrankerCodeText: candidate.content,
-            _qrrankerTokenTexts: codeTokenIds.map((id) => model.detokenize([id as unknown as Token])),
-          },
-        };
-      });
+      }
+      return {
+        id: candidate.id,
+        score: chunkScores[i] ?? 0,
+        originalScore: candidate.score,
+        payload: {
+          ...candidate.payload,
+          _qrrankerPerTokenScores: codeScores,
+          _qrrankerCodeText: candidate.content,
+          _qrrankerTokenTexts: codeTokenIds.map((id) => model.detokenize([id as unknown as Token])),
+        },
+      };
+    });
 
-      results.sort((a, b) => b.score - a.score);
-      return results;
-    } finally {
-      await context.dispose();
-    }
+    results.sort((a, b) => b.score - a.score);
+    return results;
   }
 
   private async _rerankBatchWithRetry(
-    model: LlamaModel,
     query: string,
     batch: RerankerCandidate[],
+    context: LlamaContext,
   ): Promise<RerankerResult[]> {
     for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        return await this._rerankBatch(model, query, batch);
+        return await this._rerankBatch(context, query, batch);
       } catch (err) {
         if (attempt >= this.maxRetries) {
           this.logger?.warn(
@@ -489,6 +568,11 @@ export class QRRankerReranker implements IReranker {
 
   /** Clean up resources */
   async dispose(): Promise<void> {
+    for (const ctx of this._contexts) {
+      await ctx.dispose();
+    }
+    this._contexts = [];
+    this._contextPoolPromise = null;
     if (this._model) {
       await this._model.dispose();
       this._model = null;

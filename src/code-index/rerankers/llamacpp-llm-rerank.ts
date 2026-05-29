@@ -46,7 +46,7 @@ export class LlamaCppLLMReranker implements IReranker {
       this.logger?.debug(`[LlamaCppLLMReranker] Creating ${this.concurrency} context(s) for pool`)
       this._contexts = await Promise.all(
         Array.from({ length: this.concurrency }, () =>
-          this.model.createContext({ contextSize: 32768 })
+          this.model.createContext({ contextSize: this.model.trainContextSize ?? 32768 })
         )
       )
       this.logger?.info(`[LlamaCppLLMReranker] Created ${this.concurrency} context(s) for pool`)

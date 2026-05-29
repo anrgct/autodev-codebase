@@ -631,8 +631,8 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     // 较低值（如 0.5）更接近 last-token，较高值（如 2.0）更接近 mean-pooling
     // 可通过环境变量 QR_TEMPERATURE 覆盖（如 QR_TEMPERATURE=0.5）
     const QR_TEMPERATURE = (() => {
-      if (typeof process !== "undefined" && process.env.QR_TEMPERATURE) {
-        const v = parseFloat(process.env.QR_TEMPERATURE)
+      if (typeof process !== "undefined" && process.env["QR_TEMPERATURE"]) {
+        const v = parseFloat(process.env["QR_TEMPERATURE"])
         if (!isNaN(v) && v > 0) {
           this.logger?.info(`[qr-weighted] Using QR_TEMPERATURE=${v} from env`)
           return v

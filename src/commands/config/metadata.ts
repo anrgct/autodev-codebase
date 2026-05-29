@@ -133,6 +133,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   rerankerOpenAiCompatibleModelId: { type: 'string', description: 'OpenAI-compatible model ID for reranking' },
   rerankerOpenAiCompatibleApiKey: { type: 'string', description: 'OpenAI-compatible API key for reranking' },
   rerankerGgufPath: { type: 'string', description: 'Path to dedicated reranker GGUF model (provider=llamacpp/llamacpp-llm)' },
+  rerankerGgufQrrankerPath: { type: 'string', description: 'Path to QRRanker GGUF model for QR attention-based reranking (provider=qrranker)' },
   rerankerGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model for chat-based reranking (provider=llamacpp-llm)' },
   rerankerLlamaCppServer: { type: 'boolean', description: 'Use llama.cpp server for reranking (auto-starts/stop server)' },
   rerankerLlamaCppServerBinPath: { type: 'string', description: 'Path to llama-server binary (used when rerankerLlamaCppServer is true)' },

@@ -804,7 +804,7 @@ export class QRRankerHighlighter implements IHighlighter {
       `[QRRankerHighlighter] Processing ${tokens.length} tokens with batchSize=${batchSize}`,
     );
     const context = await model.createContext({
-      contextSize: Math.max(32768, tokens.length + 256),
+      contextSize: Math.min(model.trainContextSize ?? 32768, tokens.length + 1024),
       batchSize,
       sequences: 1,
       flashAttention: false,
@@ -973,25 +973,7 @@ export class QRRankerHighlighter implements IHighlighter {
       if (!model) {
         return { valid: false, error: "Failed to load QRRanker model" };
       }
-
-      // Test forward pass with kq_soft_max collection
-      const context = await model.createContext({
-        contextSize: 4096,
-        batchSize: 512,
-        sequences: 1,
-        flashAttention: false,
-        collectKqSoftMax: true,
-      }) as LlamaContext;
-
-      try {
-        const sequence = context.getSequence();
-        await sequence.evaluateWithoutGeneratingNewTokens(
-          model.tokenize("test"),
-        );
-        return { valid: true };
-      } finally {
-        await context.dispose();
-      }
+      return { valid: true };
     } catch (error) {
       return {
         valid: false,

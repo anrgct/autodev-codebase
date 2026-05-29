@@ -511,9 +511,14 @@ export class CodeIndexServiceFactory {
       )
     }
 
-    if (config.provider === 'qrranker' && config.ggufPath) {
+    if (config.provider === 'qrranker') {
+      const qrrankerPath = config.ggufQrrankerPath || config.ggufPath
+      if (!qrrankerPath) {
+        this.warn("Reranker is enabled with qrranker provider but rerankerGgufQrrankerPath is not configured")
+        return undefined
+      }
       return new QRRankerReranker(
-        config.ggufPath,
+        qrrankerPath,
         this.logger,
         config.batchSize || 10,
         config.concurrency || 2,

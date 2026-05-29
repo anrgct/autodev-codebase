@@ -191,6 +191,7 @@ export interface CodeIndexConfig {
   rerankerOpenAiCompatibleModelId?: string
   rerankerOpenAiCompatibleApiKey?: string
   rerankerGgufPath?: string
+  rerankerGgufQrrankerPath?: string
   rerankerGgufLlmPath?: string
   rerankerLlamaCppServer?: boolean
   rerankerLlamaCppServerBinPath?: string
@@ -276,6 +277,7 @@ export type PreviousConfigSnapshot = {
   rerankerOpenAiCompatibleModelId?: string
   rerankerOpenAiCompatibleApiKey?: string
   rerankerGgufPath?: string
+  rerankerGgufQrrankerPath?: string
   rerankerGgufLlmPath?: string
   rerankerLlamaCppServer?: boolean
   rerankerLlamaCppServerBinPath?: string
@@ -284,6 +286,8 @@ export type PreviousConfigSnapshot = {
   rerankerConcurrency?: number
   rerankerMaxRetries?: number
   rerankerRetryDelayMs?: number
+
+  // Summarizer
   summarizerProvider?: 'ollama' | 'openai-compatible' | 'llamacpp'
   summarizerOllamaBaseUrl?: string
   summarizerOllamaModelId?: string
@@ -376,6 +380,7 @@ export interface ConfigSnapshot {
   rerankerOpenAiCompatibleModelId?: string
   rerankerOpenAiCompatibleApiKey?: string
   rerankerGgufPath?: string
+  rerankerGgufQrrankerPath?: string
   rerankerGgufLlmPath?: string
   rerankerLlamaCppServer?: boolean
   rerankerLlamaCppServerBinPath?: string

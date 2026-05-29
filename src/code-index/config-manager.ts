@@ -595,6 +595,7 @@ export class CodeIndexConfigManager {
         openAiCompatibleModelId: this.config.rerankerOpenAiCompatibleModelId,
         openAiCompatibleApiKey: this.config.rerankerOpenAiCompatibleApiKey,
         ggufPath: this.config.rerankerGgufPath,
+        ggufQrrankerPath: this.config.rerankerGgufQrrankerPath,
         ggufLlmPath: this.config.rerankerGgufLlmPath,
         llamaCppServer: this.config.rerankerLlamaCppServer === true,
         llamaCppServerBinPath: this.config.rerankerLlamaCppServerBinPath,
