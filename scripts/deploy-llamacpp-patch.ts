@@ -103,41 +103,45 @@ function deployCppLayer() {
 
     const destDir = join(PROJECT_ROOT, "node_modules", "@realtimex", `${PLATFORM_PKG_PREFIX}${tag}`, "bins", tag);
 
-    // Remove stale localBuilds (getLlama priority: localBuilds > prebuilt)
-    const localBuildsDir = join(
-        PROJECT_ROOT, "node_modules", "@realtimex", "node-llama-cpp", "llama", "localBuilds",
+    // Also copy the binary + metadata + dylibs to dist/bins/<tag>/ and
+    // dist/bins/<folderName>/ paths.
+    // 
+    // Resolution logic in node-llama-cpp:
+    //   getPrebuiltBinaryPath first checks dist/bins/<folderName>/, then platform-pkg/bins/<folderName>/
+    //   By default (existingPrebuiltBinaryMustMatchBuildOptions=false), folderName = withoutCustomCmakeOptions = tag
+    //   So it looks for: dist/bins/mac-arm64-metal/llama-addon.node
+    const distBinsDir = join(
+        PROJECT_ROOT, "node_modules", "@realtimex", "node-llama-cpp", "dist", "bins",
     );
-    if (existsSync(localBuildsDir)) {
-        rmSync(localBuildsDir, { recursive: true, force: true });
-        console.log("[deploy] C++ layer: removed stale localBuilds cache");
-    }
 
-    mkdirSync(destDir, { recursive: true });
-
-    const files: string[] = ["llama-addon.node"];
-
-    // Extra dylibs that the official prebuilt ships as .so (Mach-O bundle),
-    // which can't be dlopen'd by a shared library.
-    for (const dylib of ["libggml-cpu.dylib", "libggml-blas.dylib", "libggml-metal.dylib"]) {
-        if (existsSync(join(srcDir, dylib))) {
-            files.push(dylib);
+    function copyAllToDir(srcDir: string, targetDir: string) {
+        mkdirSync(targetDir, { recursive: true });
+        const items: string[] = ["llama-addon.node", "_nlcBuildMetadata.json"];
+        // Copy ALL dylibs (llama-addon.node needs libllama-common.dylib etc. at @rpath)
+        if (existsSync(srcDir)) {
+            for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+                if (entry.isFile() && entry.name.endsWith(".dylib")) {
+                    items.push(entry.name);
+                }
+            }
         }
-    }
-
-    // Hash-versioned dylibs (e.g. libllama.metal.b8390.2da1n284.dylib)
-    for (const file of readdirSync(srcDir)) {
-        if (/^libllama\.metal\..+\.dylib$/.test(file) ||
-            /^libggml\.metal\..+\.dylib$/.test(file)) {
-            files.push(file);
+        let c = 0;
+        for (const file of [...new Set(items)]) {
+            const src = join(srcDir, file);
+            if (!existsSync(src)) continue;
+            copyFileSync(src, join(targetDir, file));
+            c++;
         }
+        return c;
     }
 
-    let count = 0;
-    for (const file of [...new Set(files)]) {
-        copyFileSync(join(srcDir, file), join(destDir, file));
-        count++;
-    }
-    console.log(`[deploy] C++ layer: ${count} files → ${destDir}`);
+    // Priority 1 → dist/bins/<tag>/: checked FIRST by getPrebuiltBinaryPath -> resolvePrebuiltBinaryPath
+    copyAllToDir(srcDir, join(distBinsDir, tag));
+    console.log("[deploy] C++ layer: deployed to dist/bins/" + tag + "/");
+
+    // Priority 2 → platform-pkg/bins/<tag>/: checked SECOND via getPrebuiltBinariesPackageDirectoryForBuildOptions
+    copyAllToDir(srcDir, destDir);
+    console.log("[deploy] C++ layer: deployed to " + destDir);
 }
 
 // ---- Main ----

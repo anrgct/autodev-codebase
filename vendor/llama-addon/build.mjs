@@ -98,7 +98,7 @@ function prePass_patchAddonContext() {
     let c = readFileSync(addonCpp, "utf8");
     if (c.includes("cpu_get_num_math")) {
         log("Pre-pass: fixing cpu_get_num_math references (removed in newer llama.cpp)...");
-        c = c.replace(/cpu_get_num_math\(\)/g, "(int32_t)std::thread::hardware_concurrency()");
+        c = c.replace(/(common_)?cpu_get_num_math\(\)/g, "(int32_t)std::thread::hardware_concurrency()");
         writeFileSync(addonCpp, c);
         log("Pre-pass: AddonContext.cpp patched");
     } else {
@@ -239,37 +239,18 @@ function collectBinary(tag) {
 
 function collectDylibs(binaryPath, outputDir) {
     const binDir = join(dirname(binaryPath), "bin");
-
-    const extraDylibs = [
-        "libggml-cpu.dylib",
-        "libggml-blas.dylib",
-        "libggml-metal.dylib",
-    ];
-
-    // Try bin/ subdirectory first, then sibling directory
     const searchDirs = [binDir, dirname(binaryPath)];
 
-    for (const dylib of extraDylibs) {
-        for (const dir of searchDirs) {
-            const src = join(dir, dylib);
-            if (existsSync(src)) {
-                copyFileSync(src, join(outputDir, dylib));
-                log(`Copied ${dylib} to vendor`);
-                break;
-            }
-        }
-    }
-
-    // Hash-versioned Metal dylibs
-    const hashPattern = /^lib(llama|ggml)\.metal\..+\.dylib$/;
+    const seen = new Set();
     for (const dir of searchDirs) {
         if (!existsSync(dir)) continue;
         try {
             for (const entry of readdirSync(dir)) {
-                if (hashPattern.test(entry)) {
-                    copyFileSync(join(dir, entry), join(outputDir, entry));
-                    log(`Copied ${entry} to vendor`);
-                }
+                if (!entry.endsWith(".dylib")) continue;
+                if (seen.has(entry)) continue;
+                seen.add(entry);
+                copyFileSync(join(dir, entry), join(outputDir, entry));
+                log(`Copied ${entry} to vendor`);
             }
         } catch {
             // skip
@@ -350,10 +331,32 @@ async function main() {
     mkdirSync(outputDir, { recursive: true });
     copyFileSync(binary, join(outputDir, "llama-addon.node"));
 
+    // Also copy build metadata (_nlcBuildMetadata.json) from the Release dir
+    const binDir = dirname(binary);
+    const metaSrc = join(binDir, "_nlcBuildMetadata.json");
+    if (existsSync(metaSrc)) {
+        copyFileSync(metaSrc, join(outputDir, "_nlcBuildMetadata.json"));
+        log("Copied _nlcBuildMetadata.json to vendor");
+    }
+
     const stats = statSync(join(outputDir, "llama-addon.node"));
     log(`Done! Binary copied to: ${join(outputDir, "llama-addon.node")} (${(stats.size / 1024).toFixed(1)} KB)`);
 
     collectDylibs(binary, outputDir);
+
+    // Auto-deploy after build: copy vendor → node_modules loading paths
+    try {
+        const deployScript = join(__dirname, "../../scripts/deploy-llamacpp-patch.ts");
+        if (existsSync(deployScript)) {
+            log("Running deploy script...");
+            execSync(`npx tsx "${deployScript}"`, { cwd: PROJECT_ROOT, stdio: "inherit" });
+            log("Deploy complete.");
+        } else {
+            log("WARNING: deploy script not found, skipping auto-deploy");
+        }
+    } catch (err) {
+        log("WARNING: auto-deploy failed: " + err.message);
+    }
 }
 
 main().catch((err) => {

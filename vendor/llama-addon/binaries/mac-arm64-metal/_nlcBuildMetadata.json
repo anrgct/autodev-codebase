@@ -1,0 +1,1 @@
+{"buildOptions":{"customCmakeOptions":{"GGML_NATIVE":"OFF","GGML_CPU_ARM_ARCH":"armv8.6-a+dotprod+i8mm"},"progressLogs":true,"platform":"mac","platformInfo":{"name":"macOS","version":"25.5.0"},"arch":"arm64","gpu":"metal","llamaCpp":{"repo":"ggml-org/llama.cpp","release":"b9370"}}}

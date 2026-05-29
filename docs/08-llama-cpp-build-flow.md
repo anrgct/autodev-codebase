@@ -49,7 +49,7 @@ npm install
 | `vendor/node-llama-cpp/.version` | 基线版本（如 `0.163.0`），deploy 时做版本比对 |
 | `scripts/deploy-llamacpp-patch.ts` | 部署脚本：JS 覆盖 + C++ 二进制复制 + 版本检查 |
 | `vendor/llama-addon/binaries/<platform>/llama-addon.node` | 预编译 C++ addon |
-| `vendor/llama-addon/binaries/<platform>/libggml-*.dylib` | 预编译 Metal dylib（含 hash 版本） |
+| `vendor/llama-addon/binaries/<platform>/*.dylib` | 全部 dylib（含 `libllama-common.dylib`、`libggml-base.dylib`） |
 
 ### 修改 JS 层的工作流
 
@@ -139,7 +139,7 @@ npm run build:llamacpp
      b) localBuilds/<variant>/
      c) find 整个 node_modules/node-llama-cpp
  12. 复制 .node → vendor/llama-addon/binaries/<platform>/
- 13. 复制 dylib（含 hash 版本）→ 同上
+ 13. 复制全部 `.dylib`（包括 `libllama-common.dylib`、`libggml-base.dylib` 等）→ 同上
 ```
 
 ### 步骤详解
@@ -185,11 +185,15 @@ npm run build:llamacpp
 npx tsx scripts/deploy-llamacpp-patch.ts
 ```
 
-该脚本：
-1. 检测平台 tag
-2. 清理 stale `localBuilds` 缓存（`getLlama` 优先加载 localBuilds，需清除避免覆盖 patched 版本）
-3. 复制 `llama-addon.node` + 额外 dylib（`libggml-cpu/blas/metal`）
-4. 复制 hash 版 dylib（正则匹配 `libllama.metal.*.dylib`、`libggml.metal.*.dylib`）
+该脚本从 `vendor/llama-addon/binaries/<tag>/` 复制到两个路径（`getPrebuiltBinaryPath` 查找顺序）：
+1. `dist/bins/<tag>/` — `getLlama` 内部第一优先 prebuilt 路径
+2. 平台包 `<platform-pkg>/bins/<tag>/` — 第二优先（npm 官方 prebuilt 位置）
+
+每次复制包含：
+- `llama-addon.node` + `_nlcBuildMetadata.json`（构建元数据，`getPrebuiltBinaryBuildMetadata` 需要）
+- 全部 `.dylib`（`llama-addon.node` 的 `@rpath` 依赖 `libllama-common.dylib` 等，缺一不可）
+
+> 不再清理 `localBuilds`。`getLlama` 先查 prebuilt，加载失败才回退到 localBuild。保留 localBuilds 作为安全 fallback，且避免首次运行时触发从源码重新编译（耗时约 5 分钟）。
 
 ### 设计要点
 
@@ -208,9 +212,13 @@ Pass 1 用原始 AddonContext 编译（`embd_layer` 字段尚不存在于上游 
 
 官方预编译包中的 `.so` 文件是 Mach-O bundle 格式，不能作为 shared library 被 `dlopen`。源码编译产生的 `.dylib` 文件名包含 cmake-options hash（如 `libllama.metal.b8390.2da1n284.dylib`），`llama-addon.node` 在链接时依赖这些精确的文件名。详见 `docs/plans/260523-qrranker-ubatch-overflow-fix.md`。
 
-**为什么 `deploy` 脚本要清 `localBuilds`？**
+**为什么不再清理 `localBuilds`？**
 
-`getLlama()` 的加载优先级是 `localBuilds > 预编译包`。如果 `localBuilds/` 中有未打补丁的编译产物，会覆盖 `deploy` 脚本部署的 patched 版本，导致功能缺失（如 `getKqSoftMaxShape is not a function`）。
+因为 `getLlama` 的 `loadExistingLlamaBinary` 函数先查 **prebuilt 路径**，再查 **localBuilds**。只要 `dist/bins/<tag>/` 有完整的 `.node` + metadata + dylib，就会走 prebuilt 路径。localBuilds 仅作为 `prebuilt` 加载失败时的回退。
+
+保留 localBuilds 的好处：
+1. 首次运行时立即使用，无需重新编译（省 5 分钟）
+2. 如果 `build:llamacpp` 后忘记 deploy，localBuilds 仍能兜底
 
 ---
 
