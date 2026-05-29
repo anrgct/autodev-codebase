@@ -16,6 +16,8 @@ export class LlamaCppLLMReranker implements IReranker {
   private readonly concurrency: number
   private readonly maxRetries: number
   private readonly retryDelayMs: number
+  private _contexts: import("@realtimex/node-llama-cpp").LlamaContext[] = []
+  private _contextPoolPromise: Promise<void> | null = null
 
   constructor(
     model: LlamaModel,
@@ -33,13 +35,35 @@ export class LlamaCppLLMReranker implements IReranker {
     this.retryDelayMs = retryDelayMs
   }
 
+  private async _ensureContexts(): Promise<typeof this._contexts> {
+    if (this._contexts.length > 0) return this._contexts
+    if (this._contextPoolPromise) {
+      await this._contextPoolPromise
+      return this._contexts
+    }
+
+    this._contextPoolPromise = (async () => {
+      this.logger?.debug(`[LlamaCppLLMReranker] Creating ${this.concurrency} context(s) for pool`)
+      this._contexts = await Promise.all(
+        Array.from({ length: this.concurrency }, () =>
+          this.model.createContext({ contextSize: 32768 })
+        )
+      )
+      this.logger?.info(`[LlamaCppLLMReranker] Created ${this.concurrency} context(s) for pool`)
+    })()
+
+    await this._contextPoolPromise
+    return this._contexts
+  }
+
   async rerank(query: string, candidates: RerankerCandidate[]): Promise<RerankerResult[]> {
     if (candidates.length === 0) return []
 
+    const contexts = await this._ensureContexts()
+
     // Single batch — fast path without batching machinery
     if (candidates.length <= this.batchSize) {
-      const context = await this.model.createContext({ contextSize: 32768 })
-      return this.rerankSingleBatch(query, candidates, context)
+      return this.rerankSingleBatch(query, candidates, contexts[0])
     }
 
     const batches: RerankerCandidate[][] = []
@@ -50,12 +74,11 @@ export class LlamaCppLLMReranker implements IReranker {
     const allResults: RerankerResult[] = []
 
     // Process batches with concurrency control
-    // Each batch creates its own context, verified thread-safe experimentally.
     for (let i = 0; i < batches.length; i += this.concurrency) {
       const batchGroup = batches.slice(i, i + this.concurrency)
       const groupResults = await Promise.all(
         batchGroup.map((batch, j) =>
-          this.processBatchWithRetry(query, batch, i + j, batches.length)
+          this.processBatchWithRetry(query, batch, i + j, batches.length, contexts[j % contexts.length])
         )
       )
       for (const results of groupResults) {
@@ -72,12 +95,12 @@ export class LlamaCppLLMReranker implements IReranker {
     batch: RerankerCandidate[],
     batchIndex: number,
     totalBatches: number,
+    context: import("@realtimex/node-llama-cpp").LlamaContext,
   ): Promise<RerankerResult[]> {
     let attempt = 0
 
     while (attempt < this.maxRetries) {
       try {
-        const context = await this.model.createContext({ contextSize: 32768 })
         const results = await this.rerankSingleBatch(query, batch, context)
         this.logger?.info(
           `[LlamaCppLLMReranker] Progress: ${batchIndex + 1}/${totalBatches} batches completed`,
@@ -243,12 +266,12 @@ ${this.buildExampleScores(candidates.length)}`
 
   async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
     try {
-      const context = await this.model.createContext({ contextSize: 32768 })
-      const sequence = context.getSequence()
+      const contexts = await this._ensureContexts()
+      const sequence = contexts[0].getSequence()
       const chatWrapper = new QwenChatWrapper({
-      variation: "3.5",
-      thoughts: "discourage",
-    })
+        variation: "3.5",
+        thoughts: "discourage",
+      })
       const session = new LlamaChatSession({ contextSequence: sequence, chatWrapper })
       await session.prompt("test", {
         maxTokens: 10,

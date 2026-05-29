@@ -118,8 +118,7 @@ export class LlamaCppLLMHighlighter implements IHighlighter {
       // 4. 构建 HighlightResult
       return this._buildResult(codeLines, startLine, range, options)
     } finally {
-      // 释放 context（不保留状态）
-      // LlamaContext 通过 GC 回收，无需显式释放
+      await context.dispose()
     }
   }
 
@@ -325,14 +324,18 @@ RESULT:`
 
       const model = await this._ensureModel()
       const context = await model.createContext({ contextSize: 32768 })
-      const sequence = context.getSequence()
-      const chatWrapper = new QwenChatWrapper({
-        variation: "3.5",
-        thoughts: "discourage",
-      })
-      const session = new LlamaChatSession({ contextSequence: sequence, chatWrapper })
-      await session.prompt("Say 'ok'", { maxTokens: 5 })
-      return { valid: true }
+      try {
+        const sequence = context.getSequence()
+        const chatWrapper = new QwenChatWrapper({
+          variation: "3.5",
+          thoughts: "discourage",
+        })
+        const session = new LlamaChatSession({ contextSequence: sequence, chatWrapper })
+        await session.prompt("Say 'ok'", { maxTokens: 5 })
+        return { valid: true }
+      } finally {
+        await context.dispose()
+      }
     } catch (error) {
       return {
         valid: false,

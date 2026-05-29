@@ -37,6 +37,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   private readonly _useChatTemplate: boolean
   private readonly logger?: LoggerLike
   private _model: LlamaModel | null = null
+  private _embeddingContexts: LlamaEmbeddingContext[] = []
   private _loadingPromise: Promise<void> | null = null
   private _resolvedPoolingLayer: number | null = null  // cached resolved layer index
   private _lateChunkingNoopDetected = false  // detected that per-token embeddings are all identical (pooling_type != NONE)
@@ -130,6 +131,20 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
         gpuLayers: this.gpuLayers,
       })
       this._contextSize = this._model.trainContextSize ?? 4096
+
+      // 预创建连接池：每个并发槽位一个独立 embedding context
+      const embdLayer = this._resolveLayer(this._model)
+      this._embeddingContexts = await Promise.all(
+        Array.from({ length: this.concurrency }, () =>
+          this._model!.createEmbeddingContext({
+            embdLayer,
+            batchSize: this._contextSize,
+          } as any)
+        )
+      )
+      this.logger?.info(
+        `[LlamaCppLlmEmbedder] Created ${this.concurrency} embedding context(s) for pool, layer=${embdLayer}`
+      )
       this.logger?.info(
         `[LlamaCppLlmEmbedder] Model loaded, context size: ${this._contextSize} tokens`
       )
@@ -193,21 +208,17 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
-          try {
-            const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
+          const ctx = this._embeddingContexts[groupIdx % this._embeddingContexts.length]
+          const perTokenEmbs = await ctx.getEmbeddingsForTokens(text)
 
-            if (!perTokenEmbs || perTokenEmbs.length === 0) {
-              throw new Error(
-                `[LlamaCppLlmEmbedder] getEmbeddingsForTokens returned empty for text: "${text.slice(0, 50)}"`,
-              )
-            }
-
-            const lastEmb = perTokenEmbs[perTokenEmbs.length - 1]
-            return { index: globalIdx, embedding: this._l2Normalize(lastEmb) }
-          } finally {
-            await embedContext.dispose()
+          if (!perTokenEmbs || perTokenEmbs.length === 0) {
+            throw new Error(
+              `[LlamaCppLlmEmbedder] getEmbeddingsForTokens returned empty for text: "${text.slice(0, 50)}"`,
+            )
           }
+
+          const lastEmb = perTokenEmbs[perTokenEmbs.length - 1]
+          return { index: globalIdx, embedding: this._l2Normalize(lastEmb) }
         }),
       )
 
@@ -340,59 +351,54 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     }
 
     // Step 4: forward pass 获取 per-token hidden states
-    const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
-    try {
-      let perTokenEmbs = await embedContext.getEmbeddingsForTokens(bodyText)
+    let perTokenEmbs = await this._embeddingContexts[0].getEmbeddingsForTokens(bodyText)
 
-      // Check if per-token embeddings are unique (late-chunking prerequisite).
-      // If the model's GGUF pooling_type is not NONE (e.g. MEAN, the default for BERT
-      // embedding models like jina-v5), llama.cpp returns the same pooled vector for
-      // every token position, making late-chunking a no-op.
-      if (!this._lateChunkingNoopDetected) {
-        this._checkPerTokenUniqueness(perTokenEmbs)
-      }
-
-      if (!perTokenEmbs || perTokenEmbs.length === 0) {
-        throw new Error("[LlamaCppLlmEmbedder] Late chunking: empty per-token embeddings")
-      }
-
-      if (perTokenEmbs.length !== fullTokens.length) {
-        // getEmbeddingsForTokens() 内部会对 BERT 模型（WPM vocab）自动 prepend [CLS] token，
-        // 而 model.tokenize() 默认不加特殊 token。这导致 embedding 数比 token 数多 1。
-        // 此时跳过第一个 embedding（CLS）即可对齐。
-        if (perTokenEmbs.length === fullTokens.length + 1) {
-          perTokenEmbs = perTokenEmbs.slice(1)
-        } else {
-          throw new Error(
-            `[LlamaCppLlmEmbedder] Late chunking: embedding count (${perTokenEmbs.length}) ` +
-              `!= token count (${fullTokens.length})`,
-          )
-        }
-      }
-
-      // Per-sequence centering to suppress DC offset
-      // Note: disabled by default as it causes query/document embedding space mismatch.
-      // Uncomment to enable if queries also use mean pooling.
-      // this._centerPerSequence(perTokenEmbs)
-
-      // Step 5: 按 span mean pool + L2 normalize。
-      // Mean pool 对 BPE span 偏移更鲁棒，且降低了后续 chunk 对当前 chunk
-      // 的 attention 影响——每个 token 平等投票，last-token 不再被后续内容"收割"。
-      return spans.map(({ start, end }) => {
-        const clampedEnd = Math.min(end, perTokenEmbs.length)
-        const clampedStart = Math.max(start, 0)
-        if (clampedEnd <= clampedStart) return this._l2Normalize(perTokenEmbs[0])
-        const dim = perTokenEmbs[0].length
-        const pooled = new Array(dim).fill(0)
-        for (let i = clampedStart; i < clampedEnd; i++) {
-          for (let d = 0; d < dim; d++) pooled[d] += perTokenEmbs[i][d]
-        }
-        for (let d = 0; d < dim; d++) pooled[d] /= (clampedEnd - clampedStart)
-        return this._l2Normalize(pooled)
-      })
-    } finally {
-      await embedContext.dispose()
+    // Check if per-token embeddings are unique (late-chunking prerequisite).
+    // If the model's GGUF pooling_type is not NONE (e.g. MEAN, the default for BERT
+    // embedding models like jina-v5), llama.cpp returns the same pooled vector for
+    // every token position, making late-chunking a no-op.
+    if (!this._lateChunkingNoopDetected) {
+      this._checkPerTokenUniqueness(perTokenEmbs)
     }
+
+    if (!perTokenEmbs || perTokenEmbs.length === 0) {
+      throw new Error("[LlamaCppLlmEmbedder] Late chunking: empty per-token embeddings")
+    }
+
+    if (perTokenEmbs.length !== fullTokens.length) {
+      // getEmbeddingsForTokens() 内部会对 BERT 模型（WPM vocab）自动 prepend [CLS] token，
+      // 而 model.tokenize() 默认不加特殊 token。这导致 embedding 数比 token 数多 1。
+      // 此时跳过第一个 embedding（CLS）即可对齐。
+      if (perTokenEmbs.length === fullTokens.length + 1) {
+        perTokenEmbs = perTokenEmbs.slice(1)
+      } else {
+        throw new Error(
+          `[LlamaCppLlmEmbedder] Late chunking: embedding count (${perTokenEmbs.length}) ` +
+            `!= token count (${fullTokens.length})`,
+        )
+      }
+    }
+
+    // Per-sequence centering to suppress DC offset
+    // Note: disabled by default as it causes query/document embedding space mismatch.
+    // Uncomment to enable if queries also use mean pooling.
+    // this._centerPerSequence(perTokenEmbs)
+
+    // Step 5: 按 span mean pool + L2 normalize。
+    // Mean pool 对 BPE span 偏移更鲁棒，且降低了后续 chunk 对当前 chunk
+    // 的 attention 影响——每个 token 平等投票，last-token 不再被后续内容"收割"。
+    return spans.map(({ start, end }) => {
+      const clampedEnd = Math.min(end, perTokenEmbs.length)
+      const clampedStart = Math.max(start, 0)
+      if (clampedEnd <= clampedStart) return this._l2Normalize(perTokenEmbs[0])
+      const dim = perTokenEmbs[0].length
+      const pooled = new Array(dim).fill(0)
+      for (let i = clampedStart; i < clampedEnd; i++) {
+        for (let d = 0; d < dim; d++) pooled[d] += perTokenEmbs[i][d]
+      }
+      for (let d = 0; d < dim; d++) pooled[d] /= (clampedEnd - clampedStart)
+      return this._l2Normalize(pooled)
+    })
   }
 
   /**
@@ -565,32 +571,28 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
-          try {
-            const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
+          const ctx = this._embeddingContexts[groupIdx % this._embeddingContexts.length]
+          const perTokenEmbs = await ctx.getEmbeddingsForTokens(text)
 
-            if (!perTokenEmbs || perTokenEmbs.length === 0) {
-              throw new Error(
-                `[LlamaCppLlmEmbedder] getEmbeddingsForTokens returned empty for text: "${text.slice(0, 50)}"`,
-              )
-            }
-
-            // Mean pool across all tokens
-            const dim = perTokenEmbs[0].length
-            const pooled = new Array(dim).fill(0)
-            for (const emb of perTokenEmbs) {
-              for (let j = 0; j < dim; j++) {
-                pooled[j] += emb[j]
-              }
-            }
-            for (let j = 0; j < dim; j++) {
-              pooled[j] /= perTokenEmbs.length
-            }
-
-            return { index: globalIdx, embedding: this._l2Normalize(pooled) }
-          } finally {
-            await embedContext.dispose()
+          if (!perTokenEmbs || perTokenEmbs.length === 0) {
+            throw new Error(
+              `[LlamaCppLlmEmbedder] getEmbeddingsForTokens returned empty for text: "${text.slice(0, 50)}"`,
+            )
           }
+
+          // Mean pool across all tokens
+          const dim = perTokenEmbs[0].length
+          const pooled = new Array(dim).fill(0)
+          for (const emb of perTokenEmbs) {
+            for (let j = 0; j < dim; j++) {
+              pooled[j] += emb[j]
+            }
+          }
+          for (let j = 0; j < dim; j++) {
+            pooled[j] /= perTokenEmbs.length
+          }
+
+          return { index: globalIdx, embedding: this._l2Normalize(pooled) }
         }),
       )
 
@@ -644,66 +646,62 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const groupResults = await Promise.all(
         group.map(async (text, groupIdx) => {
           const globalIdx = i + groupIdx
-          const embedContext = await model.createEmbeddingContext({ embdLayer: this._resolveLayer(model), batchSize: this._contextSize } as any)
-          try {
-            const perTokenEmbs = await embedContext.getEmbeddingsForTokens(text)
+          const ctx = this._embeddingContexts[groupIdx % this._embeddingContexts.length]
+          const perTokenEmbs = await ctx.getEmbeddingsForTokens(text)
 
-            if (!perTokenEmbs || perTokenEmbs.length === 0) {
-              throw new Error(
-                `[LlamaCppLlmEmbedder] getEmbeddingsForTokens returned empty`,
-              )
-            }
-
-            const nTokens = perTokenEmbs.length
-            const dim = perTokenEmbs[0].length
-
-            // 单 token 场景：退化为 last-token（与自身相似度无意义）
-            if (nTokens <= 1) {
-              return {
-                index: globalIdx,
-                embedding: this._l2Normalize([...perTokenEmbs[0]]),
-              }
-            }
-
-            // Step 1: L2 归一化所有 token hidden states（使相似度计算稳定）
-            const normalized: number[][] = perTokenEmbs.map((emb) => {
-              const v = [...emb]
-              return this._l2Normalize(v)
-            })
-
-            // Step 2: 计算最后 token 与所有 token 的余弦相似度（已 L2 归一化，直接点积）
-            const lastEmb = normalized[nTokens - 1]
-            const similarities = new Array(nTokens)
-            for (let t = 0; t < nTokens; t++) {
-              let dot = 0
-              for (let d = 0; d < dim; d++) {
-                dot += lastEmb[d] * normalized[t][d]
-              }
-              similarities[t] = dot
-            }
-
-            // Step 3: Softmax + temperature 得到注意力权重
-            const maxSim = Math.max(...similarities)
-            const expWeights = similarities.map((s) =>
-              Math.exp((s - maxSim) / QR_TEMPERATURE),
+          if (!perTokenEmbs || perTokenEmbs.length === 0) {
+            throw new Error(
+              `[LlamaCppLlmEmbedder] getEmbeddingsForTokens returned empty`,
             )
-            const expSum = expWeights.reduce((a, b) => a + b, 0)
-            const weights = expWeights.map((w) => w / expSum)
-
-            // Step 4: 加权 mean pool（使用原始未归一化的 hidden states）
-            const pooled = new Array(dim).fill(0)
-            for (let t = 0; t < nTokens; t++) {
-              const w = weights[t]
-              const emb = perTokenEmbs[t]
-              for (let d = 0; d < dim; d++) {
-                pooled[d] += emb[d] * w
-              }
-            }
-
-            return { index: globalIdx, embedding: this._l2Normalize(pooled) }
-          } finally {
-            await embedContext.dispose()
           }
+
+          const nTokens = perTokenEmbs.length
+          const dim = perTokenEmbs[0].length
+
+          // 单 token 场景：退化为 last-token（与自身相似度无意义）
+          if (nTokens <= 1) {
+            return {
+              index: globalIdx,
+              embedding: this._l2Normalize([...perTokenEmbs[0]]),
+            }
+          }
+
+          // Step 1: L2 归一化所有 token hidden states（使相似度计算稳定）
+          const normalized: number[][] = perTokenEmbs.map((emb) => {
+            const v = [...emb]
+            return this._l2Normalize(v)
+          })
+
+          // Step 2: 计算最后 token 与所有 token 的余弦相似度（已 L2 归一化，直接点积）
+          const lastEmb = normalized[nTokens - 1]
+          const similarities = new Array(nTokens)
+          for (let t = 0; t < nTokens; t++) {
+            let dot = 0
+            for (let d = 0; d < dim; d++) {
+              dot += lastEmb[d] * normalized[t][d]
+            }
+            similarities[t] = dot
+          }
+
+          // Step 3: Softmax + temperature 得到注意力权重
+          const maxSim = Math.max(...similarities)
+          const expWeights = similarities.map((s) =>
+            Math.exp((s - maxSim) / QR_TEMPERATURE),
+          )
+          const expSum = expWeights.reduce((a, b) => a + b, 0)
+          const weights = expWeights.map((w) => w / expSum)
+
+          // Step 4: 加权 mean pool（使用原始未归一化的 hidden states）
+          const pooled = new Array(dim).fill(0)
+          for (let t = 0; t < nTokens; t++) {
+            const w = weights[t]
+            const emb = perTokenEmbs[t]
+            for (let d = 0; d < dim; d++) {
+              pooled[d] += emb[d] * w
+            }
+          }
+
+          return { index: globalIdx, embedding: this._l2Normalize(pooled) }
         }),
       )
 
@@ -764,25 +762,20 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       }
 
       await this._ensureModel()
-      if (!this._model) {
+      if (!this._model || this._embeddingContexts.length === 0) {
         return { valid: false, error: "Failed to load LLM model" }
       }
 
       // 尝试生成测试 embedding
-      const embedContext = await this._model.createEmbeddingContext({ embdLayer: this._resolveLayer(this._model), batchSize: this._contextSize } as any)
-      try {
-        const perTokenEmbs = await embedContext.getEmbeddingsForTokens("test")
-        if (!perTokenEmbs || perTokenEmbs.length === 0) {
-          return {
-            valid: false,
-            error:
-              "LLM model loaded but failed to generate test embedding. " +
-              "The model may not support hidden state extraction. " +
-              "Try a different model or verify GGUF metadata.",
-          }
+      const perTokenEmbs = await this._embeddingContexts[0].getEmbeddingsForTokens("test")
+      if (!perTokenEmbs || perTokenEmbs.length === 0) {
+        return {
+          valid: false,
+          error:
+            "LLM model loaded but failed to generate test embedding. " +
+            "The model may not support hidden state extraction. " +
+            "Try a different model or verify GGUF metadata.",
         }
-      } finally {
-        await embedContext.dispose()
       }
 
       return { valid: true }
