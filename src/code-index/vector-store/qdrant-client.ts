@@ -482,6 +482,20 @@ export class QdrantVectorStore implements IVectorStore {
           // Generate deterministic ID based on segmentHash
           const pointId = uuidv5(segmentHash, QDRANT_CODE_BLOCK_NAMESPACE)
 
+          // Validate vector before wrapping
+          if (!point.vector || !Array.isArray(point.vector) || point.vector.length === 0) {
+            throw new Error(
+              `Invalid vector for point ${pointId}: ${typeof point.vector}, ` +
+              `length=${(point.vector as any)?.length}, isArray=${Array.isArray(point.vector)}`
+            )
+          }
+          if (point.vector.some(v => typeof v !== 'number' || !Number.isFinite(v))) {
+            const badIdx = point.vector.findIndex(v => typeof v !== 'number' || !Number.isFinite(v))
+            throw new Error(
+              `Non-finite value in vector for point ${pointId}: index ${badIdx}, value=${point.vector[badIdx]}`
+            )
+          }
+
           return {
             ...point,
             id: pointId,
@@ -501,6 +515,19 @@ export class QdrantVectorStore implements IVectorStore {
         }
         return point
       })
+
+      // Debug: log first point structure for diagnosis
+      if (processedPoints.length > 0) {
+        const sample = processedPoints[0]
+        const vectorKeys = Object.keys(sample.vector as Record<string, unknown>)
+        console.log(
+          `[QdrantVectorStore] Upserting ${processedPoints.length} points. ` +
+          `Sample point id=${String(sample.id).slice(0, 16)}..., ` +
+          `vector keys=[${vectorKeys.join(',')}], ` +
+          `vector[\"\"] length=${((sample.vector as any)?.[""] as number[])?.length}, ` +
+          `bm25 text length=${String((sample.vector as any)?.["bm25"]?.text || '').length}`
+        )
+      }
 
       await this.client.upsert(this.collectionName, {
         points: processedPoints,

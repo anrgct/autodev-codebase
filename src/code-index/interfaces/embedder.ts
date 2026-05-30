@@ -38,6 +38,12 @@ export interface IEmbedder {
    * Default false. Only effective for LLM-based embedders (llamacpp-llm).
    */
   enableLlmPrefix?: boolean
+
+  /**
+   * Optional cleanup of allocated resources (e.g., GPU models, embedding contexts).
+   * Called when the embedder is no longer needed to free VRAM and memory.
+   */
+  dispose?(): Promise<void>
 }
 
 export interface EmbeddingResponse {

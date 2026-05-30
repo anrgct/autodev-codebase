@@ -312,7 +312,11 @@ export class CodeIndexServiceFactory {
       } else {
         // Layer 3: Auto-detect via embedder
         const embedder = this.createEmbedder()
-        vectorSize = await this._detectVectorDimension(embedder)
+        try {
+          vectorSize = await this._detectVectorDimension(embedder)
+        } finally {
+          await embedder.dispose?.()
+        }
 
         // Check for dimension conflict if collection exists with different size
         if (vectorSize && vectorSize > 0 && existingVectorSize && existingVectorSize > 0

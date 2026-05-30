@@ -46,7 +46,8 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
    * 模型的最大 context size（token 数），在 _ensureModel() 中从模型元数据自动获取。
    * 用于 createEmbeddingContext 的 batchSize，确保能一次性处理所有输入 token。
    */
-  private _contextSize: number = 0  // will be set from model metadata in _ensureModel()
+  private _contextSize: number = 0  // model.trainContextSize, from GGUF metadata
+  private _embeddingContextSize: number = 0  // actual context size allocated in the embedding context
 
   constructor(
     modelPath: string,
@@ -131,22 +132,29 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
         gpuLayers: this.gpuLayers,
       })
       this._contextSize = this._model.trainContextSize ?? 4096
-
-      // 预创建连接池：每个并发槽位一个独立 embedding context
       const embdLayer = this._resolveLayer(this._model)
+
+      // batchSize 控制单次前向传播的并行 token 数。
+      // 模型仅 80M 参数，batchSize=8192 足够快。
+      // 传过大 batchSize 会让库的显存估算过高，导致 contextSize 被过度裁剪。
+      const batchSize = Math.min(this._contextSize, 8192)
+
       this._embeddingContexts = await Promise.all(
         Array.from({ length: this.concurrency }, () =>
           this._model!.createEmbeddingContext({
             embdLayer,
-            batchSize: this._contextSize,
+            batchSize,
           } as any)
         )
       )
+      // 读取实际分配到的 context size（库自动按显存适配）
+      this._embeddingContextSize = (this._embeddingContexts[0] as any)?._llamaContext?.contextSize ?? this._contextSize
       this.logger?.info(
-        `[LlamaCppLlmEmbedder] Created ${this.concurrency} embedding context(s) for pool, layer=${embdLayer}`
+        `[LlamaCppLlmEmbedder] Created ${this.concurrency} embedding context(s) for pool, layer=${embdLayer}` +
+        ` (ctx=${this._embeddingContextSize}, batchSize=${batchSize})`,
       )
       this.logger?.info(
-        `[LlamaCppLlmEmbedder] Model loaded, context size: ${this._contextSize} tokens`
+        `[LlamaCppLlmEmbedder] Model loaded`
       )
       this.logger?.debug(`[LlamaCppLlmEmbedder] LLM model loaded: ${this.modelPath}`)
     })()
@@ -240,6 +248,12 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     const SEPARATOR = "\n\n"
     const documentPrefix: string | undefined = undefined  // instruction prefixes ineffective for MiniCPM hidden states
 
+    // 如果已经检测到模型不支持 per-token embedding（所有 hidden state 全同），
+    // 直接走 last-token 逐块嵌入，避免浪费子批次拆分和批量 forward pass。
+    if (this._lateChunkingNoopDetected) {
+      return this._lastTokenCreateEmbeddings(model, texts)
+    }
+
     try {
       // Tokenize each chunk to estimate total token count
       const sepTokens = this._tokenizeToNumbers(model.tokenize(SEPARATOR))
@@ -252,10 +266,10 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       const totalTokens = prefixTokens.length +
         chunkTokenSeqs.reduce((sum, t) => sum + t.length, 0) +
         sepTokens.length * (texts.length - 1)
-      const contextSize = this._contextSize
+      const contextSize = this._embeddingContextSize > 0 ? this._embeddingContextSize : this._contextSize
 
-      // Safety margin: reserve 128 tokens for separator/prefix boundary effects
-      const maxBatchTokens = Math.max(contextSize - 128, 512)
+      // 用宽松的安全余量做初始估算，Phase 2 的精确 tokenize 验证会兜底
+      const maxBatchTokens = Math.max(Math.floor(contextSize * 0.95), 512)
 
       if (totalTokens <= maxBatchTokens) {
         // All chunks fit in one pass
@@ -265,38 +279,75 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
         return { embeddings }
       }
 
-      // Split into sub-batches that fit within context window
+      // ── 子批次拆分（精确验证版）────────────────────────────────────
+      // 策略：
+      // 1. 用独立 tokenize 估算做贪心分组（快速得候选边界）
+      // 2. 对每个候选，实际 tokenize 拼接全文验证（精确检查）
+      // 3. 超标则收缩批次，直到精确适配
+      // 4. 前面的子批次即使后面的失败也不受影响
       this.logger?.info(
         `[LlamaCppLlmEmbedder] Splitting ${texts.length} chunks (${totalTokens} tokens) ` +
-        `into sub-batches (context=${contextSize})`,
+        `into sub-batches (ctx=${contextSize})`,
       )
+
       const allEmbeddings: number[][] = []
-      let batchTexts: string[] = []
-      let batchTokens = prefixTokens.length
+      let cursor = 0
 
-      for (let i = 0; i < texts.length; i++) {
-        const chunkTokens = chunkTokenSeqs[i].length + (batchTexts.length > 0 ? sepTokens.length : 0)
+      while (cursor < texts.length) {
+        // Phase 1: 贪心估算候选子批次
+        let batchTokens = prefixTokens.length
+        let batchEnd = cursor
 
-        if (batchTokens + chunkTokens > maxBatchTokens && batchTexts.length > 0) {
-          // Process current sub-batch
-          const batchResult = await this._singlePassLateChunking(
-            model, batchTexts, SEPARATOR, documentPrefix,
-          )
-          allEmbeddings.push(...batchResult)
-          batchTexts = []
-          batchTokens = prefixTokens.length
+        while (batchEnd < texts.length) {
+          const chunkTokens = chunkTokenSeqs[batchEnd].length +
+            (batchEnd > cursor ? sepTokens.length : 0)
+          if (batchTokens + chunkTokens > maxBatchTokens && batchEnd > cursor) break
+          batchTokens += chunkTokens
+          batchEnd++
         }
 
-        batchTexts.push(texts[i])
-        batchTokens += chunkTokens
-      }
+        if (batchEnd === cursor) {
+          // 单块超标 → 对剩余 chunks 回退到 last-token
+          this.logger?.warn(
+            `[LlamaCppLlmEmbedder] Chunk at index ${cursor} (${chunkTokenSeqs[cursor].length} tokens) ` +
+            `exceeds context (${contextSize}), falling back to last-token for remaining`,
+          )
+          const remaining = await this._lastTokenCreateEmbeddings(model, texts.slice(cursor))
+          allEmbeddings.push(...remaining.embeddings)
+          break
+        }
 
-      // Process final sub-batch
-      if (batchTexts.length > 0) {
+        // Phase 2: 精确验证——实际 tokenize 拼接文本
+        // 如果 BPE 边界合并导致超标，则从尾部收缩批次
+        while (batchEnd > cursor + 1) {
+          const candidateTexts = texts.slice(cursor, batchEnd)
+          const joined = documentPrefix
+            ? documentPrefix + candidateTexts.join(SEPARATOR)
+            : candidateTexts.join(SEPARATOR)
+
+          if (model.tokenize(joined).length <= contextSize) break
+
+          batchEnd--
+        }
+
+        if (batchEnd === cursor) {
+          // 收缩到单块仍超标（极少见，超大 chunk）
+          this.logger?.warn(
+            `[LlamaCppLlmEmbedder] Single chunk at ${cursor} exceeds context, ` +
+            `falling back to last-token for remaining`,
+          )
+          const remaining = await this._lastTokenCreateEmbeddings(model, texts.slice(cursor))
+          allEmbeddings.push(...remaining.embeddings)
+          break
+        }
+
+        // Phase 3: 处理已验证的子批次（保证不超标）
+        const batchTexts = texts.slice(cursor, batchEnd)
         const batchResult = await this._singlePassLateChunking(
           model, batchTexts, SEPARATOR, documentPrefix,
         )
         allEmbeddings.push(...batchResult)
+        cursor = batchEnd
       }
 
       return { embeddings: allEmbeddings }
@@ -415,36 +466,51 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   private _checkPerTokenUniqueness(perTokenEmbs: number[][]): void {
     if (perTokenEmbs.length < 2) return  // need at least 2 tokens to compare
 
-    const dim = perTokenEmbs[0].length
+    // Find the first valid (non-NaN) reference token to use for comparison
+    let refIdx = 0
+    for (let i = 0; i < perTokenEmbs.length; i++) {
+      if (perTokenEmbs[i].length > 0 && perTokenEmbs[i].some(v => Number.isFinite(v))) {
+        refIdx = i
+        break
+      }
+    }
+    const dim = perTokenEmbs[refIdx].length
+
+    // Debug: log the reference and last vector values
+    const first5 = perTokenEmbs[refIdx].slice(0, 5).map(v => v.toFixed(6))
+    const last5 = perTokenEmbs[perTokenEmbs.length - 1].slice(0, 5).map(v => v.toFixed(6))
+    const nanCount = perTokenEmbs.reduce((sum, t) => sum + t.filter(v => !Number.isFinite(v)).length, 0)
+    const zeroCount = perTokenEmbs.reduce((sum, t) => sum + t.filter(v => v === 0).length, 0)
+    this.logger?.debug(
+      `[LlamaCppLlmEmbedder] Per-token uniqueness check: ` +
+      `nTokens=${perTokenEmbs.length}, dim=${dim}, refIdx=${refIdx}, ` +
+      `ref[0..4]=[${first5.join(', ')}], ` +
+      `last[0..4]=[${last5.join(', ')}], ` +
+      `NaN count=${nanCount}, zero count=${zeroCount}`
+    )
+
+    // Check if all embeddings are (nearly) identical, ignoring NaN positions
     const allSame = perTokenEmbs.every((t) => {
-      for (let d = 0; d < dim; d++) {
-        if (Math.abs(t[d] - perTokenEmbs[0][d]) > 1e-6) return false
+      if (t.length === 0) return true
+      for (let d = 0; d < Math.min(dim, t.length); d++) {
+        const a = t[d]
+        const b = perTokenEmbs[refIdx][d]
+        if (!Number.isFinite(a) || !Number.isFinite(b)) continue  // skip NaN/inf
+        if (Math.abs(a - b) > 1e-6) return false
       }
       return true
     })
 
     if (!allSame) return  // per-token embeddings are distinct — late-chunking is viable
-
-    this._lateChunkingNoopDetected = true
     this.logger?.warn(
       `\n` +
       `╔══════════════════════════════════════════════════════════════════╗\n` +
       `║  ⚠️  Late-chunking 检测到所有 token hidden state 完全相同       ║\n` +
       `╠══════════════════════════════════════════════════════════════════╣\n` +
-      `║  根因: GGUF 模型的 pooling_type 不是 NONE                      ║\n` +
-      `║  getEmbeddingsForTokens 返回的是池化向量而非逐 token           ║\n` +
-      `║  hidden states (BERT 嵌入模型的默认行为)。                     ║\n` +
+      `║  检测到 per-token hidden states 全部相同                        ║\n` +
+      `║  （模型 GGUF pooling_type 可能不是 NONE）。                    ║\n` +
       `║                                                               ║\n` +
-      `║  Late-chunking 将自动退化为 last-token 池化模式。              ║\n` +
-      `║  要启用真正的 late-chunking，请用以下命令重新转换 GGUF:        ║\n` +
-      `║                                                               ║\n` +
-      `║  python convert_hf_to_gguf.py \\                               ║\n` +
-      `║    <huggingface-model-dir> \\                                   ║\n` +
-      `║    --outtype q8_0 \\                                            ║\n` +
-      `║    --pooling none                                               ║\n` +
-      `║                                                               ║\n` +
-      `║  注意: 重转换后 getEmbeddingFor() 也不再返回池化向量，        ║\n` +
-      `║        需要在应用层自行 pool。                                 ║\n` +
+      `║  Late-chunking 将回退到 last-token 逐块嵌入。                  ║\n` +
       `╚══════════════════════════════════════════════════════════════════╝\n`,
     )
     throw new Error(
@@ -816,6 +882,21 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
   /** 聊天模板开关：将文本包装为 MiniCPM ChatML 格式 */
   get useChatTemplate(): boolean {
     return this._useChatTemplate
+  }
+
+  /** 释放 GPU 显存和模型资源 */
+  async dispose(): Promise<void> {
+    this.logger?.debug(`[LlamaCppLlmEmbedder] Disposing...`)
+    for (const ctx of this._embeddingContexts) {
+      await ctx.dispose().catch(() => {})
+    }
+    this._embeddingContexts = []
+    if (this._model) {
+      await this._model.dispose().catch(() => {})
+      this._model = null
+    }
+    this._loadingPromise = null
+    this.logger?.debug(`[LlamaCppLlmEmbedder] Disposed`)
   }
 
 

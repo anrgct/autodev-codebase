@@ -177,13 +177,13 @@ export async function waitForIndexingCompletion(manager: CodeIndexManager): Prom
         getLogger().warn('Indexing stopped unexpectedly');
         reject(new Error('Indexing stopped unexpectedly'));
       } else {
-        setTimeout(checkState, 2000);
+        setTimeout(checkState, 10000);
       }
     };
 
     manager.startIndexing()
       .then(() => {
-        setTimeout(checkState, 2000);
+        setTimeout(checkState, 10000);
       })
       .catch(reject);
   });
