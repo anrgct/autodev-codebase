@@ -131,7 +131,7 @@ get_embeddings_ith: invalid embeddings id 8193, reason: out of range [0, 8192)
 | 子批次拆分 | 逐批次精确验证 + 隔离处理 | 替换整体 try/catch，前面的批次不受后面失败影响 |
 | BPE 边界处理 | 用 `model.tokenize(joined)` 精确量，超标则从尾部收缩 | 比固定 margin 准确，适应不同边界数的场景 |
 | contextSize 获取 | 不传 contextSize，让库自动分配；读 `_llamaContext.contextSize` | 避免传过大值导致 Metal 后端崩溃 |
-| batchSize 设置 | `Math.min(trainContextSize, 8192)` | 避免过大 batchSize 让库的显存估算过度裁剪 context |
+| batchSize 设置 | `Math.min(trainContextSize, 5500)` | 避免过大 batchSize 让库的显存估算过度裁剪 context；5500 是 Metal GPU attention kernel NaN 的安全上限（详见 `260531-nan-root-fix.md`） |
 | contextSize 解析 | 不传 contextSize，库内部 `resolveContextContextSize` 根据可用显存、batchSize、模型参数、sequences 等自动算出最大值 | 实测：batchSize=40960 时首次 30720、第二次 4352；batchSize=8192 + dispose 后双实例均 40960。传固定值可能触发的 Metal `InsufficientMemoryError` 导致进程崩溃 |
 | 自动检测 VRAM 释放 | 给 IEmbedder 加 `dispose()`，auto-detect 后用 `try/finally` 释放 | dispose 后 Metal 不一定立即释放，但减小了竞争窗口 |
 | 轮询间隔 | 2s → 10s | 减少索引时的日志噪音 |
@@ -150,7 +150,7 @@ get_embeddings_ith: invalid embeddings id 8193, reason: out of range [0, 8192)
 **改动 2：`_ensureModel` 优化**
 - 添加 `_embeddingContextSize` 字段记录实际分配值
 - contextSize 从 `_embeddingContextSize` 读取而非 `_contextSize`
-- batchSize 从 `trainContextSize`（40960）改为 `min(trainContextSize, 8192)`
+- batchSize 从 `trainContextSize`（40960）改为 `min(trainContextSize, 8192)`，后因 Metal GPU NaN bug 再降至 `5500`
 
 **改动 3：dispose 支持**
 - 在 `IEmbedder` 接口添加可选 `dispose()` 方法
@@ -167,7 +167,7 @@ get_embeddings_ith: invalid embeddings id 8193, reason: out of range [0, 8192)
 **修复：** 读取 `_llamaContext.contextSize` 作为实际用量
 
 **问题：** 显存竞争导致第二个 embedder 只拿到 4352 context
-**修复：** batchSize 从 40960 降到 8192 + dispose 自动检测的 embedder
+**修复：** batchSize 从 40960 降到 8192 + dispose 自动检测的 embedder；后因 Metal GPU NaN bug 最终定在 5500（详见 `260531-nan-root-fix.md`）
 
 **问题：** `_checkPerTokenUniqueness` NaN 假阳性——首个 token embedding 为 NaN，JS 的 `NaN > 1e-6` 永远为 false，导致所有 token 被误判为"全同"
 **修复：** 比较时跳过 NaN/Infinity 值，寻找首个有效（非 NaN）向量作为参考基准
@@ -180,6 +180,8 @@ get_embeddings_ith: invalid embeddings id 8193, reason: out of range [0, 8192)
 **已修复：** 子批次拆分、contextSize 读取、VRAM 竞争、`_checkPerTokenUniqueness` NaN 假阳性修复、日志减噪
 
 **bug 4（per-token embedding 全零）** → 已通过 C++ 累加 buffer + llama.cpp decode patch 修复，详见 `docs/plans/260531-llamacpp-acc-embd.md`
+
+**bug 6（Metal GPU attention NaN）** → 根因查明为 Metal attention kernel bug，batchSize=5500 绕过，详见 `docs/plans/260531-nan-root-fix.md`
 
 ## 方案 B：C++ AddonContext 累加 buffer + llama.cpp decode patch
 
@@ -198,9 +200,10 @@ get_embeddings_ith: invalid embeddings id 8193, reason: out of range [0, 8192)
 |------|------|
 | bug 1: contextSize 不匹配 | 读 `_embeddingContextSize` 替代 `_contextSize` |
 | bug 2: 整体 try/catch 回退 | while 循环逐批次隔离 + Phase 1/2/3 |
-| bug 3: VRAM 竞争 | batchSize 降到 8192 + auto-detect dispose |
+| bug 3: VRAM 竞争 | batchSize 降到 5500 + auto-detect dispose |
 | bug 4: per-token embedding 全零 | llama.cpp decode patch + C++ 累加 buffer → `260531-llamacpp-acc-embd.md` |
 | bug 5: 轮询日志过多 | 2s → 10s |
+| bug 6: Metal GPU attention NaN (pos≥24576, batch≥~7000) | batchSize 降到 5500 绕过 → `260531-nan-root-fix.md` |
 | `_checkPerTokenUniqueness` NaN 假阳性 | 跳过 NaN/Infinity 比较 |
 
-验证：短文本 ✅ | 长文本 0 valid → 24576/36323 (67.7%)
+验证：短文本 ✅ | 长文本 ✅（batchSize=5500 绕过 Metal GPU NaN）

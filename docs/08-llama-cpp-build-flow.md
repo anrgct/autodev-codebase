@@ -195,6 +195,88 @@ npx tsx scripts/deploy-llamacpp-patch.ts
 
 > 不再清理 `localBuilds`。`getLlama` 先查 prebuilt，加载失败才回退到 localBuild。保留 localBuilds 作为安全 fallback，且避免首次运行时触发从源码重新编译（耗时约 5 分钟）。
 
+---
+
+## 调试工作流（symlink 模式）
+
+直接改 `node_modules` 中的文件受 `.gitignore` 限制，Zed 工具（`grep`、`read_file` 等）无法访问。
+通过 symlink 将包映射到 `vendor/` 下，即可用标准路径调试。
+
+### 创建 symlink
+
+```bash
+ln -sf ../node_modules/@realtimex/node-llama-cpp vendor/llama-cpp-live
+```
+
+创建后可以通过 `vendor/llama-cpp-live/` 路径搜索、读取和编辑 node_modules 中的文件。
+
+### 工具支持
+
+| 操作 | 路径 | 结果 |
+|------|------|------|
+| `read_file` / `edit_file` | `vendor/llama-cpp-live/dist/...` | ✅ |
+| `grep`（内置） | `vendor/llama-cpp-live/...` | ❌ 不追踪 symlink |
+| `grep`（终端） | `grep xxx vendor/llama-cpp-live/` | ✅ |
+
+### JS 层调试
+
+```bash
+# 1. 直接改 vendor/llama-cpp-live 中的 JS 文件（立即生效，无需编译）
+vim vendor/llama-cpp-live/dist/evaluator/LlamaEmbeddingContext.js
+
+# 2. 用验证脚本测试
+npx tsx scripts/evidence/xxx-test.ts
+
+# 3. 验证通过后，持久化到 vendor
+cp vendor/llama-cpp-live/dist/evaluator/LlamaEmbeddingContext.js \
+   vendor/node-llama-cpp/dist/evaluator/LlamaEmbeddingContext.js
+```
+
+### C++ 层调试
+
+通过 symlink 改的就是 node_modules 中的源文件，编译产物 `getLlama` 会自动从 `localBuilds` 加载：
+
+```bash
+# 1. 改 llama.cpp 源码（通过 symlink，直接修改 node_modules）
+vim vendor/llama-cpp-live/llama/llama.cpp/src/llama-context.cpp
+
+# 2. 增量编译
+cmake --build vendor/llama-cpp-live/llama/localBuilds/mac-arm64-metal-*/ \
+  --config Release -j12 \
+    && cp vendor/llama-cpp-live/llama/localBuilds/mac-arm64-metal-*/bin/*.dylib \
+        vendor/llama-cpp-live/llama/localBuilds/mac-arm64-metal-*/Release/ \
+    && cp vendor/llama-cpp-live/llama/localBuilds/mac-arm64-metal-*/Release/llama-addon.node \
+        vendor/llama-cpp-live/llama/localBuilds/mac-arm64-metal/Release/
+
+# 3. 测试（自动加载 localBuilds 中的产物）
+npx tsx scripts/evidence/xxx-test.ts
+```
+
+> 若 prebuilt 优先于 localBuilds 加载，先删 prebuilt：
+> ```bash
+> rm node_modules/@realtimex/node-llama-cpp-mac-arm64-metal/bins/mac-arm64-metal/llama-addon.node
+> ```
+
+调试确认后，通过完整构建固化到 vendor：
+
+```bash
+npm run build:llamacpp
+```
+
+如需完整构建（清除缓存、重新下载、编译、patch、部署）：
+
+```bash
+npm run build:llamacpp
+```
+
+### 调试完成后的固化流程
+
+1. **JS 改动**：复制修改过的文件到 `vendor/node-llama-cpp/dist/`（与 node_modules 同路径结构）
+2. **C++ llama.cpp 源码改动**：复制修改过的文件到 `vendor/llama-cpp-src/`（与 `llama.cpp/src/` 同路径结构），然后在 `build.mjs` 的 `pass2_patchAndRebuild()` 中添加 `patchFile()` 调用
+3. **C++ addon 绑定改动**：`vendor/llama-addon/AddonContext.cpp` / `.h` 已是持久化位置，直接修改即可
+4. 删除 `vendor/llama-cpp-live` symlink（可选）
+
+
 ### 设计要点
 
 **为什么是两遍编译（实为三阶段）？**
@@ -269,11 +351,6 @@ ls -R vendor/node-llama-cpp/dist/
 是的。`.node` 是编译后的二进制，修改 C++ 源码必须重新编译。
 
 ### Q: npm 包状态异常，build 无法通过怎么办？
-
-`deploy-llamacpp-patch.ts` 会把 vendor 的 patched AddonContext 部署到 `node_modules`。
-后续 `npm run build:llamacpp` 的 Pass 1 需要使用 npm 自带的**原始** AddonContext 编译
-（此时 llama.h 尚无 `embd_layer` 等 patch）。若 patched AddonContext 覆盖了原始文件，
-Pass 1 会报 `no member named 'embd_layer'` 等错误。
 
 **重置 npm 包到干净状态：**
 

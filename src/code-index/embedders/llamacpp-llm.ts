@@ -134,10 +134,12 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       this._contextSize = this._model.trainContextSize ?? 4096
       const embdLayer = this._resolveLayer(this._model)
 
-      // batchSize 控制单次前向传播的并行 token 数。
-      // 模型仅 80M 参数，batchSize=8192 足够快。
-      // 传过大 batchSize 会让库的显存估算过高，导致 contextSize 被过度裁剪。
-      const batchSize = Math.min(this._contextSize, 8192)
+      // batchSize 控制单次 llama_decode 的 token 数。
+      // ⚠️ Metal GPU attention kernel 在 batch > 5500 时，对 context position
+      // ≥ 24576 的 token 产出 NaN（CPU 正常）。设为 5500 绕过此 Metal bug。
+      // 更多细节见 docs/plans/260531-nan-root-fix.md 和 260601-nan-root-analysis.md
+      const BATCH_SIZE = 5500
+      const batchSize = Math.min(this._contextSize, BATCH_SIZE)
 
       this._embeddingContexts = await Promise.all(
         Array.from({ length: this.concurrency }, () =>
