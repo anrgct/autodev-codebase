@@ -78,6 +78,10 @@ export class LlamaEmbeddingContext {
                     start: 0,
                     end: this._sequence.nextTokenIndex
                 }]);
+            // Clear the accumulation buffer so DecodeBatch populates it fresh
+            // for this evaluate session. The C++ addon accumulates per-token
+            // embeddings across multiple JS-level decode batches.
+            this._llamaContext._ctx.clearAccumulatedEmbeddings();
             const iterator = this._sequence.evaluate(resolvedInput, { _noSampling: true });
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             for await (const token of iterator) {

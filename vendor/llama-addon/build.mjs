@@ -158,6 +158,51 @@ function pass2_patchAndRebuild(tag) {
         "/*.embeddings                  =*/ false,\n        /*.embd_layer                  =*/ -1,",
     );
 
+    // Patch 5: llama.h — add llama_get_embeddings_raw() declaration (for per-token accum buffer)
+    patchFile(
+        join(LLAMA_CPP_DIR, "include", "llama.h"),
+        "LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);",
+        "LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);\n\n    // Get the raw embeddings buffer (all token rows in batch order, without output_reorder).\n    // When pooling_type is NONE and the decode() patch extracts all token rows,\n    // this buffer contains n_tokens * n_embd floats in batch position order.\n    LLAMA_API float * llama_get_embeddings_raw(struct llama_context * ctx);",
+    );
+
+    // Patch 6: llama-context.cpp — output_reserve: size embd for n_batch when pooling_type is NONE
+    // (needed because the decode() patch below extracts ALL token rows, not just logits-enabled ones)
+    patchFile(
+        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
+        "embd.size          = has_embd          ? n_embd_out*n_outputs_max  : 0;",
+        "embd.size          = has_embd          ? (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE ? n_embd_out*n_batch : n_embd_out*n_outputs_max) : 0;",
+    );
+
+    // Patch 7: llama-context.cpp — decode(): extract ALL token rows for NONE pooling
+    // (uses n_tokens_prev/ubatch.n_tokens instead of n_outputs_prev/n_outputs)
+    patchFile(
+        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
+        "case LLAMA_POOLING_TYPE_NONE:\n                    {\n                        // extract token embeddings\n                        GGML_ASSERT(embd.data != nullptr);\n                        const uint32_t n_embd_out = hparams.n_embd_out();\n                        float * embd_out = embd.data + n_outputs_prev*n_embd_out;\n\n                        if (n_outputs) {\n                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);\n                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd.size);\n                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd_out*sizeof(float));\n                        }\n                    } break;",
+        "case LLAMA_POOLING_TYPE_NONE:\n                    {\n                        // extract token embeddings for ALL tokens (not just logits-enabled ones).\n                        // uses n_tokens_prev / ubatch.n_tokens instead of n_outputs_prev / n_outputs.\n                        // see docs/plans/260530-late-chunking-batch-split.md\n                        GGML_ASSERT(embd.data != nullptr);\n                        const uint32_t n_embd_out = hparams.n_embd_out();\n                        float * embd_out = embd.data + n_tokens_prev*n_embd_out;\n\n                        if (ubatch.n_tokens) {\n                            GGML_ASSERT( n_tokens_prev + ubatch.n_tokens <= cparams.n_batch);\n                            GGML_ASSERT((n_tokens_prev + ubatch.n_tokens)*n_embd_out <= (int64_t) embd.size);\n                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, ubatch.n_tokens*n_embd_out*sizeof(float));\n                        }\n                    } break;",
+    );
+
+    // Patch 8: llama-context.cpp — add llama_get_embeddings_raw() implementation
+    patchFile(
+        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
+        "float * llama_get_embeddings_ith(llama_context * ctx, int32_t i) {\n    ctx->synchronize();\n\n    return ctx->get_embeddings_ith(i);\n}",
+        "float * llama_get_embeddings_ith(llama_context * ctx, int32_t i) {\n    ctx->synchronize();\n\n    return ctx->get_embeddings_ith(i);\n}\n\nfloat * llama_get_embeddings_raw(llama_context * ctx) {\n    return ctx->get_embeddings_data();\n}",
+    );
+
+    // Patch 9: llama-context.h — add get_embeddings_data() to llama_context
+    // (returns embd.data without calling output_reorder, needed for raw buffer access)
+    patchFile(
+        join(LLAMA_CPP_DIR, "src", "llama-context.h"),
+        "float * get_embeddings();\n    float * get_embeddings_ith(int32_t i);",
+        "float * get_embeddings();\n    float * get_embeddings_data();  // raw embd.data (no output_reorder)\n    float * get_embeddings_ith(int32_t i);",
+    );
+
+    // Patch 10: llama-context.cpp — implement get_embeddings_data()
+    patchFile(
+        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
+        "float * llama_context::get_embeddings() {\n    output_reorder();\n\n    return embd.data;\n}",
+        "float * llama_context::get_embeddings() {\n    output_reorder();\n\n    return embd.data;\n}\n\nfloat * llama_context::get_embeddings_data() {\n    return embd.data;\n}",
+    );
+
     log("Headers patched.");
 
     // Patch 5: model files — external script (adds mid-layer embd extraction)
@@ -239,7 +284,9 @@ function collectBinary(tag) {
 
 function collectDylibs(binaryPath, outputDir) {
     const binDir = join(dirname(binaryPath), "bin");
-    const searchDirs = [binDir, dirname(binaryPath)];
+    // Also search one level up (localBuilds/<variant>/bin when binary is in Release/)
+    const parentBinDir = join(dirname(dirname(binaryPath)), "bin");
+    const searchDirs = [binDir, parentBinDir, dirname(binaryPath)];
 
     const seen = new Set();
     for (const dir of searchDirs) {

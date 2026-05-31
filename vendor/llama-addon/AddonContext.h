@@ -53,6 +53,13 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         // the true first token index, so cbEval should not infer it from tensor shape.
         int kqCurrentBatchTokenStart = 0;
 
+        // Accumulated per-token embeddings across multiple JS decode batches.
+        // Cleared by clearAccumulatedEmbeddings() at the start of each evaluate session.
+        // Indexed by context position: _accEmbd[pos * _accEmbdDim .. (pos+1) * _accEmbdDim - 1].
+        std::vector<float> _accEmbd;
+        int32_t _accEmbdCount = 0;
+        int32_t _accEmbdDim = 0;
+
         // C callback for llama_context_params.cb_eval (no NAPI dependency)
         static bool cbEval(ggml_tensor *t, bool ask, void *user_data);
         // ------------------------------------------------------------
@@ -79,6 +86,7 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         Napi::Value SampleToken(const Napi::CallbackInfo& info);
 
         Napi::Value GetEmbedding(const Napi::CallbackInfo& info);
+        Napi::Value ClearAccumulatedEmbeddings(const Napi::CallbackInfo& info);
         Napi::Value GetStateSize(const Napi::CallbackInfo& info);
         Napi::Value GetThreads(const Napi::CallbackInfo& info);
         Napi::Value SetThreads(const Napi::CallbackInfo& info);

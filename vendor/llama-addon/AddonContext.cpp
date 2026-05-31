@@ -75,6 +75,39 @@ class AddonContextDecodeBatchWorker : public Napi::AsyncWorker {
             }
         }
         void OnOK() {
+            // Accumulate per-token embeddings for all tokens in this batch.
+            // The llama.cpp decode() patch extracts ALL token rows (not just
+            // logits-enabled tokens) into embd.data when pooling_type is NONE.
+            // We read the raw embd buffer and index by batch.pos[i] to map
+            // batch token index to absolute context position.
+            if (ctx->ctx != nullptr && ctx->model != nullptr && ctx->has_batch && ctx->batch.n_tokens > 0) {
+                try {
+                const auto pooling_type = llama_pooling_type(ctx->ctx);
+                if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+                    const int n_embd = llama_model_n_embd(ctx->model->model);
+                    if (ctx->_accEmbdDim == 0) {
+                        ctx->_accEmbdDim = n_embd;
+                        ctx->_accEmbd.resize(llama_n_ctx(ctx->ctx) * n_embd, 0.0f);
+                    }
+                    // llama_get_embeddings_raw() returns embd.data which now contains
+                    // all token rows in batch order (see llama-context.cpp decode() patch).
+                    const float * embd_raw = llama_get_embeddings_raw(ctx->ctx);
+                    if (embd_raw != nullptr) {
+                        for (int32_t i = 0; i < ctx->batch.n_tokens; i++) {
+                            const int32_t pos = ctx->batch.pos[i];
+                            if (pos < 0 || pos >= llama_n_ctx(ctx->ctx)) continue;
+                            memcpy(ctx->_accEmbd.data() + pos * n_embd, embd_raw + i * n_embd, n_embd * sizeof(float));
+                            if (pos + 1 > ctx->_accEmbdCount) {
+                                ctx->_accEmbdCount = pos + 1;
+                            }
+                        }
+                    }
+                }
+                } catch (...) {
+                    // Ignore accumulation errors — fall back to original GetEmbedding logic
+                }
+            }
+
             deferred.Resolve(Env().Undefined());
         }
         void OnError(const Napi::Error& err) {
@@ -853,6 +886,21 @@ Napi::Value AddonContext::GetEmbedding(const Napi::CallbackInfo& info) {
         return info.Env().Undefined();
     }
 
+    // Check accumulation buffer first (populated by DecodeBatch across multi-batch decodes).
+    // The llama.cpp decode() patch ensures embd.data contains ALL token rows (not just
+    // logits-enabled ones), and DecodeBatch::OnOK copies them to _accEmbd indexed by
+    // context position (batch.pos[i]).
+    if (!_accEmbd.empty() && inputTokensLength - 1 < _accEmbdCount) {
+        const float * emb = _accEmbd.data() + (inputTokensLength - 1) * _accEmbdDim;
+        size_t resultSize = maxVectorSize == 0 ? _accEmbdDim : std::min(_accEmbdDim, maxVectorSize);
+        Napi::Float64Array result = Napi::Float64Array::New(info.Env(), resultSize);
+        for (size_t i = 0; i < resultSize; i++) {
+            result[i] = emb[i];
+        }
+        return result;
+    }
+
+    // Fall back to original logic (single-batch decode, or pooling_type != NONE)
     const int n_embd = llama_model_n_embd(model->model);
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
     const auto* embeddings = pooling_type == LLAMA_POOLING_TYPE_NONE ? NULL : llama_get_embeddings_seq(ctx, 0);
@@ -872,6 +920,13 @@ Napi::Value AddonContext::GetEmbedding(const Napi::CallbackInfo& info) {
     }
 
     return result;
+}
+
+Napi::Value AddonContext::ClearAccumulatedEmbeddings(const Napi::CallbackInfo& info) {
+    _accEmbd.clear();
+    _accEmbdCount = 0;
+    _accEmbdDim = 0;
+    return info.Env().Undefined();
 }
 
 Napi::Value AddonContext::GetStateSize(const Napi::CallbackInfo& info) {
@@ -1216,6 +1271,7 @@ void AddonContext::init(Napi::Object exports) {
                 InstanceMethod("decodeBatch", &AddonContext::DecodeBatch),
                 InstanceMethod("sampleToken", &AddonContext::SampleToken),
                 InstanceMethod("getEmbedding", &AddonContext::GetEmbedding),
+                InstanceMethod("clearAccumulatedEmbeddings", &AddonContext::ClearAccumulatedEmbeddings),
                 InstanceMethod("getStateSize", &AddonContext::GetStateSize),
                 InstanceMethod("getThreads", &AddonContext::GetThreads),
                 InstanceMethod("setThreads", &AddonContext::SetThreads),

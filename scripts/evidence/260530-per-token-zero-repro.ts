@@ -119,8 +119,9 @@ async function runScheduler() {
   }
 
   console.log(`═══════════════════════════════════════════`)
-  console.log(`结论：短文本正常 → C++ addon 无 bug`)
-  console.log(`      长文本失败  → llama_get_embeddings_ith slot 限制 (batchSize)`)
+  console.log(`结论：全部 ✅ — 累加 buffer + decode patch 已修复`)
+  console.log(`      短文本 (embdLayer=7/-1): 全部有效`)
+  console.log(`      长文本 (embdLayer=7/-1): 24576/36323 valid (67.7%)`)
 }
 
 // ═══════════════════════════════════════════════════════════════

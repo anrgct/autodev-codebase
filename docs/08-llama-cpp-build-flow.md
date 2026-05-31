@@ -268,6 +268,23 @@ ls -R vendor/node-llama-cpp/dist/
 
 是的。`.node` 是编译后的二进制，修改 C++ 源码必须重新编译。
 
+### Q: npm 包状态异常，build 无法通过怎么办？
+
+`deploy-llamacpp-patch.ts` 会把 vendor 的 patched AddonContext 部署到 `node_modules`。
+后续 `npm run build:llamacpp` 的 Pass 1 需要使用 npm 自带的**原始** AddonContext 编译
+（此时 llama.h 尚无 `embd_layer` 等 patch）。若 patched AddonContext 覆盖了原始文件，
+Pass 1 会报 `no member named 'embd_layer'` 等错误。
+
+**重置 npm 包到干净状态：**
+
+```bash
+npm uninstall @realtimex/node-llama-cpp
+npm install --save-exact @realtimex/node-llama-cpp@0.163.0
+npm run build:llamacpp
+```
+
+`--save-exact` 避免 `^` 前缀导致意外升级。`build:llamacpp` 末尾会自动 deploy。
+
 ### Q: 改了 llama.h（如新增字段）后必须重编吗？
 
 是的。AddonContext.cpp `#include "llama.h"`，头文件变更需重新编译 addon 和 libllama.dylib。

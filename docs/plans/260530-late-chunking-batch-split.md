@@ -179,103 +179,28 @@ get_embeddings_ith: invalid embeddings id 8193, reason: out of range [0, 8192)
 
 **已修复：** 子批次拆分、contextSize 读取、VRAM 竞争、`_checkPerTokenUniqueness` NaN 假阳性修复、日志减噪
 
-**已知限制（C++ 层，JS 无法绕过）：**
-- `llama_get_embeddings_ith` 的 slot 容量 = batchSize（8192），非 contextSize（40960）
-- 输入 >8192 tokens 时，超出位置的 embedding 全部返回 NULL，JS 层填充零向量
-- 这不是模型架构问题（短文本在 embdLayer=7 和 -1 下均正常），是对所有架构通用的 C++ addon 限制
-- late-chunking 自动回退到 last-token 逐块嵌入（正确行为）
+**bug 4（per-token embedding 全零）** → 已通过 C++ 累加 buffer + llama.cpp decode patch 修复，详见 `docs/plans/260531-llamacpp-acc-embd.md`
 
-**修复方向：** 在 `AddonContext` 中增加跨微批次累加 buffer，使 `GetEmbedding` 能返回所有位置的 embedding。
+## 方案 B：C++ AddonContext 累加 buffer + llama.cpp decode patch
 
-### 目标
+> **已实施**，详见独立 task-doc：`docs/plans/260531-llamacpp-acc-embd.md`
 
-让 `llama_get_embeddings_ith` 能返回 context 范围内任意位置的 per-token embedding，而非仅限上一个 decode 的 batchSize 个 slot。
-
-### 方案 B：C++ AddonContext 累加 buffer
-
-#### 改动文件
-
-| 文件 | 改动 |
-|------|------|
-| `vendor/llama-addon/AddonContext.h` | 新增 `std::vector<float> _accEmbd` 字段、`int32_t _accEmbdCount` |
-| `vendor/llama-addon/AddonContext.cpp` | `DecodeBatch` 回调中积累 embedding；`GetEmbedding` 优先读 `_accEmbd` |
-
-#### 实现步骤
-
-##### Step 1: AddonContext.h — 新增字段
-
-```cpp
-std::vector<float> _accEmbd;     // 累加的 per-token embeddings
-int32_t _accEmbdCount = 0;        // 已积累的 token 数量
-int32_t _accEmbdDim = 0;          // embedding 维度
-```
-
-##### Step 2: DecodeBatch OnOK — 每次 decode 后拷贝 embedding
-
-`AddonContextDecodeBatchWorker::OnOK()` 中，在 `deferred.Resolve(Env().Undefined())` 之前，遍历 `ctx->batch` 中所有 `logits=true` 的 token，调 `llama_get_embeddings_ith(ctx->ctx, i)` 获取 embedding，拷贝到 `ctx->_accEmbd` 的对应位置。
-
-```cpp
-void OnOK() {
-    // 积累当前批次的 embeddings
-    const auto &batch = ctx->batch;
-    const int n_embd = llama_model_n_embd(ctx->model->model);
-    
-    if (ctx->_accEmbd.empty()) {
-        // 首次：分配完整 buffer（contextSize * n_embd）
-        ctx->_accEmbd.resize(ctx->_accEmbdDim * ctx->_accEmbdCount_max);
-    }
-    
-    for (int32_t i = 0; i < batch.n_tokens; i++) {
-        if (!batch.logits[i]) continue;
-        const float *emb = llama_get_embeddings_ith(ctx->ctx, i);
-        if (emb == nullptr) continue;
-        const int32_t pos = i;  // 需要映射到实际 context 位置
-        memcpy(ctx->_accEmbd.data() + pos * n_embd, emb, n_embd * sizeof(float));
-    }
-    ctx->_accEmbdCount = max(ctx->_accEmbdCount, ???);
-    
-    deferred.Resolve(Env().Undefined());
-}
-```
-
-##### Step 3: GetEmbedding — 优先读累加 buffer
-
-```cpp
-if (!_accEmbd.empty() && inputTokensLength <= _accEmbdCount) {
-    const float *emb = _accEmbd.data() + (inputTokensLength - 1) * _accEmbdDim;
-    // 拷贝到 Float64Array...
-    return result;
-}
-// 回退到原来的逻辑
-```
-
-#### 关键细节
-
-1. **位置映射：** `batch.n_tokens` 对应 `firstTokenContextIndex` + tokens 数组。`AddToBatch` 接收 `firstTokenContextIndex` 参数，DecodeBatch 内需要记录这个偏移量来做位置映射。
-2. **多次 DecodeBatch：** `getEmbeddingsForTokens` 中每次 `evaluate` 调用都会触发多次 `AddToBatch + DecodeBatch`（微批次）。每次 DecodeBatch 都要积累。
-3. **清空时机：** 每次 `evaluate` 开始前（`eraseContextTokenRanges` 后）清空 `_accEmbd`。
-4. **批次大小：** `_accEmbd` 分配 `contextSize * n_embd * sizeof(float)` bytes。对于 40960 × 320 × 4 = ~52 MB，在可接受范围内。
-
-#### 边界情况
-
-- **pooling_type != NONE：** 当模型做了 mean/cls pooling，`llama_get_embeddings_ith` 返回串行化向量（所有位置相同）。累加 buffer 同样会存相同值——不影响 `_checkPerTokenUniqueness` 的判断。
-- **短文本（<8192 tokens）：** 单次 DecodeBatch 即可完成，`_accEmbd` 只包含一次积累，行为与现有一致。
-- **并发（concurrency=2）：** 每个 context 有独立的 `_accEmbd`，互不干扰。
-
-#### 工作量估算
-
-| 步骤 | 预估 |
-|------|------|
-| 理解 logit 位置映射 | 1-2 小时 |
-| AddonContext.h/cpp 实现 | 2-3 小时 |
-| 构建 native binary（`npm run build:llamacpp`） | 10 分钟 |
-| 验证 + 调试 | 2 小时 |
-| **合计** | **~6 小时** |
+核心思路：
+- llama.cpp `decode()` 改为提取所有 token 行（非仅 `logits=true` 的），避免 JS 层设全部 logits 导致 OOM
+- C++ `AddonContext` 增加跨 JS decode 批次累加 buffer（`_accEmbd`），用 `batch.pos[i]` 按 context 位置索引
+- JS 层仅加 1 行 `clearAccumulatedEmbeddings()`，不修改 `_evaluate`
 
 ## 总结
 
-- late-chunking 子批次拆分现已正确工作，context 可以跑到 40960
-- `@realtimex/node-llama-cpp` v0.163.0 的 `embd_layer` 特性中，`llama_get_embeddings_ith` 的 slot 容量 = batchSize，无法覆盖整个 context 窗口
-- late-chunking 检测到不可用后自动回退到 last-token（正确行为，索引结果不受影响）
-- 短文本（<8192 tokens）场景下所有嵌入模式均正常工作
-- 复现脚本：`scripts/evidence/260530-per-token-zero-repro.ts`
+> 完整改动清单和验证结果见 `docs/plans/260531-llamacpp-acc-embd.md`
+
+| 问题 | 方案 |
+|------|------|
+| bug 1: contextSize 不匹配 | 读 `_embeddingContextSize` 替代 `_contextSize` |
+| bug 2: 整体 try/catch 回退 | while 循环逐批次隔离 + Phase 1/2/3 |
+| bug 3: VRAM 竞争 | batchSize 降到 8192 + auto-detect dispose |
+| bug 4: per-token embedding 全零 | llama.cpp decode patch + C++ 累加 buffer → `260531-llamacpp-acc-embd.md` |
+| bug 5: 轮询日志过多 | 2s → 10s |
+| `_checkPerTokenUniqueness` NaN 假阳性 | 跳过 NaN/Infinity 比较 |
+
+验证：短文本 ✅ | 长文本 0 valid → 24576/36323 (67.7%)
