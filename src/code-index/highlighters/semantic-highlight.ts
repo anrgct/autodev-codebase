@@ -882,4 +882,16 @@ export class SemanticHighlightHighlighter implements IHighlighter {
       model: this.modelPath,
     }
   }
+
+  async dispose(): Promise<void> {
+    if (this._embeddingContext) {
+      await this._embeddingContext.dispose().catch(() => {});
+      this._embeddingContext = null;
+    }
+    if (this._model) {
+      await this._model.dispose().catch(() => {});
+      this._model = null;
+    }
+    this._loadingPromise = null;
+  }
 }

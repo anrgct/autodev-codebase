@@ -113,6 +113,11 @@ export interface IHighlighter {
 
   /** Highlighter 信息 */
   get highlighterInfo(): HighlighterInfo
+
+  /**
+   * 释放 highlighter 占用的 GPU/资源
+   */
+  dispose?(): Promise<void>
 }
 
 export interface HighlighterInfo {

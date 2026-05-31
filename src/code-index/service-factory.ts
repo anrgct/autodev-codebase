@@ -270,7 +270,7 @@ export class CodeIndexServiceFactory {
     return name && name !== basename ? name : null
   }
 
-  public async createVectorStore(): Promise<IVectorStore> {
+  public async createVectorStore(existingEmbedder?: IEmbedder): Promise<IVectorStore> {
     const config = this.configManager.getConfig()
     this.debug(`Debug createVectorStore config:`, JSON.stringify(config, null, 2))
 
@@ -296,26 +296,32 @@ export class CodeIndexServiceFactory {
         // Verify the existing dimension matches what the embedder actually produces
         // This catches cases where the model was changed (e.g., different GGUF file)
         // but the Qdrant collection still has the old dimension
-        const embedder = this.createEmbedder()
-        const detectedSize = await this._detectVectorDimension(embedder)
+        const embedder = existingEmbedder ?? this.createEmbedder()
+        const needDispose = !existingEmbedder
+        try {
+          const detectedSize = await this._detectVectorDimension(embedder)
 
-        if (detectedSize && detectedSize > 0 && detectedSize !== existingVectorSize) {
-          this.warn(
-            `[VectorStore] Existing collection has dimension ${existingVectorSize}, but current model produces ${detectedSize}. ` +
-            `Using ${detectedSize} (collection will be recreated on initialize).`,
-          )
-          vectorSize = detectedSize
-        } else {
-          vectorSize = existingVectorSize
-          this.info(`[VectorStore] Using existing collection vector size: ${vectorSize}`)
+          if (detectedSize && detectedSize > 0 && detectedSize !== existingVectorSize) {
+            this.warn(
+              `[VectorStore] Existing collection has dimension ${existingVectorSize}, but current model produces ${detectedSize}. ` +
+              `Using ${detectedSize} (collection will be recreated on initialize).`,
+            )
+            vectorSize = detectedSize
+          } else {
+            vectorSize = existingVectorSize
+            this.info(`[VectorStore] Using existing collection vector size: ${vectorSize}`)
+          }
+        } finally {
+          if (needDispose) await embedder.dispose?.()
         }
       } else {
         // Layer 3: Auto-detect via embedder
-        const embedder = this.createEmbedder()
+        const embedder = existingEmbedder ?? this.createEmbedder()
+        const needDispose = !existingEmbedder
         try {
           vectorSize = await this._detectVectorDimension(embedder)
         } finally {
-          await embedder.dispose?.()
+          if (needDispose) await embedder.dispose?.()
         }
 
         // Check for dimension conflict if collection exists with different size
@@ -465,9 +471,19 @@ export class CodeIndexServiceFactory {
       throw new Error(t("embeddings:serviceFactory.codeIndexingNotConfigured"))
     }
 
-    const vectorStore = await this.createVectorStore()
+    const provider = this.configManager.getConfig().embedderProvider
+
+    // 先创建 embedder，这样 createVectorStore() 做维度检测时可以直接复用，
+    // 避免本地模型（llamacpp/llamacpp-llm）重复加载多份实例。
     const embedder = this.createEmbedder()
-    const queryEmbedder = this.createQueryEmbedder()
+    const vectorStore = await this.createVectorStore(embedder)
+
+    // 所有使用本地 GGUF 模型的 provider，query embedder 直接复用文档 embedder。
+    // createQueryEmbedder() 对非 llamacpp-llm 会再调一次 createEmbedder() 新建实例，
+    // 对于本地模型是纯浪费（即使模型很小）。API 类 provider（ollama/openai 等）没有
+    // 本地资源消耗，想一视同仁复用也行，语义上它们本就是同一个接口。
+    const localProviders = ["llamacpp", "llamacpp-llm"]
+    const queryEmbedder = localProviders.includes(provider) ? embedder : this.createQueryEmbedder()
     const parser = codeParser
     const scanner = this.createDirectoryScanner(embedder, vectorStore, parser, fileSystem, workspace, pathUtils)
     const fileWatcher = this.createFileWatcher(fileSystem, eventBus, workspace, pathUtils, embedder, vectorStore, cacheManager)
@@ -627,6 +643,7 @@ export class CodeIndexServiceFactory {
         config.language || 'English',
         config.temperature ?? 0,
         this.logger,
+        config.concurrency ?? 2,
       )
     }
 

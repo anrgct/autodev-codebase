@@ -1269,6 +1269,80 @@ MRR (Mean Reciprocal Rank):  0.4016
   #10 [提取特征向量时默认使用哪一层的输出]
       期望: code_kw='len(self.model.model)', hierarchy='embed'
       Top-3 最高分: 0.2120, 0.1930, 0.1800
+
+// 40k满血late chunking
+"embedderProvider": "llamacpp-llm", //llamacpp-llm llamacpp
+"embedderPoolingMode": "late-chunking", // last-token, mean, late-chunking, qr-weighted
+"embedderPoolingLayer": -1,
+"embedderQueryPoolingLayer": -1,
+"embedderLlmInstructionPrefix": true,
+
+╭─   ~/workspace/autodev-codebase on   master ⇡53 *5                                      base
+╰─ ⚡ 14.04s ❯ python src/examples/eval_search.py
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  语义搜索召回率评估                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  搜索命令:   npx tsx src/cli.ts
+  工作区:     demo (autodev-codebase/demo)
+  测试用例数: 12
+  每查询结果: Top-30
+
+  [1/12] 初始化时 HUB/Triton/本地文件判断分支 ... ✓  #3  score=0.1400  (5.3s)
+  [2/12] is_triton_model 静态方法 ... ✓  #1  score=0.2110  (5.0s)
+  [3/12] predict_cli vs predictor() 分支 ... ✓  #20  score=0.1150  (5.3s)
+  [4/12] train 末尾用 best/last 权重更新模型 ... ✓  #18  score=0.0780  (5.3s)
+  [5/12] export 文档中的 format/half/int8 等参数 ... ✓  #4  score=0.1070  (5.3s)
+  [6/12] tune 方法: use_ray vs Tuner 分支 ... ✓  #12  score=0.0540  (4.9s)
+  [7/12] 保存模型时的 license/version/docs 信息 ... ✓  #14  score=0.0740  (5.3s)
+  [8/12] _reset_ckpt_args 保留 imgsz/data/task ... ✓  #4  score=0.0360  (5.3s)
+  [9/12] add_callback/clear_callback/reset_callbacks ... ✓  #1  score=0.1440  (5.3s)
+  [10/12] embed 默认取倒数第二层 ... ✗  未命中  (5.0s)
+  [11/12] track 注册跟踪器、低置信度阈值 ... ✓  #1  score=0.1480  (5.0s)
+  [12/12] 通过 task_map 动态加载 model/trainer 等 ... ✓  #2  score=0.1210  (5.3s)
+
+====================================================================================================
+  单项结果明细
+====================================================================================================
+    #  查询描述                             命中       排名       分数 Top-结果                
+  ------------------------------------------------------------------------------------------------
+    1  初始化时 HUB/Triton/本地文件判断分支         ✓        #3   0.1400  [0.144, 0.141, 0.140, 0.137, 0.134]
+    2  is_triton_model 静态方法             ✓        #1   0.2110  [0.211, 0.178, 0.156, 0.155, 0.135]
+    3  predict_cli vs predictor() 分支    ✓       #20   0.1150  [0.151, 0.148, 0.135, 0.131, 0.131]
+    4  train 末尾用 best/last 权重更新模型       ✓       #18   0.0780  [0.108, 0.100, 0.092, 0.092, 0.091]
+    5  export 文档中的 format/half/int8 等参数   ✓        #4   0.1070  [0.130, 0.112, 0.109, 0.107, 0.106]
+    6  tune 方法: use_ray vs Tuner 分支     ✓       #12   0.0540  [0.216, 0.075, 0.075, 0.067, 0.066]
+    7  保存模型时的 license/version/docs 信息   ✓       #14   0.0740  [0.129, 0.123, 0.102, 0.100, 0.099]
+    8  _reset_ckpt_args 保留 imgsz/data/task   ✓        #4   0.0360  [0.155, 0.047, 0.037, 0.036, 0.035]
+    9  add_callback/clear_callback/reset_callbacks   ✓        #1   0.1440  [0.144, 0.115, 0.104, 0.102, 0.102]
+   10  embed 默认取倒数第二层                   ✗         -        -  [0.108, 0.057, 0.051, 0.046, 0.045]
+   11  track 注册跟踪器、低置信度阈值               ✓        #1   0.1480  [0.148, 0.139, 0.136, 0.136, 0.136]
+   12  通过 task_map 动态加载 model/trainer 等   ✓        #2   0.1210  [0.139, 0.121, 0.120, 0.119, 0.113]
+
+====================================================================================================
+  聚合指标
+====================================================================================================
+  总用例数:          12
+  命中数:            11 / 12  (91.7%)
+  未命中数:          1
+
+  Recall@1:           25.0%  (3 个)
+  Recall@3:           41.7%  (5 个)
+  Recall@5:           58.3%  (7 个)
+  Recall@10:          58.3%  (7 个)
+  Recall@20:          91.7%  (11 个)
+
+  MRR (Mean Reciprocal Rank):  0.3828
+  目标平均分数:                0.1116
+  命中结果中位数排名:          4
+
+====================================================================================================
+  未命中用例详情
+====================================================================================================
+  #10 [提取特征向量时默认使用哪一层的输出]
+      期望: code_kw='len(self.model.model)', hierarchy='embed'
+      Top-3 最高分: 0.1080, 0.0570, 0.0510
       
 ## F2LLM-v2-80M.Q8_0-pooling-NONE.gguf
 
@@ -1548,6 +1622,73 @@ MRR (Mean Reciprocal Rank):  0.4016
   目标平均分数:                0.4218
   命中结果中位数排名:          1
 
+// 40k满血late chunking
+"embedderProvider": "llamacpp-llm", //llamacpp-llm llamacpp
+"embedderPoolingMode": "late-chunking", // last-token, mean, late-chunking, qr-weighted
+"embedderPoolingLayer": -1,
+"embedderQueryPoolingLayer": -1,
+"embedderLlmInstructionPrefix": true,
+  
+╭─   ~/workspace/autodev-codebase on   master ⇡53 *5                                      base
+╰─ ⚡ 47.79s ❯ python src/examples/eval_search.py
+
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  语义搜索召回率评估                                          ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+  搜索命令:   npx tsx src/cli.ts
+  工作区:     demo (autodev-codebase/demo)
+  测试用例数: 12
+  每查询结果: Top-30
+
+  [1/12] 初始化时 HUB/Triton/本地文件判断分支 ... ✓  #1  score=0.3890  (7.2s)
+  [2/12] is_triton_model 静态方法 ... ✓  #1  score=0.4980  (7.0s)
+  [3/12] predict_cli vs predictor() 分支 ... ✓  #2  score=0.2770  (7.0s)
+  [4/12] train 末尾用 best/last 权重更新模型 ... ✓  #3  score=0.3260  (6.8s)
+  [5/12] export 文档中的 format/half/int8 等参数 ... ✓  #1  score=0.4810  (7.3s)
+  [6/12] tune 方法: use_ray vs Tuner 分支 ... ✓  #1  score=0.4480  (6.8s)
+  [7/12] 保存模型时的 license/version/docs 信息 ... ✓  #1  score=0.3720  (6.9s)
+  [8/12] _reset_ckpt_args 保留 imgsz/data/task ... ✓  #1  score=0.4610  (7.4s)
+  [9/12] add_callback/clear_callback/reset_callbacks ... ✓  #1  score=0.4280  (6.9s)
+  [10/12] embed 默认取倒数第二层 ... ✓  #1  score=0.2470  (7.0s)
+  [11/12] track 注册跟踪器、低置信度阈值 ... ✓  #1  score=0.4130  (6.8s)
+  [12/12] 通过 task_map 动态加载 model/trainer 等 ... ✓  #1  score=0.3790  (6.9s)
+
+====================================================================================================
+  单项结果明细
+====================================================================================================
+    #  查询描述                             命中       排名       分数 Top-结果                     
+  ------------------------------------------------------------------------------------------------
+    1  初始化时 HUB/Triton/本地文件判断分支         ✓        #1   0.3890  [0.389, 0.362, 0.343, 0.312, 0.310]
+    2  is_triton_model 静态方法             ✓        #1   0.4980  [0.498, 0.427, 0.339, 0.310, 0.268]
+    3  predict_cli vs predictor() 分支    ✓        #2   0.2770  [0.278, 0.277, 0.277, 0.253, 0.246]
+    4  train 末尾用 best/last 权重更新模型       ✓        #3   0.3260  [0.360, 0.356, 0.326, 0.297, 0.285]
+    5  export 文档中的 format/half/int8 等参数   ✓        #1   0.4810  [0.481, 0.379, 0.298, 0.268, 0.263]
+    6  tune 方法: use_ray vs Tuner 分支     ✓        #1   0.4480  [0.448, 0.268, 0.233, 0.231, 0.230]
+    7  保存模型时的 license/version/docs 信息   ✓        #1   0.3720  [0.372, 0.302, 0.301, 0.288, 0.267]
+    8  _reset_ckpt_args 保留 imgsz/data/task   ✓        #1   0.4610  [0.461, 0.388, 0.325, 0.325, 0.285]
+    9  add_callback/clear_callback/reset_callbacks   ✓        #1   0.4280  [0.428, 0.350, 0.296, 0.238, 0.182]
+   10  embed 默认取倒数第二层                   ✓        #1   0.2470  [0.247, 0.207, 0.203, 0.201, 0.188]
+   11  track 注册跟踪器、低置信度阈值               ✓        #1   0.4130  [0.413, 0.287, 0.284, 0.276, 0.273]
+   12  通过 task_map 动态加载 model/trainer 等   ✓        #1   0.3790  [0.379, 0.374, 0.251, 0.201, 0.188]
+
+====================================================================================================
+  聚合指标
+====================================================================================================
+  总用例数:          12
+  命中数:            12 / 12  (100.0%)
+  未命中数:          0
+
+  Recall@1:           83.3%  (10 个)
+  Recall@3:          100.0%  (12 个)
+  Recall@5:          100.0%  (12 个)
+  Recall@10:         100.0%  (12 个)
+  Recall@20:         100.0%  (12 个)
+
+  MRR (Mean Reciprocal Rank):  0.9028
+  目标平均分数:                0.3933
+  命中结果中位数排名:          1
+  
 ## F2LLM-v2-4B.Q8_0-pooling-NONE.gguf
 "embedderProvider": "llamacpp-llm"
 "embedderPoolingMode": "late-chunking", // last-token, mean, late-chunking, qr-weighted

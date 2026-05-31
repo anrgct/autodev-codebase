@@ -353,4 +353,12 @@ RESULT:`
       model: this.modelPath,
     }
   }
+
+  async dispose(): Promise<void> {
+    if (this._model) {
+      await this._model.dispose().catch(() => {});
+      this._model = null;
+    }
+    this._loadingPromise = null;
+  }
 }

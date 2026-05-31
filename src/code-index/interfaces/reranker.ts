@@ -57,4 +57,9 @@ export interface IReranker {
   validateConfiguration(): Promise<{ valid: boolean; error?: string }>
 
   get rerankerInfo(): RerankerInfo
+
+  /**
+   * 释放 reranker 占用的 GPU/资源
+   */
+  dispose?(): Promise<void>
 }

@@ -7,17 +7,17 @@ import { getGlobalLogger } from "../../utils/logger"
 
 /** Qwen3 embedding 模型专用预填充模板（ollama provider） */
 export const QWEN_PREFILL_TEMPLATE =
-  "Instruct: Given a codebase search query, retrieve relevant code snippets or document that answer the query.\nQuery: "
+  "Instruct: Given a search query, retrieve relevant passages that answer the query.\nQuery: "
 
 /** 通用 LLM embedder 指令前缀模板（llamacpp-llm provider，非 jina 模型） */
 export const LLM_EMBEDDER_PREFILL_TEMPLATE =
-  "Instruct: Given a code search query, retrieve relevant code snippets that answer the query.\nQuery: "
+  "Instruct: Given a search query, retrieve relevant passages that answer the query.\nQuery: "
 
 /** jina-embeddings-v5 检索模型前缀 */
 export const JINA_QUERY_PREFIX = "Query: "
 
 /** F2LLM-v2 模型专用指令前缀模板（小模型，简短指令） */
-export const F2LLM_PREFILL_TEMPLATE = "Instruct: find relevant code\nQuery: "
+export const F2LLM_PREFILL_TEMPLATE = "Instruct: find relevant passages\nQuery: "
 
 /**
  * MiniCPM ChatML 聊天模板格式。

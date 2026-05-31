@@ -1,5 +1,5 @@
 import { ISummarizer, SummarizerRequest, SummarizerResult, SummarizerInfo, SummarizerBatchRequest, SummarizerBatchResult } from "../interfaces"
-import { LlamaModel, LlamaChatSession, QwenChatWrapper } from "@realtimex/node-llama-cpp"
+import { LlamaModel, LlamaChatSession, QwenChatWrapper, LlamaContext } from "@realtimex/node-llama-cpp"
 import { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
@@ -9,17 +9,43 @@ export class LlamaCppSummarizer implements ISummarizer {
   private readonly defaultLanguage: 'English' | 'Chinese'
   private readonly temperature: number
   private readonly logger?: LoggerLike
+  private readonly _concurrency: number
+  private _contexts: LlamaContext[] = []
+  private _contextPoolPromise: Promise<void> | null = null
 
   constructor(
     model: LlamaModel,
     defaultLanguage: 'English' | 'Chinese' = 'English',
     temperature: number = 0,
     logger?: LoggerLike,
+    concurrency: number = 2,
   ) {
     this.model = model
     this.defaultLanguage = defaultLanguage
     this.temperature = temperature
     this.logger = logger
+    this._concurrency = concurrency
+  }
+
+  private async _ensureContexts(): Promise<typeof this._contexts> {
+    if (this._contexts.length > 0) return this._contexts
+    if (this._contextPoolPromise) {
+      await this._contextPoolPromise
+      return this._contexts
+    }
+
+    this._contextPoolPromise = (async () => {
+      this.logger?.debug(`[LlamaCppSummarizer] Creating ${this._concurrency} context(s) for pool`)
+      this._contexts = await Promise.all(
+        Array.from({ length: this._concurrency }, () =>
+          this.model.createContext({ contextSize: Math.min(this.model.trainContextSize ?? 32768, 32768) })
+        )
+      )
+      this.logger?.info(`[LlamaCppSummarizer] Created ${this._concurrency} context(s) for pool`)
+    })()
+
+    await this._contextPoolPromise
+    return this._contexts
   }
 
   async summarize(request: SummarizerRequest): Promise<SummarizerResult> {
@@ -128,8 +154,17 @@ export class LlamaCppSummarizer implements ISummarizer {
     const prompt = this.buildPrompt(request)
     this.logger?.debug(`Summarizing ${request.blocks.length} blocks for ${request.filePath || 'unknown file'}`)
 
-    const context = await this.model.createContext({ contextSize: 32768 })
+    const contexts = await this._ensureContexts()
+    // Round-robin: pick a context, erase its accumulated state, use it
+    const context = contexts[request.blocks.length % contexts.length]
+
+    // Erase context sequence so each call starts fresh
     const sequence = context.getSequence()
+    await sequence.eraseContextTokenRanges([{
+      start: 0,
+      end: sequence.nextTokenIndex,
+    }])
+
     const chatWrapper = new QwenChatWrapper({
       variation: "3.5",
       thoughts: "discourage",
@@ -200,8 +235,8 @@ export class LlamaCppSummarizer implements ISummarizer {
 
   async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
     try {
-      const context = await this.model.createContext({ contextSize: 32768 })
-      const sequence = context.getSequence()
+      const contexts = await this._ensureContexts()
+      const sequence = contexts[0].getSequence()
       const chatWrapper = new QwenChatWrapper({
         variation: "3.5",
         thoughts: "discourage",
@@ -218,6 +253,14 @@ export class LlamaCppSummarizer implements ISummarizer {
         error: error instanceof Error ? error.message : "LlamaCPP summarizer validation failed",
       }
     }
+  }
+
+  async dispose(): Promise<void> {
+    for (const ctx of this._contexts) {
+      await ctx.dispose().catch(() => {});
+    }
+    this._contexts = [];
+    this._contextPoolPromise = null;
   }
 
   get summarizerInfo(): SummarizerInfo {

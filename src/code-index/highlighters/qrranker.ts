@@ -354,6 +354,8 @@ export class QRRankerHighlighter implements IHighlighter {
   private _model: LlamaModel | null = null;
   private _loadingPromise: Promise<LlamaModel> | null = null;
 
+  private _disposed = false
+
   constructor(
     modelPath: string,
     topK: number = 20,
@@ -960,6 +962,16 @@ export class QRRankerHighlighter implements IHighlighter {
         group.map((l) => `${String(l.num).padStart(4)}  ${l.text}`).join("\n"),
       )
       .join("\n ---\n");
+  }
+
+  async dispose(): Promise<void> {
+    if (this._disposed) return;
+    this._disposed = true;
+    if (this._model) {
+      await this._model.dispose().catch(() => {});
+      this._model = null;
+    }
+    this._loadingPromise = null;
   }
 
   async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {

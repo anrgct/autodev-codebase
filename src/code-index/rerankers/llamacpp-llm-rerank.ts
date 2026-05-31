@@ -264,6 +264,14 @@ ${this.buildExampleScores(candidates.length)}`
     return Array.from({ length: expectedCount }, (_, i) => scoresMap.get(i) ?? 0)
   }
 
+  async dispose(): Promise<void> {
+    for (const ctx of this._contexts) {
+      await ctx.dispose().catch(() => {});
+    }
+    this._contexts = [];
+    this._contextPoolPromise = null;
+  }
+
   async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
     try {
       const contexts = await this._ensureContexts()

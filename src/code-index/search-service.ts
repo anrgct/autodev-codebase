@@ -87,6 +87,11 @@ export class CodeIndexSearchService {
         throw new Error("Failed to generate embedding for query.")
       }
 
+      // Query 嵌入完成后立即释放 embedder 的 GPU 显存，
+      // 让 reranker/highlighter 有更多空间。
+      // embedder 是惰性加载的，后续如需重新嵌入会自动重载。
+      await this.embedder.dispose?.().catch(() => {})
+
       // Perform search - 防止调用方传入未验证的参数
       const finalLimit = validateLimit(filter?.limit ?? configMaxResults)
       const finalMinScore = validateMinScore(filter?.minScore ?? configMinScore)
@@ -215,5 +220,14 @@ export class CodeIndexSearchService {
       this.stateManager.setSystemState("Error", `Search failed: ${(error as Error).message}`)
       throw error // Re-throw the error after setting state
     }
+  }
+
+  /**
+   * 释放 reranker 和 highlighter 占用的 GPU/资源。
+   * embedder 和 vectorStore 可能被其他组件共享，不由此处释放。
+   */
+  async dispose(): Promise<void> {
+    await this.reranker?.dispose?.()
+    await this.highlighter?.dispose?.()
   }
 }

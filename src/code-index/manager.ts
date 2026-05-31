@@ -1,4 +1,4 @@
-import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner, IReranker, IHighlighter } from "./interfaces"
+import { VectorStoreSearchResult, SearchFilter, IVectorStore, IDirectoryScanner, IReranker, IHighlighter, IEmbedder } from "./interfaces"
 import { IndexingState, ICodeIndexManager } from "./interfaces/manager"
 import { CodeIndexConfigManager } from "./config-manager"
 import { IConfigProvider } from "../abstractions/config"
@@ -35,6 +35,7 @@ export class CodeIndexManager implements ICodeIndexManager {
   private _orchestrator: CodeIndexOrchestrator | undefined
   private _searchService: CodeIndexSearchService | undefined
   private _cacheManager: CacheManager | undefined
+  private _embedder: IEmbedder | undefined
 
   // Flag to prevent race conditions during error recovery
   private _isRecoveringFromError = false
@@ -271,10 +272,25 @@ export class CodeIndexManager implements ICodeIndexManager {
    * Cleans up the manager instance.
    */
   public dispose(): void {
+    // Fire-and-forget: release GPU resources held by llm embedders
+    // (reranker/highlighter are handled by _searchService.dispose())
+    void this._cleanupAsync()
+
     if (this._orchestrator) {
       this.stopWatcher()
     }
     this._stateManager.dispose()
+  }
+
+  private async _cleanupAsync(): Promise<void> {
+    // 先释放 embedder（F2LLM），再释放 reranker/highlighter（MiniCPM）
+    if (this._embedder) {
+      await this._embedder.dispose?.().catch(() => {})
+      this._embedder = undefined
+    }
+    if (this._searchService) {
+      await this._searchService.dispose().catch(() => {})
+    }
   }
 
   /**
@@ -399,6 +415,12 @@ export class CodeIndexManager implements ICodeIndexManager {
     if (this._orchestrator) {
       this.stopWatcher()
     }
+
+    // Dispose old services to free GPU resources before creating new ones
+    if (this._searchService) {
+      await this._searchService.dispose().catch(() => {})
+    }
+
     // Clear existing services to ensure clean state
     this._orchestrator = undefined
     this._searchService = undefined
@@ -468,6 +490,9 @@ export class CodeIndexManager implements ICodeIndexManager {
     }
 
     // (Re)Initialize orchestrator
+    // Store references for cleanup
+    this._embedder = embedder
+
     this._orchestrator = new CodeIndexOrchestrator(
       this._configManager!,
       this._stateManager,
