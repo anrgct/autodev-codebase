@@ -269,6 +269,18 @@ export class ConfigValidator {
         return
       }
 
+      if (config.rerankerProvider === 'qrranker') {
+        // QR-based reranker using attention head scoring.
+        // Model path validation is handled at creation time in service-factory.
+        return
+      }
+
+      if (config.rerankerProvider === 'semantic-highlight') {
+        // Semantic highlight reranker using embedding similarity.
+        // Model path validation is handled at creation time in service-factory.
+        return
+      }
+
       // Unknown provider
       issues.push({
         path: 'rerankerProvider',

@@ -532,7 +532,17 @@ export class CodeIndexManager implements ICodeIndexManager {
     const vectorStore = this._orchestrator!.getVectorStore()
 
     // Initialize the vector store connection
-    await vectorStore.initialize()
+    const collectionCreated = await vectorStore.initialize()
+
+    // If the collection was (re)created due to dimension mismatch or missing,
+    // clear the local cache so a subsequent full scan does not skip files
+    // based on stale hashes from the previous index.
+    if (collectionCreated) {
+      this.dependencies.logger?.info(
+        "[SearchOnly] New collection created, clearing cache to avoid stale file hashes...",
+      )
+      await this._cacheManager!.clearCacheFile()
+    }
 
     // Check if there's existing indexed data
     const hasData = await vectorStore.hasIndexedData()

@@ -23,14 +23,6 @@ export function saveJsoncPreservingComments(
     return JSON.stringify(newConfig, null, 2)
   }
 
-  // Validate original content is valid JSONC by checking for parse errors
-  const parseErrors: jsoncParser.ParseError[] = []
-  jsoncParser.parse(originalContent, parseErrors)
-  if (parseErrors.length > 0) {
-    // Fallback to standard JSON if original is invalid
-    return JSON.stringify(newConfig, null, 2)
-  }
-
   let result = originalContent
   let hasErrors = false
 
@@ -52,6 +44,8 @@ export function saveJsoncPreservingComments(
 
   /**
    * Recursively apply updates while preserving comments
+   * Uses jsoncParser.modify which works at the text level, so it can
+   * handle documents with minor parse errors (e.g. missing trailing commas).
    */
   function applyUpdates(obj: any, path: string[] = []): void {
     for (const [key, value] of Object.entries(obj)) {

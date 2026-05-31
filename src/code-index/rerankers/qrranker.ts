@@ -94,6 +94,7 @@ export class QRRankerReranker implements IReranker {
         try {
           const ctx = await model.createContext({
             contextSize,
+            batchSize: 4096,
             sequences: 1,
             flashAttention: false,
             collectKqSoftMax: true,

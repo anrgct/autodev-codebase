@@ -139,7 +139,16 @@ embedding context auto-detect 分配了 40960 token 的超大 context，`llama_d
 
 ## 修订记录
 
-（暂无）
+### 2026-05-31
+**问题：** QRRanker 池化 context 缺少 `batchSize` 参数，处理 2563 tokens 批次时 `llama_decode` 内部缓冲区溢出 → SIGSEGV
+
+**修复：** `_ensureContexts()` 中 `model.createContext()` 加上 `batchSize: 4096`
+
+**影响文件：** `src/code-index/rerankers/qrranker.ts` L97
+
+**batchSize 全面审计：** 全部 7 个 `createContext()` 调用点中，
+- 3 个 batched evaluation 路径（QRRanker pool/temp + QRRankerHighlighter）已齐
+- 4 个 chat generation 路径（`LlamaCppLLMHighlighter`×2、`LlamaCppLLMReranker`、`LlamaCppSummarizer`）未设 `batchSize`，但因使用 `session.prompt()` 内部自处理分片，风险较低，暂缓处理
 
 ## 总结
 

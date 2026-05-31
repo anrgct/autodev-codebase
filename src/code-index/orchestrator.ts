@@ -255,6 +255,16 @@ export class CodeIndexOrchestrator {
         this.stateManager.setSystemState("Indexed", t("embeddings:orchestrator.fileWatcherStarted"))
       } else {
         // No existing data or collection was just created - do a full scan
+
+        // Defensive: clear cache to prevent stale hashes from causing the scanner
+        // to skip files when the collection was (re)created without cache invalidation
+        // (e.g., when _initializeForSearchOnly recreated the collection).
+        // This is safe because a full scan needs to index everything anyway.
+        if (!collectionCreated) {
+          this.info("[CodeIndexOrchestrator] Collection empty but cache may have stale hashes; clearing cache...")
+          await this.cacheManager.clearCacheFile()
+        }
+
         this.stateManager.setSystemState("Indexing", t("embeddings:orchestrator.servicesReady"))
 
         // Mark as incomplete at the start of full scan
