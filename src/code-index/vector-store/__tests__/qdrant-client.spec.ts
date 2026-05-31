@@ -446,7 +446,7 @@ describe("QdrantVectorStore", () => {
       expect(vectorStore.collectionExists).toHaveBeenCalledTimes(1)
       expect(mockQdrantClientInstance.deleteCollection).toHaveBeenCalledTimes(1)
       expect(console.error).toHaveBeenCalledWith(
-        `[QdrantVectorStore] Failed to delete collection ${expectedCollectionName}:`,
+        expect.stringContaining(`Failed to delete collection ${expectedCollectionName}:`),
         deleteError,
       )
       ;(console.error as any).mockRestore()
@@ -648,7 +648,7 @@ describe("QdrantVectorStore", () => {
       await expect(vectorStore.upsertPoints(mockPoints)).rejects.toThrow(upsertError)
 
       expect(mockQdrantClientInstance.upsert).toHaveBeenCalledTimes(1)
-      expect(console.error).toHaveBeenCalledWith("Failed to upsert points:", upsertError)
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Failed to upsert points:"), upsertError)
       ;(console.error as any).mockRestore()
     })
   })
@@ -939,7 +939,7 @@ describe("QdrantVectorStore", () => {
       await expect(vectorStore.search(queryVector)).rejects.toThrow(queryError)
 
       expect(mockQdrantClientInstance.query).toHaveBeenCalledTimes(1)
-      expect(console.error).toHaveBeenCalledWith("Failed to search points:", queryError)
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Failed to search points:"), queryError)
       ;(console.error as any).mockRestore()
     })
 

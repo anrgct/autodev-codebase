@@ -350,7 +350,7 @@ export class CodeIndexServiceFactory {
       throw new Error(t("embeddings:serviceFactory.qdrantUrlMissing"))
     }
 
-    return new QdrantVectorStore(this.workspacePath, config.qdrantUrl, vectorSize, config.qdrantApiKey)
+    return new QdrantVectorStore(this.workspacePath, config.qdrantUrl, vectorSize, config.qdrantApiKey, this.logger)
   }
 
   /**

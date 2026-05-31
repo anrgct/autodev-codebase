@@ -245,6 +245,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
         "http://localhost:6333",
         expectedDimension,
         "test-key",
+        undefined,
       )
     })
 
@@ -267,6 +268,7 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
         "http://localhost:6333",
         1024,
         "test-key",
+        undefined,
       )
     })
 
