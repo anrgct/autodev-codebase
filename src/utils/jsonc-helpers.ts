@@ -95,14 +95,14 @@ export function saveJsoncPreservingComments(
 
   applyUpdates(newConfig)
 
-  // If any errors occurred during modification, verify the result is still valid
-  if (hasErrors) {
-    const finalErrors: jsoncParser.ParseError[] = []
-    jsoncParser.parse(result, finalErrors)
-    if (finalErrors.length > 0) {
-      // If result became invalid, fallback to standard JSON
-      return JSON.stringify(newConfig, null, 2)
-    }
+  // Always validate the final result. We need this even when hasErrors is
+  // false because jsonc-parser's modify is lenient: it may "succeed" on an
+  // already-invalid document without flagging hasErrors, leaving the result
+  // unparseable (e.g. `// comment` lines that mask a missing comma).
+  const finalErrors: jsoncParser.ParseError[] = []
+  jsoncParser.parse(result, finalErrors)
+  if (finalErrors.length > 0) {
+    return JSON.stringify(newConfig, null, 2)
   }
 
   return result

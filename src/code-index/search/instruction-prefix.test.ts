@@ -107,7 +107,8 @@ describe("resolveQueryPrefix", () => {
 
     it("applies prefill to qwen3-embedding:4b", () => {
       const result = resolveQueryPrefix("async await", "ollama", "qwen3-embedding:4b")
-      expect(result).toContain("Instruct: Given a codebase search query")
+      expect(result).toBe(QWEN_PREFILL_TEMPLATE + "async await")
+      expect(result).toContain("Instruct:")
       expect(result).toContain("Query: async await")
     })
 

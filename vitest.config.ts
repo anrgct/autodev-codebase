@@ -27,6 +27,9 @@ export default defineConfig({
       'build/**',
       '.git/**',
       '.autodev-cache/**',
+      // Skip worktree snapshots — they have stale source (e.g. old
+      // MAX_FILE_SIZE_BYTES) and would shadow the active test runs.
+      '.claude/**',
       'src/__e2e__/**/*.ts',
       // Known to cause V8 Zone memory overflow in Node v24
       'src/tree-sitter/__tests__/inspectSwift.test.ts'

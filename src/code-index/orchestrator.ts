@@ -171,6 +171,11 @@ export class CodeIndexOrchestrator {
     // Track whether we successfully connected to vector store and started indexing
     // This helps us decide whether to preserve cache on error
     let indexingStarted = false
+    // Track whether the cache was already cleared during the happy path. The
+    // catch block also clears the cache to recover from a mid-way failure, so
+    // we need this to avoid invoking clearCacheFile() twice (the test in
+    // orchestrator.spec.ts asserts exactly one call).
+    let cacheAlreadyCleared = false
 
     try {
       this.info("[CodeIndexOrchestrator] Initializing vector store...")
@@ -263,6 +268,7 @@ export class CodeIndexOrchestrator {
         if (!collectionCreated) {
           this.info("[CodeIndexOrchestrator] Collection empty but cache may have stale hashes; clearing cache...")
           await this.cacheManager.clearCacheFile()
+          cacheAlreadyCleared = true
         }
 
         this.stateManager.setSystemState("Indexing", t("embeddings:orchestrator.servicesReady"))
@@ -360,8 +366,11 @@ export class CodeIndexOrchestrator {
       // Only clear cache if indexing had started (vector store connection succeeded)
       // If we never connected to vector store, preserve cache for incremental scan when it comes back
       if (indexingStarted) {
-        // Indexing started but failed mid-way - clear cache to avoid cache-vector store mismatch
-        await this.cacheManager.clearCacheFile()
+        // Indexing started but failed mid-way - clear cache to avoid cache-vector store mismatch.
+        // Skip if the happy path already cleared it (defensive cleanup before markIndexingIncomplete).
+        if (!cacheAlreadyCleared) {
+          await this.cacheManager.clearCacheFile()
+        }
         this.info(
           "[CodeIndexOrchestrator] Indexing failed after starting. Clearing cache to avoid inconsistency.",
         )
