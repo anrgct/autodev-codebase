@@ -53,3 +53,6 @@ export {
   setGlobalConfigProvider,
   type IConfigProvider
 } from './config-provider'
+
+// Terminal-safe text utilities
+export { escapeControlChars } from './escape-control-chars'

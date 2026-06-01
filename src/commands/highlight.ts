@@ -6,6 +6,7 @@
  */
 import { Command } from "commander"
 import { CommandOptions, createDependencies, getLogger, initGlobalLogger, initializeManager, resolveWorkspacePath } from "./shared"
+import { escapeControlChars } from "../utils/escape-control-chars"
 import type { HighlightResult, HighlightLine, HighlightOptions } from "../code-index/interfaces/highlighter"
 
 // ---------------------------------------------------------------------------
@@ -41,8 +42,16 @@ interface HighlightFileResult {
  * Format highlight results as human-readable text.
  * Follows the same conventions as search command output:
  * file-level groupings, `====` separators, score bars.
+ *
+ * Control characters in the kept code lines are escaped to caret
+ * notation so ANSI/CSI sequences in the input file (e.g. progress-bar
+ * redraw residue) cannot erase the prepended line numbers in TTY output.
+ * Use --json to retrieve the raw, unescaped `lines[].text` values.
  */
-function formatHighlightResults(results: HighlightFileResult[], query: string): string {
+function formatHighlightResults(
+  results: HighlightFileResult[],
+  query: string,
+): string {
   if (!results || results.length === 0) {
     return `No highlight results for query: "${query}"`
   }
@@ -73,7 +82,8 @@ function formatHighlightResults(results: HighlightFileResult[], query: string): 
     parts.push(`${"=".repeat(50)}`)
     parts.push(`File: "${r.filePath}" (${keptCount}/${totalCount} lines kept, chunk-score: ${chunkScores[i].toFixed(4)})`)
     parts.push("")
-    parts.push(r.result.formattedText)
+    const formattedText = escapeControlChars(r.result.formattedText)
+    parts.push(formattedText)
     parts.push("")
   }
 

@@ -6,6 +6,7 @@ import { CommandOptions, initializeManager, waitForIndexingCompletion, getLogger
 import { VectorStoreSearchResult, SearchFilter } from '../code-index/interfaces';
 import { parsePathFilters } from '../utils/path-filters';
 import { validateLimit, validateMinScore } from '../code-index/validate-search-params';
+import { escapeControlChars } from '../utils/escape-control-chars';
 
 interface SearchResult {
   payload?: {
@@ -94,8 +95,12 @@ function formatSearchResults(results: SearchResult[], query: string): string {
           : '';
       const hierarchyInfo = result.payload?.hierarchyDisplay ? `< ${result.payload?.hierarchyDisplay} > `
           : '';
+      // Escape control chars in the snippet body so that ANSI/CSI residue
+      // in the indexed file (e.g. captured TTY logs) cannot corrupt TTY
+      // output. The `lineInfo` / `hierarchyInfo` headers contain no control
+      // characters and are emitted verbatim.
       return `${hierarchyInfo}${lineInfo}
-${codeChunk}`;
+${escapeControlChars(codeChunk)}`;
     }).join('\n' + '─'.repeat(5) + '\n');
 
     const snippetInfo = meaningfulResults.length > 1 ? ` | ${meaningfulResults.length} snippets` : '';
