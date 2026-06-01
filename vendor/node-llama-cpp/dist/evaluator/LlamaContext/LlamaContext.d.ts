@@ -139,6 +139,14 @@ export declare class LlamaContext {
      * instead of the full nTokens × nKv × nHead tensor, avoiding V8 ArrayBuffer 4GB limit.
      */
     setKqSoftMaxQueryRange(queryStart: number, queryEnd: number): void;
+    /**
+     * QRRanker: Set layer range for kq_soft_max tensor collection in cbEval.
+     * Must be called before decode when using a model with a different number
+     * of layers than the original QRRanker model (25 layers). Scales the QR head
+     * layer range [17, 25) proportionally to the target model's total layers.
+     * Default: start=17, end=25.
+     */
+    setKqSoftMaxLayerRange(layerStart: number, layerEnd: number): void;
 }
 export declare class LlamaContextSequence {
     readonly onDispose: EventRelay<void>;

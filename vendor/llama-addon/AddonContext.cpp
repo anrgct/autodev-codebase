@@ -523,8 +523,10 @@ bool AddonContext::cbEval(ggml_tensor *t, bool ask, void *user_data) {
     }
 
     const int il = std::atoi(t->name + 12);
-    // QRRanker only needs attention weights from the QR head layers (17-24)
-    if (il < 17 || il >= 25) {
+    // QRRanker only needs attention weights from the QR head layers.
+    // Layer range is dynamically configurable via SetKqSoftMaxLayerRange.
+    // Default: [17, 25) for original QRRanker model (25 layers, QR heads in 17-24).
+    if (il < ctx->kqLayerStart || il >= ctx->kqLayerEnd) {
         return true;
     }
 
@@ -638,6 +640,18 @@ Napi::Value AddonContext::SetKqSoftMaxQueryRange(const Napi::CallbackInfo& info)
     kqQueryStart = info[0].As<Napi::Number>().Int32Value();
     kqQueryEnd = info[1].As<Napi::Number>().Int32Value();
     // Reset accumulation state for new decode
+    kqCurrentBatchTokenStart = 0;
+    kqSoftMaxData.clear();
+    kqN_Kv = 0;
+    kqN_Tokens = 0;
+    kqN_Head = 0;
+    return Env().Undefined();
+}
+
+Napi::Value AddonContext::SetKqSoftMaxLayerRange(const Napi::CallbackInfo& info) {
+    kqLayerStart = info[0].As<Napi::Number>().Int32Value();
+    kqLayerEnd = info[1].As<Napi::Number>().Int32Value();
+    // Reset collected data since layer filter has changed
     kqCurrentBatchTokenStart = 0;
     kqSoftMaxData.clear();
     kqN_Kv = 0;
@@ -1287,6 +1301,7 @@ void AddonContext::init(Napi::Object exports) {
                 InstanceMethod("getKqSoftMaxShape", &AddonContext::GetKqSoftMaxShape),
                 InstanceMethod("setCollectKqSoftMax", &AddonContext::SetCollectKqSoftMax),
                 InstanceMethod("setKqSoftMaxQueryRange", &AddonContext::SetKqSoftMaxQueryRange),
+                InstanceMethod("setKqSoftMaxLayerRange", &AddonContext::SetKqSoftMaxLayerRange),
             }
         )
     );

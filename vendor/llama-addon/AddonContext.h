@@ -48,6 +48,14 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         int kqQueryStart = -1;
         int kqQueryEnd = -1;
 
+        // Dynamic layer range for kq_soft_max tensor filtering in cbEval.
+        // Defaults to match the original QRRanker model layers [17, 25).
+        // Set via SetKqSoftMaxLayerRange before decode to scale proportionally
+        // to the target model's total layer count.
+        // See docs/plans/260601-qrranker-dynamic-layer-range.md
+        int kqLayerStart = 17;
+        int kqLayerEnd = 25;
+
         // Current JS decode batch start in absolute sequence token positions.
         // node-llama-cpp splits long inputs before llama_decode; AddToBatch gets
         // the true first token index, so cbEval should not infer it from tensor shape.
@@ -105,6 +113,7 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         Napi::Value GetKqSoftMaxShape(const Napi::CallbackInfo& info);
         Napi::Value SetCollectKqSoftMax(const Napi::CallbackInfo& info);
         Napi::Value SetKqSoftMaxQueryRange(const Napi::CallbackInfo& info);
+        Napi::Value SetKqSoftMaxLayerRange(const Napi::CallbackInfo& info);
 
         static void init(Napi::Object exports);
 };

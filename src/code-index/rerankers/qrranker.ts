@@ -18,6 +18,17 @@ const QR_HEADS: Array<{ layer: number; head: number }> = [
 const QR_START_LAYER = 17;
 const QR_END_LAYER = 25; // exclusive
 
+// Source layer count for proportional scaling: the original (uncropped)
+// Qwen3-4B has 36 transformer blocks. QRRanker was trained on a cropped version
+// (keeping only layers 0-24), so QR heads at layers 17-24 correspond to the
+// 47%-67% depth range of the full 36-layer architecture.
+// When applying to an uncropped model (like MiniCPM), scale relative to 36.
+// The QRRanker cropped model (25 blocks) is handled as a special case:
+// its layers map 1:1 to the original, so no scaling is needed.
+// See docs/plans/260601-qrranker-dynamic-layer-range.md
+const QR_ORIGINAL_NLAYER = 36;  // original Qwen3-4B blocks (before cropping)
+const QR_QRRANKER_NLAYER = 25;  // QRRanker cropped model blocks
+
 /**
  * QRRanker: listwise document reranker using QR attention heads.
  *
@@ -239,10 +250,20 @@ export class QRRankerReranker implements IReranker {
     const QR_SOURCE_NHEAD = 32;
 
     const mappedHeads: string[] = [];
-    for (const { layer, head: rawHead } of QR_HEADS) {
+    // totalLayers includes the output layer (+1). Subtract 1 to get actual transformer
+    // block count for proportional layer mapping.
+    // See docs/plans/260601-qrranker-dynamic-layer-range.md
+    const nModelLayerBlocks = context.model.fileInsights.totalLayers - 1;
+    for (const { layer: rawLayer, head: rawHead } of QR_HEADS) {
       const head = nHead === QR_SOURCE_NHEAD
         ? rawHead
         : Math.min(Math.round(rawHead * nHead / QR_SOURCE_NHEAD), nHead - 1);
+      // Scale layer index proportionally to target model's transformer block count.
+      // For the QRRanker cropped model (25 blocks), layers map 1:1 (no scaling).
+      // For other models, scale relative to the original 36-layer architecture.
+      const layer = nModelLayerBlocks === QR_QRRANKER_NLAYER
+        ? rawLayer
+        : Math.min(Math.round(rawLayer * nModelLayerBlocks / QR_ORIGINAL_NLAYER), nModelLayerBlocks - 1);
       const layerData = context.getKqSoftMax(layer);
       if (!layerData) {
         this.logger?.debug(`[QRRanker] Layer ${layer} kq_soft_max data missing, skipping head (${layer}, ${head})`);
@@ -399,6 +420,27 @@ export class QRRankerReranker implements IReranker {
     // avoiding the V8 ArrayBuffer 4GB limit for long inputs.
     // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
     context.setKqSoftMaxQueryRange(queryStart, queryEnd);
+
+    // Scale the layer range to the target model's transformer block count.
+    // totalLayers includes the output layer (+1). Subtract 1 to get the actual
+    // number of transformer blocks for proportional mapping.
+    //
+    // Two cases:
+    //   1. QRRanker cropped model (25 blocks): use identity [17, 25).
+    //      The cropping preserved original layer numbering 1:1.
+    //   2. Other models (e.g., MiniCPM 24 blocks, original Qwen3-4B 36 blocks):
+    //      scale proportionally using the original 36-layer architecture as source.
+    const nModelLayerBlocks = model.fileInsights.totalLayers - 1;
+    if (nModelLayerBlocks !== QR_QRRANKER_NLAYER) {
+      const mappedStart = Math.round(QR_START_LAYER * nModelLayerBlocks / QR_ORIGINAL_NLAYER);
+      const mappedEnd = Math.round(QR_END_LAYER * nModelLayerBlocks / QR_ORIGINAL_NLAYER);
+      context.setKqSoftMaxLayerRange(mappedStart, mappedEnd);
+      this.logger?.debug(
+        `[QRRanker] Layer range scaled: ${QR_ORIGINAL_NLAYER}→${nModelLayerBlocks} blocks, ` +
+        `range [${mappedStart}, ${mappedEnd})`,
+      );
+    }
+
     await sequence.evaluateWithoutGeneratingNewTokens(tokens);
     this.logger?.debug(
       `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs`,

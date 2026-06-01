@@ -496,6 +496,16 @@ export class LlamaContext {
     setKqSoftMaxQueryRange(queryStart, queryEnd) {
         this._ctx.setKqSoftMaxQueryRange(queryStart, queryEnd);
     }
+    /**
+     * QRRanker: Set layer range for kq_soft_max tensor collection in cbEval.
+     * Must be called before decode when using a model with a different number
+     * of layers than the original QRRanker model (25 layers). Scales the QR head
+     * layer range [17, 25) proportionally to the target model's total layers.
+     * Default: start=17, end=25.
+     */
+    setKqSoftMaxLayerRange(layerStart, layerEnd) {
+        this._ctx.setKqSoftMaxLayerRange(layerStart, layerEnd);
+    }
     async _decodeTokens({ sequenceId, firstTokenSequenceIndex, tokens, logits, evaluationPriority = defaultEvaluationPriority, tokenMeter, afterBatchAction }, logitDataMapper) {
         return await new Promise((accept, reject) => {
             this._queuedDecodes.push({
