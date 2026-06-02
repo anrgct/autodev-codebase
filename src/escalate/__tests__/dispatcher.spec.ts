@@ -28,6 +28,7 @@ function makeConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
     proModel: PRO,
     port: 8080,
     host: 'localhost',
+    stickyProTtlMs: 0,
     ...overrides,
   }
 }
@@ -123,7 +124,7 @@ describe('EscalateDispatcher', () => {
       const flashBodySent = JSON.parse(captured[0].init.body!)
       expect(flashBodySent.model).toBe(FLASH)
       const sys = flashBodySent.messages.find((m: { role: string }) => m.role === 'system')
-      expect(sys.content).toContain('Cost-aware escalation')
+      expect(sys.content).toContain('Cost-aware tier switching instruction')
     })
 
     it('passes the marker reason through to the pro retry header', async () => {
@@ -353,7 +354,7 @@ describe('EscalateDispatcher', () => {
       expect(sentBody.model).toBe(FLASH)
       const sys = sentBody.messages.find((m: { role: string }) => m.role === 'system')
       expect(sys.content).toContain('You are helpful.')
-      expect(sys.content).toContain('Cost-aware escalation')
+      expect(sys.content).toContain('Cost-aware tier switching instruction')
     })
 
     it('injects the pro-side contract on the pro retry (teaches downgrade)', async () => {
@@ -373,7 +374,8 @@ describe('EscalateDispatcher', () => {
       const sys = proBody.messages.find((m: { role: string }) => m.role === 'system')
       // The pro retry now injects the pro-side contract (which mentions
       // `<<<NEEDS_FLASH>>>` so the pro model knows it can downgrade).
-      expect(sys.content).toContain('Cost-aware downgrade note')
+      expect(sys.content).toContain('Cost-aware tier switching instruction')
+      expect(sys.content).toContain('strong tier')
       expect(sys.content).toContain('`<<<NEEDS_FLASH>>>`')
     })
 

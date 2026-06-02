@@ -106,6 +106,7 @@ function makeConfig(): EscalateConfig {
     proModel: PRO_MODEL,
     port: 0, // ephemeral
     host: '127.0.0.1',
+    stickyProTtlMs: 0,
   }
 }
 
@@ -165,7 +166,7 @@ describe('escalate proxy e2e', () => {
     const flashBody = JSON.parse(captured.flash[0].body)
     expect(flashBody.model).toBe(FLASH_MODEL)
     const sys = flashBody.messages.find((m: { role: string }) => m.role === 'system')
-    expect(sys.content).toContain('Cost-aware escalation')
+    expect(sys.content).toContain('Cost-aware tier switching instruction')
     // Authorization was forwarded.
     expect(captured.flash[0].authorization).toBe(`Bearer ${MOCK_TOKEN}`)
 
@@ -177,7 +178,8 @@ describe('escalate proxy e2e', () => {
     // The pro-side contract teaches the pro model about the downgrade
     // marker (<<<NEEDS_FLASH>>>) so it can voluntarily step down.
     expect(proSys).toBeDefined()
-    expect(proSys.content).toContain('Cost-aware downgrade note')
+    expect(proSys.content).toContain('Cost-aware tier switching instruction')
+    expect(proSys.content).toContain('strong tier')
     expect(proSys.content).toContain('`<<<NEEDS_FLASH>>>`')
   })
 

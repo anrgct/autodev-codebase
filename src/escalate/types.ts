@@ -27,6 +27,12 @@ export interface EscalateConfig {
   port: number
   /** Local proxy listening host. */
   host: string
+  /**
+   * TTL for sticky pro entries in milliseconds (default: 300_000 = 5 min).
+   * After this period of inactivity the conversation decays back to flash.
+   * Set to 0 to disable sticky pro entirely.
+   */
+  stickyProTtlMs: number
 }
 
 /**

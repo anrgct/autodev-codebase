@@ -192,6 +192,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   escalateProModel: { type: 'string', description: 'Pro (strong) model ID used after <<<NEEDS_PRO>>> escalation (default: deepseek-v4-pro)' },
   escalatePort: { type: 'integer', minValue: 1, maxValue: 65535, description: 'Local proxy server listening port (default: 8080)' },
   escalateHost: { type: 'string', description: 'Local proxy server listening host (default: localhost)' },
+  escalateStickyProTtlMs: { type: 'integer', minValue: 0, description: 'Sticky pro TTL in milliseconds (default: 300000 = 5 min). Set 0 to disable.' },
 }
 
 /**

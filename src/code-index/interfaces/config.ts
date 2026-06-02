@@ -234,6 +234,7 @@ export interface CodeIndexConfig {
   escalateProModel?: string
   escalatePort?: number
   escalateHost?: string
+  escalateStickyProTtlMs?: number
 }
 
 /**

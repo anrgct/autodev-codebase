@@ -573,5 +573,15 @@ export class ConfigValidator {
         message: `Escalate proxy port must be an integer in [1, 65535], got: ${config.escalatePort}`
       })
     }
+
+    // Validate escalateStickyProTtlMs
+    if (config.escalateStickyProTtlMs !== undefined &&
+        (!Number.isInteger(config.escalateStickyProTtlMs) || config.escalateStickyProTtlMs < 0)) {
+      issues.push({
+        path: 'escalateStickyProTtlMs',
+        code: 'invalid_range',
+        message: `escalateStickyProTtlMs must be a non-negative integer, got: ${config.escalateStickyProTtlMs}`
+      })
+    }
   }
 }

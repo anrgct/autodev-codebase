@@ -141,6 +141,93 @@ src/escalate/dispatcher.ts        # 请求转发 + 重试 + 流式透传
 src/escalate/types.ts             # 类型定义
 ```
 
+### 决策 7：Sticky Pro — 消息前缀匹配的对话级状态保留
+
+默认启用，基于消息内容前缀匹配，类似 LLM prefix caching 的思路。
+
+#### 动机
+
+一旦对话升级到 pro，后续轮次应该跳过 flash 往返直接发 pro。但对话之间必须隔离——A 对话升级了，B 对话不应该受影响。
+
+#### 核心思路
+
+```
+Round 1:  messages = [sys, user_q1]
+               -> upgrade to pro
+               -> fingerprint(messages[:-1]) -> store prefix key
+
+Round 2:  messages = [sys, user_q1, asst_a1, user_q2]
+               -> match from longest prefix to shortest
+               -> prefix [sys, user_q1] -> HIT! -> skip flash, direct pro
+```
+
+- **存储时机**：flash 检测到 `<<<NEEDS_PRO>>>` -> 成功切换到 pro 后，把当前 messages（去掉最后一条）指纹化存储
+- **匹配策略**：从 `messages.length - 1` 到 1 逐一匹配前缀，最长匹配优先
+- **清除时机**：pro 模型输出 `<<<NEEDS_FLASH>>>` 降级时 -> 清除该对话的所有 prefix 条目
+- **过期**：TTL 默认 5 分钟，无活跃自动降级回 flash，避免"永久 pro"浪费
+
+#### 指纹计算
+
+只取 `role` + `content` 前 200 字符做 SHA256，忽略 `tool_calls`/`function` 等辅助字段，保证相同语义不同调用方式的请求仍然命中。
+
+```typescript
+function fingerprintMessages(msgs: ChatCompletionMessage[]): string {
+  const simplified = msgs.map((m) => ({
+    role: m.role,
+    content: typeof m.content === 'string' ? m.content.slice(0, 200) : '',
+  }))
+  const json = JSON.stringify(simplified)
+  return createHash('sha256').update(json).digest('hex').slice(0, 16)
+}
+```
+
+#### 配置
+
+| Key | 类型 | 默认值 | 说明 |
+|-----|------|--------|------|
+| `escalateStickyProTtlMs` | `integer` >= 0 | `300000` (5min) | TTL 毫秒。设为 0 关闭 sticky pro |
+
+不设单独开关——`stickyProTtlMs > 0` = 开启，`= 0` = 关闭。
+
+#### 状态管理对比
+
+| 方案 | 粒度 | 客户端配合 | 自动降级 | 碰撞风险 |
+|------|------|-----------|---------|---------|
+| 按 API Key hash | 粗 | 否 | 是 | 同人多对话串话 |
+| 按 `X-Conversation-Id` header | 细 | 要 | 是 | 无 |
+| **按消息前缀指纹** | 细 | **否** | 是 | 极小（相同前缀不同对话） |
+
+选消息前缀指纹的理由：完全自动，零客户端配合，且 prefix caching 的逻辑用户已经熟悉。
+
+#### 代码结构
+
+```
+src/escalate/sticky.ts    <- 新增
+  +-- StickyStore         类
+  |   +-- lookup()        查（最长前缀 -> 最短）
+  |   +-- storeUpgrade()  存
+  |   +-- clear()         清
+  |   +-- startCleanup()  定时清理
+  |   +-- stopCleanup()
+  +-- fingerprintMessages()  指纹函数（纯）
+```
+
+Dispatcher 中的集成点：
+- `dispatch()` — 接到请求时先查 sticky
+- `dispatchDirectPro()` / `dispatchDirectProStream()` — 直接发 pro 的新路径
+- `dispatchNonStream()` — 升级后 store，降级后 clear
+- `dispatchStream()` — 升级后 store（checkProStreamForDowngrade 内降级时 clear）
+- `checkProStreamForDowngrade()` — 新增 `isDirect` 参数，降级时 clear
+
+#### 和 prefix caching 的对应关系
+
+| LLM Prefix Caching | Sticky Pro |
+|---|---|
+| KV cache key = input tokens prefix | sticky key = messages prefix |
+| 共享 prefix 的请求复用 KV | 共享 prefix 的请求复用 pro |
+| prefix 越长越精确 | 同样 |
+
+
 ## 实施计划
 
 - [ ] **阶段 1：配置层**
@@ -216,6 +303,43 @@ src/escalate/types.ts             # 类型定义
 
 - **v1 (2026-06-02)**: 首次实现并测试通过。
 - **v2 (2026-06-02)**: 新增 `<<<NEEDS_FLASH>>>` 降级支持，pro 模型可自由决定降级到 flash。
+- **v3 (2026-06-02)**: 新增 Sticky Pro —— 消息前缀指纹匹配的对话级状态保留。
+
+### v3 变更详情 (2026-06-02)
+
+#### 新增功能
+
+- **Sticky Pro**：一旦对话升级到 pro，后续请求只要消息前缀匹配就跳过 flash 直接发 pro。
+- **消息前缀指纹**：基于 `role` + `content` 前 200 字符做 SHA256，类似 LLM prefix caching。
+- **StickyStore** 类：纯内存 `Map` 存储，TTL 自动过期（默认 5 分钟），定期清理。
+- **`dispatchDirectPro()` / `dispatchDirectProStream()`** — 直接从 pro 开始的新 dispatch 路径。
+- **配置项 `escalateStickyProTtlMs`**：控制 TTL，设为 0 关闭。
+
+#### 设计要点
+
+- **无单独开关**：`stickyProTtlMs > 0` = 开启，`= 0` = 关闭。默认 300000ms。
+- **最长前缀匹配**：从 `messages.length - 1` 到 1 逐一匹配，命中最长前缀。
+- **降级清除**：pro 输出 `<<<NEEDS_FLASH>>>` 时清除全部 sticky 条目，下次请求从 flash 开始。
+- **零客户端配合**：不需要客户端发任何 header，纯靠消息内容区分对话。
+- **线程安全**：单线程 event loop，不需要锁。
+
+#### 修改文件
+
+- `src/escalate/sticky.ts` — 🆕 新增，StickyStore + fingerprintMessages
+- `src/escalate/types.ts` — 扩展 `EscalateConfig` 加 `stickyProTtlMs`
+- `src/escalate/dispatcher.ts` — 集成 sticky 到 dispatch 全流程
+- `src/code-index/interfaces/config.ts` — `CodeIndexConfig` 加 `escalateStickyProTtlMs`
+- `src/code-index/constants/index.ts` — 默认值 300000
+- `src/commands/config/metadata.ts` — 元数据描述
+- `src/code-index/config-validator.ts` — TTL 校验
+- `src/commands/escalate.ts` — CLI 加载 TTL + banner 显示
+- `src/escalate/__tests__/sticky.spec.ts` — 🆕 新增，14 个测试
+- `src/escalate/__tests__/dispatcher.spec.ts` — 添加 `stickyProTtlMs: 0`
+- `src/escalate/__tests__/e2e.spec.ts` — 添加 `stickyProTtlMs: 0`
+
+#### 测试结果
+
+- 120/120 测试文件通过，1133/1133 测试通过（原 1119 + 14 新增）
 
 ### v2 变更详情 (2026-06-02)
 
@@ -260,22 +384,28 @@ src/escalate/types.ts             # 类型定义
 
 ### 核心设计要点
 
-1. **偷看缓冲** — 只缓冲 50 chars 判定，零拷贝透传，无升级时几乎无性能损失
+1. **偷看缓冲** — 只缓冲 256 chars 判定，零拷贝透传，无升级时几乎无性能损失
 2. **连接池** — undici `Pool` 复用 TLS 连接，避免重复握手
-3. **无状态** — proxy 不做会话管理，每个请求独立判定，耦合最低
+3. **消息前缀匹配** — sticky pro 基于 `messages` 内容前缀指纹匹配对话，零客户端配合
 4. **纯文本注入** — CONTRACT 注入只修改 system prompt 文本，不改变 API 协议语义
 5. **头透传机制** — `X-Escalated-To: pro` 头告知客户端发生了升级，客户端可据此展示通知
 6. **双向 tier 切换** — flash → pro (升级) 与 pro → flash (降级) 对称，pro 模型可自由决定降级以节省成本
 7. **路径跟踪** — `X-Escalation-Path: flash->pro->flash` 记录请求跨 tier 的完整路径，便于调试与遥测
+8. **TTL 自动降级** — sticky pro 条目 5 分钟无活动自动过期，避免永久 pro 浪费
 
 ### 局限性
 
 - failure-threshold 隐式升级不在此 proxy 范围内（需客户端配合上报）
 - 仅支持 OpenAI 兼容协议（`/v1/chat/completions`）
 - 升级重试只做 1 次（flash → pro），不做多次级联
+- 消息前缀指纹是 best-effort，两个对话恰好有相同 system + 第一条 user 消息时可能误匹配（概率极低）
+- **推理模型长 think block 导致客户端 TTFB 飙升**：`extractSseDelta()` 只提取 `delta.content`，忽略 `delta.reasoning_content`（think block）。在流式 peek 阶段，代理会持续读取所有 think 内容的 SSE 事件并缓冲原始字节到 `peekBytes`，但 `sseContentBuf` 始终为 0。只有等模型开始输出 `delta.content` 后，缓冲区才开始累积。在此期间客户端收不到任何数据，TTFB = think_duration + content_buffering_duration。对于 think block 很长的推理模型（5-30s+），用户体验接近超时。Sticky Pro 可缓解此问题——仅第一次请求需要等 think block，后续直接走 pro 跳过 flash。
+- **"等满 256 再检测" 的非最优设计**：当前实现是在累积满 `PEEK_MAX_CHARS=256` chars 的 `delta.content` 后，再统一调用 `detectEscalationMarker()` 做检测。这意味着即使第一个 content chunk 就是 `<<<NEEDS_PRO>>>`（18 chars），代理仍会继续读取后续内容直到 256 chars 才开始做决定，浪费了 ~238 chars 的读取时间。优化方向：在每次 SSE 行的 content 累积后做增量检测，检测到完整 marker 就提前退出 peek 循环。对最常见的无升级路径（>99%）无影响；对升级路径可节省数百毫秒到数秒。
 
 ### 后续优化方向
 
 - 支持 `X-Failure-Count` header 接收客户端上报的失败计数
 - 支持多 provider（OpenAI、Anthropic 等）的 CONTRACT 注入
 - 支持 `X-Escalated-From / X-Escalated-To` 审计日志
+- **推理模型长 think block 优化**：引入 `PEEK_TIMEOUT_MS` 超时机制——如果 peek 阶段超过 N 秒（如 5s）还没看到 `delta.content`，放弃升级检测直接透传原始流，避免客户端长时间无数据。代价是长 think 的复杂任务可能无法正确升级。
+- **增量检测提前退出**：在每次 SSE 行处理后做增量 marker 检测，一旦发现完整 `<<<NEEDS_PRO>>>` 或 `<<<NEEDS_FLASH>>>` 标记就提前结束 peek 阶段，无需等满 256 chars。

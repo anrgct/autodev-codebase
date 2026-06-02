@@ -27,9 +27,10 @@
  */
 
 import { fetch, Pool, type Dispatcher } from 'undici'
-import { injectContract, type ChatCompletionRequestBody } from './contract'
+import { injectContract, type ChatCompletionRequestBody, type ChatCompletionMessage } from './contract'
 import { detectEscalationMarker, stripNeedsProMarker } from './detector'
 import type { DispatchResult, EscalateConfig } from './types'
+import { StickyStore } from './sticky'
 
 /** Default peek buffer — at most this many characters of assistant content before deciding. */
 const PEEK_MAX_CHARS = 256
@@ -165,6 +166,17 @@ function headersToRecord(headers: Headers): Record<string, string> {
   return out
 }
 
+/**
+ * Extract messages from a parsed body, returning null on missing/invalid data.
+ */
+function extractMessages(rawBody: unknown): ChatCompletionMessage[] | null {
+  if (!rawBody || typeof rawBody !== 'object') return null
+  const body = rawBody as Record<string, unknown>
+  const msgs = body['messages']
+  if (!Array.isArray(msgs)) return null
+  return msgs as ChatCompletionMessage[]
+}
+
 /** Normalize `apiBase` to remove trailing slash. */
 function normalizeBase(apiBase: string): string {
   return apiBase.replace(/\/+$/, '')
@@ -220,12 +232,20 @@ export class EscalateDispatcher {
   private readonly logger: NonNullable<DispatcherOptions['logger']>
   private readonly fetchImpl: typeof fetch
   private readonly pool: Dispatcher | undefined
+  /** Sticky pro session store (null when disabled). */
+  private readonly stickyStore: StickyStore | null
 
   constructor(opts: DispatcherOptions) {
     this.config = opts.config
     this.logger = opts.logger ?? {}
     this.fetchImpl = opts.fetchImpl ?? (fetch as unknown as typeof fetch)
     this.pool = opts.dispatcher
+    this.stickyStore = this.config.stickyProTtlMs > 0
+      ? new StickyStore({ ttlMs: this.config.stickyProTtlMs })
+      : null
+    if (this.stickyStore) {
+      this.stickyStore.startCleanup()
+    }
   }
 
   /**
@@ -295,10 +315,142 @@ export class EscalateDispatcher {
     isStream: boolean,
     clientHeaders: Record<string, string | string[] | undefined>
   ): Promise<DispatchResult> {
+    // Sticky pro: if this conversation prefix was recently escalated, skip flash.
+    if (this.stickyStore) {
+      const msgs = extractMessages(rawBody)
+      if (msgs) {
+        const sticky = this.stickyStore.lookup(msgs)
+        if (sticky === 'pro') {
+          this.logger.info?.(`[escalate] sticky pro HIT — dispatching directly to pro`)
+          return this.dispatchDirectPro(rawBody, isStream, clientHeaders)
+        }
+      }
+    }
+
     if (isStream) {
       return this.dispatchStream(rawBody, clientHeaders)
     }
     return this.dispatchNonStream(rawBody, clientHeaders)
+  }
+
+  /**
+   * Direct pro dispatch — skip flash entirely because sticky pro hit.
+   * For non-stream: just call pro and check for downgrade.
+   * For stream: call pro stream, peek for NEEDS_FLASH, downgrade if needed.
+   */
+  private async dispatchDirectPro(
+    rawBody: unknown,
+    isStream: boolean,
+    clientHeaders: Record<string, string | string[] | undefined>
+  ): Promise<DispatchResult> {
+    if (isStream) {
+      return this.dispatchDirectProStream(rawBody, clientHeaders)
+    }
+    return this.dispatchDirectProNonStream(rawBody, clientHeaders)
+  }
+
+  private async dispatchDirectProNonStream(
+    rawBody: unknown,
+    clientHeaders: Record<string, string | string[] | undefined>
+  ): Promise<DispatchResult> {
+    const proBody = this.buildProBody(rawBody)
+    const proResp = await this.callUpstream(proBody, clientHeaders)
+    const path: Array<'flash' | 'pro'> = ['pro']
+
+    if (!proResp.ok) {
+      const errBuf = Buffer.from(await proResp.arrayBuffer())
+      // Upstream error on direct pro — clear sticky so next retry goes flash.
+      const msgs = extractMessages(rawBody)
+      if (msgs) this.stickyStore?.clear(msgs)
+      return {
+        finalModel: 'pro',
+        reason: 'error',
+        path,
+        status: proResp.status,
+        headers: buildResponseHeaders(proResp.headers, annotationHeaders({ finalModel: 'pro', path })),
+        body: errBuf,
+        isStream: false,
+      }
+    }
+
+    const proText = await proResp.text()
+    const proContent = extractChatContent(proText)
+    const proDetect = detectEscalationMarker(proContent)
+
+    if (proDetect.matched && proDetect.direction === 'flash') {
+      // Pro downgraded — clear sticky and retry on flash.
+      const msgs = extractMessages(rawBody)
+      if (msgs) this.stickyStore?.clear(msgs)
+      this.logger.info?.(`[escalate] sticky pro: pro downgraded (${proDetect.reason ?? 'bare'}) — retrying on flash`)
+      const flashBody = this.buildFlashRetryBody(rawBody)
+      const flashResp = await this.callUpstream(flashBody, clientHeaders)
+      path.push('flash')
+
+      if (!flashResp.ok) {
+        const errBuf = Buffer.from(await flashResp.arrayBuffer())
+        return {
+          finalModel: 'flash',
+          reason: 'downgrade',
+          path,
+          status: flashResp.status,
+          headers: buildResponseHeaders(flashResp.headers, annotationHeaders({
+            finalModel: 'flash', switchedFrom: 'pro', path, reason: proDetect.reason ?? 'downgrade',
+          })),
+          body: errBuf,
+          isStream: false,
+        }
+      }
+      const flashBuf = Buffer.from(await flashResp.arrayBuffer())
+      return {
+        finalModel: 'flash',
+        reason: 'downgrade',
+        path,
+        status: flashResp.status,
+        headers: buildResponseHeaders(flashResp.headers, annotationHeaders({
+          finalModel: 'flash', switchedFrom: 'pro', path, reason: proDetect.reason ?? 'downgrade',
+        })),
+        body: flashBuf,
+        isStream: false,
+      }
+    }
+
+    // Pro kept — return response.
+    return {
+      finalModel: 'pro',
+      reason: 'passthrough',
+      path,
+      status: proResp.status,
+      headers: buildResponseHeaders(proResp.headers, annotationHeaders({ finalModel: 'pro', path })),
+      body: Buffer.from(stripNeedsProMarker(proText), 'utf-8'),
+      isStream: false,
+    }
+  }
+
+  private async dispatchDirectProStream(
+    rawBody: unknown,
+    clientHeaders: Record<string, string | string[] | undefined>
+  ): Promise<DispatchResult> {
+    const proBody = this.buildProBody(rawBody)
+    const proResp = await this.callUpstream(proBody, clientHeaders)
+    const path: Array<'flash' | 'pro'> = ['pro']
+
+    if (!proResp.ok || !proResp.body) {
+      const errBuf = proResp.body ? Buffer.from(await proResp.arrayBuffer()) : Buffer.from('')
+      const msgs = extractMessages(rawBody)
+      if (msgs) this.stickyStore?.clear(msgs)
+      return {
+        finalModel: 'pro',
+        reason: 'error',
+        path,
+        status: proResp.status,
+        headers: buildResponseHeaders(proResp.headers, annotationHeaders({ finalModel: 'pro', path })),
+        body: errBuf,
+        isStream: false,
+      }
+    }
+
+    // Peek pro stream for downgrade (reuses checkProStreamForDowngrade logic).
+    return this.checkProStreamForDowngrade(proResp, clientHeaders, rawBody, path, undefined, true)
   }
 
   // ----------------------------------------------------------------------
@@ -385,8 +537,14 @@ export class EscalateDispatcher {
     const proContent = extractChatContent(proText)
     const proDetect = detectEscalationMarker(proContent)
 
+    // Sticky pro: record the upgrade so next request with same prefix skips flash.
+    const msgs = extractMessages(rawBody)
+    if (msgs) this.stickyStore?.storeUpgrade(msgs)
+
     if (proDetect.matched && proDetect.direction === 'flash') {
       this.logger.info?.(`[escalate] <<<NEEDS_FLASH>>> detected on pro (${proDetect.reason ?? 'bare'}) — downgrading to flash`)
+      // Clear sticky — next request should start from flash again.
+      if (msgs) this.stickyStore?.clear(msgs)
 
       // 3. Flash retry (downgrade).
       const flashRetryBody = this.buildFlashRetryBody(rawBody)
@@ -550,6 +708,9 @@ export class EscalateDispatcher {
       // Check the pro stream for a NEEDS_FLASH marker. This adds one more
       // peek roundtrip on the upgrade path, but it lets the pro model
       // self-correct if it realizes mid-stream that the task is trivial.
+      // Sticky pro: record the upgrade before the potentially-downgrading peek.
+      const msgs = extractMessages(rawBody)
+      if (msgs) this.stickyStore?.storeUpgrade(msgs)
       const proStream = await this.checkProStreamForDowngrade(proResp, clientHeaders, rawBody, path, flashDetect.reason)
       return proStream
     }
@@ -603,7 +764,9 @@ export class EscalateDispatcher {
     clientHeaders: Record<string, string | string[] | undefined>,
     rawBody: unknown,
     path: Array<'flash' | 'pro'>,
-    upgradeReason: string | undefined
+    upgradeReason: string | undefined,
+    /** True when this is a direct pro call (sticky hit), not an escalation. */
+    isDirect: boolean = false
   ): Promise<DispatchResult> {
     if (!proResp.body) {
       return {
@@ -612,7 +775,7 @@ export class EscalateDispatcher {
         path,
         status: proResp.status,
         headers: buildResponseHeaders(proResp.headers, annotationHeaders({
-          finalModel: 'pro', switchedFrom: 'flash', path, reason: upgradeReason ?? 'self-report',
+          finalModel: 'pro', switchedFrom: 'flash', path, reason: upgradeReason ?? (isDirect ? 'passthrough' : 'self-report'),
         })),
         body: new ReadableStream<Uint8Array>({ start(c) { c.close() } }),
         isStream: true,
@@ -669,7 +832,7 @@ export class EscalateDispatcher {
         path,
         status: proResp.status,
         headers: buildResponseHeaders(proResp.headers, annotationHeaders({
-          finalModel: 'pro', switchedFrom: 'flash', path, reason: upgradeReason ?? 'self-report',
+          finalModel: 'pro', switchedFrom: 'flash', path, reason: upgradeReason ?? (isDirect ? 'passthrough' : 'self-report'),
         })),
         body: new ReadableStream<Uint8Array>({ start(c) { c.close() } }),
         isStream: true,
@@ -679,6 +842,9 @@ export class EscalateDispatcher {
     const detect = detectEscalationMarker(sseContentBuf)
     if (detect.matched && detect.direction === 'flash') {
       this.logger.info?.(`[escalate] <<<NEEDS_FLASH>>> detected in pro stream (${detect.reason ?? 'bare'}) — downgrading to flash`)
+      // Clear sticky state so next request starts from flash.
+      const msgs = extractMessages(rawBody)
+      if (msgs) this.stickyStore?.clear(msgs)
       try { await proReader.cancel() } catch { /* noop */ }
       path.push('flash')
 
@@ -736,11 +902,11 @@ export class EscalateDispatcher {
 
     return {
       finalModel: 'pro',
-      reason: 'self-report',
+      reason: isDirect ? 'passthrough' : 'self-report',
       path,
       status: proResp.status,
       headers: buildResponseHeaders(proResp.headers, annotationHeaders({
-        finalModel: 'pro', switchedFrom: 'flash', path, reason: upgradeReason ?? 'self-report',
+        finalModel: 'pro', switchedFrom: 'flash', path, reason: upgradeReason ?? (isDirect ? 'passthrough' : 'self-report'),
       })),
       body: passthrough,
       isStream: true,

@@ -10,19 +10,23 @@ const PRO = 'deepseek-v4-pro'
 describe('escalationContract()', () => {
   it('returns the full ladder contract for the flash model', () => {
     const out = escalationContract(FLASH, PRO)
-    expect(out).toContain('Cost-aware escalation')
+    expect(out).toContain('Cost-aware tier switching instruction')
+    expect(out).toContain('cheap tier')
     expect(out).toContain('`deepseek-v4-flash`')
     expect(out).toContain('`deepseek-v4-pro`')
     // The full contract must mention both forms of the marker.
     expect(out).toContain('`<<<NEEDS_PRO>>>`')
     expect(out).toContain('`<<<NEEDS_PRO: <one-sentence reason>>>>`')
+    // The flash contract must explicitly call out that NEEDS_FLASH is a no-op.
+    expect(out).toMatch(/`<<<NEEDS_FLASH>>>.*NO-OP/i)
     // First-line constraint is mandatory.
     expect(out).toMatch(/FIRST line/i)
   })
 
   it('returns the downgrade contract for the pro model', () => {
     const out = escalationContract(PRO, PRO)
-    expect(out).toContain('Cost-aware downgrade note')
+    expect(out).toContain('Cost-aware tier switching instruction')
+    expect(out).toContain('strong tier')
     expect(out).toContain('`deepseek-v4-pro`')
     // The pro contract must mention both forms of the downgrade marker.
     expect(out).toContain('`<<<NEEDS_FLASH>>>`')
@@ -58,7 +62,7 @@ describe('injectContract()', () => {
     expect(sys.role).toBe('system')
     expect(typeof sys.content).toBe('string')
     expect(sys.content as string).toContain('You are a coding assistant.')
-    expect(sys.content as string).toContain('Cost-aware escalation')
+    expect(sys.content as string).toContain('Cost-aware tier switching instruction')
   })
 
   it('prepends a new system message when none exists', () => {
@@ -68,7 +72,7 @@ describe('injectContract()', () => {
     )
     expect(out.messages).toHaveLength(2)
     expect(out.messages![0].role).toBe('system')
-    expect(out.messages![0].content as string).toContain('Cost-aware escalation')
+    expect(out.messages![0].content as string).toContain('Cost-aware tier switching instruction')
     expect(out.messages![1]).toEqual({ role: 'user', content: 'hi' })
   })
 
@@ -87,7 +91,7 @@ describe('injectContract()', () => {
     )
     const twice = injectContract(once, FLASH, PRO)
     const sys = twice.messages!.find((m) => m.role === 'system')!
-    const count = (sys.content as string).match(/Cost-aware escalation/g)?.length ?? 0
+    const count = (sys.content as string).match(/Cost-aware tier switching instruction/g)?.length ?? 0
     expect(count).toBe(1)
   })
 

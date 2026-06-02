@@ -53,6 +53,7 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
   escalateProModel: 'deepseek-v4-pro',
   escalatePort: 8080,
   escalateHost: 'localhost',
+  escalateStickyProTtlMs: 300000,
 }
 
 /**Parser */

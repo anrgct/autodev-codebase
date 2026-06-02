@@ -79,6 +79,9 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
     throw new Error(`Invalid escalatePort: ${port} (must be an integer in [1, 65535])`)
   }
 
+  const stickyProTtlMsRaw = fullConfig.escalateStickyProTtlMs
+  const stickyProTtlMs = typeof stickyProTtlMsRaw === 'number' && stickyProTtlMsRaw >= 0 ? stickyProTtlMsRaw : 300000
+
   return {
     apiBase,
     apiKey: apiKey ? String(apiKey) : undefined,
@@ -86,6 +89,7 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
     proModel,
     port,
     host,
+    stickyProTtlMs,
   }
 }
 
@@ -102,6 +106,7 @@ function printStartupBanner(cfg: EscalateConfig, port: number): void {
   console.log(`  Flash model  : ${cfg.flashModel}  (first attempt)`)
   console.log(`  Pro model    : ${cfg.proModel}    (<<<NEEDS_PRO>>> escalation)`)
   console.log(`  API key      : ${cfg.apiKey ? '(configured)' : '(forwarded from client)'}`)
+  console.log(`  Sticky pro   : ${cfg.stickyProTtlMs > 0 ? `${cfg.stickyProTtlMs}ms TTL` : 'disabled'}`)
   console.log(bar)
   console.log('')
   console.log('  Point any OpenAI-compatible client at this URL. Example:')
