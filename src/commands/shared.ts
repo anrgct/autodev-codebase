@@ -41,6 +41,10 @@ export interface CommandOptions {
   query?: string;
   open?: boolean;
   depth?: string;
+  // Worktree index clone (index command only)
+  fromWorktree?: string;
+  /** Set to false by `--no-clone-from-worktree`; absent means default-on. */
+  cloneFromWorktree?: boolean;
 }
 
 /**
@@ -160,32 +164,72 @@ export async function initializeManager(
 
 /**
  * Wait for indexing to complete
+ *
+ * Subscribes to progress-update events from the manager to detect when indexing
+ * completes, instead of polling on a timer. This eliminates unnecessary delays
+ * in the common case where indexing finishes quickly (e.g., incremental scan
+ * with no new files).
  */
 export async function waitForIndexingCompletion(manager: CodeIndexManager): Promise<void> {
   return new Promise((resolve, reject) => {
-    const checkState = () => {
-      const currentState = manager.state;
-      getLogger().info(`Current state: ${currentState}`);
+    let settled = false;
 
-      if (currentState === 'Indexed') {
+    // Subscribe to progress-update events BEFORE calling startIndexing to
+    // avoid missing the state transition event.
+    const unsubscribe = manager.onProgressUpdate((status) => {
+      if (settled) return;
+      if (status.systemStatus === 'Indexed') {
+        settled = true;
+        unsubscribe();
         getLogger().info('Indexing completed successfully');
         resolve();
-      } else if (currentState === 'Error') {
+      } else if (status.systemStatus === 'Error') {
+        settled = true;
+        unsubscribe();
         getLogger().error('Indexing failed');
         reject(new Error('Indexing failed'));
-      } else if (currentState === 'Standby') {
+      } else if (status.systemStatus === 'Standby') {
+        settled = true;
+        unsubscribe();
         getLogger().warn('Indexing stopped unexpectedly');
         reject(new Error('Indexing stopped unexpectedly'));
-      } else {
-        setTimeout(checkState, 10000);
       }
-    };
+    });
 
+    // Start indexing (may be a no-op if initialize() already started it)
     manager.startIndexing()
       .then(() => {
-        setTimeout(checkState, 10000);
+        // Check state immediately in case indexing already completed before
+        // the event subscription (e.g., startIndexing was a no-op because
+        // a previous cycle had already finished).
+        if (settled) return;
+        const currentState = manager.state;
+        if (currentState === 'Indexed') {
+          settled = true;
+          unsubscribe();
+          getLogger().info('Indexing completed successfully');
+          resolve();
+        } else if (currentState === 'Error') {
+          settled = true;
+          unsubscribe();
+          getLogger().error('Indexing failed');
+          reject(new Error('Indexing failed'));
+        } else if (currentState === 'Standby') {
+          settled = true;
+          unsubscribe();
+          getLogger().warn('Indexing stopped unexpectedly');
+          reject(new Error('Indexing stopped unexpectedly'));
+        }
+        // Otherwise, still indexing — the progress-update listener above
+        // will resolve once the state transitions to a terminal state.
       })
-      .catch(reject);
+      .catch((err) => {
+        if (!settled) {
+          settled = true;
+          unsubscribe();
+          reject(err);
+        }
+      });
   });
 }
 
