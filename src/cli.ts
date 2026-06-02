@@ -11,6 +11,7 @@ import { createConfigCommand } from './commands/config/index';
 import { createCallCommand } from './commands/call';
 import { createCacheCommand } from './commands/cache';
 import { createHighlightCommand } from './commands/highlight';
+import { createEscalateCommand } from './commands/escalate';
 import { writeSync } from 'fs';
 
 // ============================================================================
@@ -47,6 +48,7 @@ async function main(): Promise<void> {
   program.addCommand(createCallCommand());
   program.addCommand(createCacheCommand());
   program.addCommand(createHighlightCommand());
+  program.addCommand(createEscalateCommand());
 
   // Parse arguments
   await program.parseAsync(process.argv);

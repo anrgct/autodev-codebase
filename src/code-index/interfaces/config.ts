@@ -226,6 +226,14 @@ export interface CodeIndexConfig {
   highlighterMode?: "topk" | "threshold"
   highlighterThreshold?: number
   highlighterConcurrency?: number
+
+  // Escalate proxy (auto flash → pro escalation on <<<NEEDS_PRO>>> marker)
+  escalateApiBase?: string
+  escalateApiKey?: string
+  escalateFlashModel?: string
+  escalateProModel?: string
+  escalatePort?: number
+  escalateHost?: string
 }
 
 /**
@@ -312,6 +320,14 @@ export type PreviousConfigSnapshot = {
   highlighterMode?: "topk" | "threshold"
   highlighterThreshold?: number
   highlighterConcurrency?: number
+
+  // Escalate proxy
+  escalateApiBase?: string
+  escalateApiKey?: string
+  escalateFlashModel?: string
+  escalateProModel?: string
+  escalatePort?: number
+  escalateHost?: string
 }
 
 /**
@@ -413,4 +429,12 @@ export interface ConfigSnapshot {
   highlighterMode?: "topk" | "threshold"
   highlighterThreshold?: number
   highlighterConcurrency?: number
+
+  // Escalate proxy
+  escalateApiBase?: string
+  escalateApiKey?: string
+  escalateFlashModel?: string
+  escalateProModel?: string
+  escalatePort?: number
+  escalateHost?: string
 }

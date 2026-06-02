@@ -184,6 +184,14 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   },
   highlighterThreshold: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum keep probability for threshold mode (0-1)' },
   highlighterConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent highlight requests (llamacpp-llm provider)' },
+
+  // Escalate proxy
+  escalateApiBase: { type: 'string', description: 'API base URL for the upstream LLM (default: https://api.deepseek.com/v1)' },
+  escalateApiKey: { type: 'string', description: 'API key for upstream LLM (optional — if not set, client Authorization header is forwarded)' },
+  escalateFlashModel: { type: 'string', description: 'Flash (cheap) model ID used for first attempt (default: deepseek-v4-flash)' },
+  escalateProModel: { type: 'string', description: 'Pro (strong) model ID used after <<<NEEDS_PRO>>> escalation (default: deepseek-v4-pro)' },
+  escalatePort: { type: 'integer', minValue: 1, maxValue: 65535, description: 'Local proxy server listening port (default: 8080)' },
+  escalateHost: { type: 'string', description: 'Local proxy server listening host (default: localhost)' },
 }
 
 /**

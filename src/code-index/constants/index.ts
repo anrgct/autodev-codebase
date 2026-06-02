@@ -45,7 +45,14 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
   summarizerBatchSize: 2,
   summarizerConcurrency: 2,
   summarizerMaxRetries: 3,
-  summarizerRetryDelayMs: 1000
+  summarizerRetryDelayMs: 1000,
+
+  // Escalate proxy defaults
+  escalateApiBase: 'https://api.deepseek.com/v1',
+  escalateFlashModel: 'deepseek-v4-flash',
+  escalateProModel: 'deepseek-v4-pro',
+  escalatePort: 8080,
+  escalateHost: 'localhost',
 }
 
 /**Parser */

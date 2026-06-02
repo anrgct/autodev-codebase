@@ -563,5 +563,15 @@ export class ConfigValidator {
         message: 'Embedder Jina batch size must be positive'
       })
     }
+
+    // Validate escalate proxy port range
+    if (config.escalatePort !== undefined &&
+        (config.escalatePort < 1 || config.escalatePort > 65535 || !Number.isInteger(config.escalatePort))) {
+      issues.push({
+        path: 'escalatePort',
+        code: 'invalid_range',
+        message: `Escalate proxy port must be an integer in [1, 65535], got: ${config.escalatePort}`
+      })
+    }
   }
 }

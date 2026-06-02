@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "@realtimex/node-llama-cpp": "0.163.0",
+    "h3": "^1.15.11",
     "tsx": "^4.20.3"
   }
 }
