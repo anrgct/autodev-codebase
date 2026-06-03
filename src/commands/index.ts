@@ -3,9 +3,152 @@
  */
 import { Command } from 'commander';
 import * as crypto from 'crypto';
+import * as path from 'path';
 import { CommandOptions, initializeManager, waitForIndexingCompletion, getLogger, initGlobalLogger, resolveWorkspacePath, registerProjectToCacheMap } from './shared';
 import { CodeIndexManager } from '../code-index/manager';
 import { CodebaseHTTPMCPServer } from '../mcp/http-server';
+import {
+  isGitWorktree,
+  getMainWorktreePath,
+} from '../utils/git-worktree';
+import {
+  cloneIndexFromSource,
+  type IndexCloneResult,
+} from '../utils/index-cloner';
+
+/**
+ * If `targetPath` is a git worktree (other than the main one) and the
+ * `--no-clone-from-worktree` flag is not set, copy the main worktree's
+ * index data into `targetPath`'s namespace before initializing the
+ * CodeIndexManager. The clone is best-effort: any failure is logged but
+ * does not abort the indexing flow.
+ */
+async function maybeCloneFromWorktree(
+  targetPath: string,
+  options: CommandOptions,
+): Promise<IndexCloneResult | null> {
+  const logger = getLogger();
+
+  // Commander's `--no-clone-from-worktree` flag is normalized to
+  // `options.cloneFromWorktree === false`. Undefined means the user did
+  // not pass the flag, so the default behavior is to clone.
+  if (options.cloneFromWorktree === false) {
+    logger.debug('Worktree index clone disabled via --no-clone-from-worktree');
+    return null;
+  }
+
+  let sourcePath: string;
+  if (options.fromWorktree) {
+    sourcePath = path.resolve(options.fromWorktree);
+    logger.info(`--from-worktree specified, using source: ${sourcePath}`);
+  } else {
+    const isWorktree = await isGitWorktree(targetPath);
+    if (!isWorktree) {
+      logger.debug(`Workspace is not a git worktree; skipping clone`);
+      return null;
+    }
+    const main = await getMainWorktreePath(targetPath);
+    if (!main) {
+      logger.debug('Could not determine main worktree path; skipping clone');
+      return null;
+    }
+    // We want the source to be the same SUB-PATH (relative to the
+    // worktree root) but on the main worktree. E.g.
+    //   target:    <main>/.claude/worktrees/feature/demo
+    //   toplevel:  <main>/.claude/worktrees/feature
+    //   rel:       demo
+    //   source:    <main>/demo
+    const toplevel = await getWorktreeToplevel(targetPath)
+    if (!toplevel) {
+      logger.debug('Could not determine current worktree toplevel; skipping clone')
+      return null
+    }
+    const relTarget = path.relative(toplevel, targetPath)
+    if (!relTarget || relTarget.startsWith('..') || path.isAbsolute(relTarget)) {
+      // Target is at the worktree root, or escapes it (pathological). Use
+      // the main worktree root as the source.
+      sourcePath = main
+    } else {
+      sourcePath = path.join(main, relTarget)
+    }
+    if (sourcePath === targetPath) {
+      logger.debug('Target and source resolve to the same path; skipping clone')
+      return null
+    }
+  }
+
+  // Resolve the Qdrant URL. The index command defers configuration loading
+  // to CodeIndexManager; for the cloner we need the URL up-front. Fall back
+  // to the demo config's URL and finally the default.
+  const qdrantUrl = await resolveQdrantUrl(targetPath, options);
+
+  logger.info(
+    `Attempting worktree index clone: ${sourcePath} -> ${targetPath}`,
+  );
+
+  try {
+    const result = await cloneIndexFromSource({
+      sourcePath,
+      targetPath,
+      qdrant: { url: qdrantUrl, apiKey: undefined, timeoutMs: 120_000 },
+      deps: {
+        logger,
+      },
+    });
+    if (result.failureReasons.length > 0) {
+      logger.warn(
+        `Worktree index clone completed with ${result.failureReasons.length} issue(s); continuing with normal indexing`,
+      );
+    }
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.warn(`Worktree index clone failed: ${message}; continuing with normal indexing`);
+    return null;
+  }
+}
+
+async function resolveQdrantUrl(workspacePath: string, options: CommandOptions): Promise<string> {
+  // 1. Try the project config (workspacePath/autodev-config.json)
+  const configPath = options.config || path.join(workspacePath, 'autodev-config.json');
+  try {
+    const { promises: fs } = await import('fs');
+    const raw = await fs.readFile(configPath, 'utf8');
+    // Allow JSONC with comments and trailing commas
+    const stripped = raw
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+      .replace(/,(\s*[}\]])/g, '$1')
+    const parsed = JSON.parse(stripped) as { qdrantUrl?: string }
+    if (parsed?.qdrantUrl) {
+      return parsed.qdrantUrl
+    }
+  } catch {
+    // fall through
+  }
+  // 2. Default
+  return 'http://localhost:6333'
+}
+
+/**
+ * Return the absolute path of the current worktree's working tree root
+ * (the topmost directory that `git` considers part of this worktree).
+ * Used to compute the relative sub-path of the target workspace, so we
+ * can mirror the same sub-path under the main worktree.
+ */
+async function getWorktreeToplevel(workspacePath: string): Promise<string | null> {
+  const { spawnSync } = await import('node:child_process')
+  const res = spawnSync(
+    'git',
+    ['rev-parse', '--path-format=absolute', '--show-toplevel'],
+    { cwd: workspacePath, encoding: 'utf8', timeout: 15_000 },
+  )
+  if (res.status !== 0) {
+    return null
+  }
+  const out = (res.stdout ?? '').split('\n')[0]?.trim() ?? ''
+  return out || null
+}
 
 /**
  * Initialize CodeIndexManager for dry-run mode (without triggering indexing)
@@ -248,13 +391,22 @@ async function indexHandler(options: any): Promise<void> {
     serve: !!options.serve,
     clearCache: !!options.clearCache,
     summarize: false,
-    title: false
+    title: false,
+    fromWorktree: options.fromWorktree,
+    cloneFromWorktree: options.cloneFromWorktree,
   };
 
   initGlobalLogger(commandOptions.logLevel);
 
   // Register workspace path for cache --list
   await registerProjectToCacheMap(commandOptions.path);
+
+  // Detect git worktree and (best-effort) clone the main worktree's index
+  // data into this worktree's namespace before initializing the manager.
+  // This is a no-op when the workspace is not a worktree, or when
+  // --no-clone-from-worktree is set, or when the target namespace is
+  // already populated.
+  await maybeCloneFromWorktree(commandOptions.path, commandOptions);
 
   // Handle --clear-cache
   if (commandOptions.clearCache) {
@@ -402,6 +554,8 @@ export function createIndexCommand(): Command {
     .option('-w, --watch', 'Watch for file changes')
     .option('-s, --serve', 'Start MCP HTTP server')
     .option('--clear-cache', 'Clear index cache')
+    .option('--from-worktree <path>', 'Clone index data from the given worktree path (defaults to auto-detected main worktree)')
+    .option('--no-clone-from-worktree', 'Disable automatic worktree index cloning')
     .option('--port <port>', 'Server port (for --serve)', '3001')
     .option('--host <host>', 'Server host (for --serve)', 'localhost')
     .option('--log-level <level>', 'Log level: debug|info|warn|error', 'error')

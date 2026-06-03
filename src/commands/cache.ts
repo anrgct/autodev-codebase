@@ -77,7 +77,10 @@ async function loadProjectMap(): Promise<ProjectMap> {
 function resolveProjectName(projectHash: string, map: ProjectMap): string {
   const workspacePath = map[projectHash];
   if (workspacePath) {
-    return path.basename(workspacePath);
+    // Show project name with two levels of parent directories to disambiguate
+    const parts = workspacePath.split(path.sep).filter(Boolean);
+    const segments = Math.min(parts.length, 3); // last 3 segments: grandparent/parent/project
+    return parts.slice(parts.length - segments).join('/');
   }
   // Fallback: show truncated hash
   if (projectHash.length > 8) {
@@ -397,6 +400,55 @@ function statusIcon(status: string, detail?: string): string {
   return status;
 }
 
+// ============================================================================
+// CJK-aware visual width helpers
+// ============================================================================
+
+/**
+ * Check if a Unicode code point is a wide character (CJK, etc.)
+ * In terminal, wide chars occupy 2 columns instead of 1
+ */
+function isWideChar(code: number): boolean {
+  return (
+    (code >= 0x1100 && code <= 0x115F) || // Hangul Jamo
+    (code >= 0x2E80 && code <= 0x303E) || // CJK Radicals~CJK Symbols
+    (code >= 0x3040 && code <= 0x33BF) || // Hiragana~CJK Compatibility
+    (code >= 0x3400 && code <= 0x4DBF) || // CJK Extension A
+    (code >= 0x4E00 && code <= 0xA4CF) || // CJK Unified~Yi
+    (code >= 0xAC00 && code <= 0xD7AF) || // Hangul Syllables
+    (code >= 0xF900 && code <= 0xFAFF) || // CJK Compatibility Ideographs
+    (code >= 0xFE10 && code <= 0xFE6F) || // Vertical Forms~Small Forms
+    (code >= 0xFF01 && code <= 0xFF60) || // Fullwidth Forms
+    (code >= 0xFFE0 && code <= 0xFFE6) || // Fullwidth Signs
+    (code >= 0x1B000 && code <= 0x1B12F) || // Kana Supplement
+    (code >= 0x1F200 && code <= 0x1F2FF) || // Enclosed Ideographic Supplement
+    (code >= 0x20000 && code <= 0x2FFFF) || // CJK Extension B~F
+    (code >= 0x30000 && code <= 0x3FFFF) // CJK Extension G~H
+  );
+}
+
+/**
+ * Calculate the visual width of a string in a terminal
+ * CJK chars = 2, ASCII/latin = 1
+ */
+function visualLength(str: string): number {
+  let len = 0;
+  for (const ch of str) {
+    len += isWideChar(ch.codePointAt(0)!) ? 2 : 1;
+  }
+  return len;
+}
+
+/**
+ * Pad a string to a target visual width (CJK-aware)
+ */
+function visualPadEnd(str: string, targetWidth: number): string {
+  const currentWidth = visualLength(str);
+  const needed = targetWidth - currentWidth;
+  if (needed <= 0) return str;
+  return str + ' '.repeat(needed);
+}
+
 /**
  * Parse --clear argument into a set of 1-based indices
  * Supports: "1", "1,3", "2-4", "1,3-5", "all"
@@ -450,32 +502,35 @@ function printTable(entries: CacheEntry[]): void {
   console.log('=== Cache & Data Store List ===');
   console.log('');
 
-  // Column widths
+  // Column widths (in visual terminal columns)
   const idxW = 6;
-  const typeW = 14;
-  const projW = 18;
-  const countW = 12;
-  const sizeW = 10;
-  const statusW = 30;
+  const typeW = 16; // accommodates "代码索引缓存" (12 visual) + 4 padding
+  const longestName = Math.max(...entries.map((e) => visualLength(e.projectName)));
+  const projW = Math.max(18, Math.min(48, longestName + 4));
+  const countW = 14; // accommodates "1,312 pts" (9 visual) + 5 padding
+  const sizeW = 10; // accommodates "65.9 KB" (7 visual) + 3 padding
 
-  // Header
+  // Header (status column is last, no trailing padding needed)
   const header =
-    '序号'.padEnd(idxW) +
-    '类型'.padEnd(typeW) +
-    '项目'.padEnd(projW) +
-    '条目数'.padEnd(countW) +
-    '大小'.padEnd(sizeW) +
+    visualPadEnd('序号', idxW) +
+    visualPadEnd('类型', typeW) +
+    visualPadEnd('项目', projW) +
+    visualPadEnd('条目数', countW) +
+    visualPadEnd('大小', sizeW) +
     '状态';
   console.log(header);
-  console.log('─'.repeat(idxW + typeW + projW + countW + sizeW + statusW));
+
+  // Separator line
+  const totalVisualWidth = idxW + typeW + projW + countW + sizeW + visualLength('状态');
+  console.log('─'.repeat(totalVisualWidth));
 
   // Rows
   for (const entry of entries) {
-    const idx = String(entry.index).padEnd(idxW);
-    const type = entry.typeLabel.padEnd(typeW);
-    const proj = entry.projectName.padEnd(projW);
-    const count = formatCount(entry.type, entry.itemCount).padEnd(countW);
-    const size = formatBytes(entry.sizeBytes).padEnd(sizeW);
+    const idx = visualPadEnd(String(entry.index), idxW);
+    const type = visualPadEnd(entry.typeLabel, typeW);
+    const proj = visualPadEnd(entry.projectName, projW);
+    const count = visualPadEnd(formatCount(entry.type, entry.itemCount), countW);
+    const size = visualPadEnd(formatBytes(entry.sizeBytes), sizeW);
     const status = statusIcon(entry.status, entry.statusDetail);
     console.log(`${idx}${type}${proj}${count}${size}${status}`);
   }
