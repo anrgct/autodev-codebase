@@ -170,6 +170,12 @@ export interface CodeIndexConfig {
   // 让模型在 instruct-tuned 的语义空间下提取 hidden states
 
   // Vector Store
+  /**
+   * Which vector store backend to use. Defaults to "sqlite" for new
+   * installs. The legacy default was "qdrant", so we treat a missing
+   * value + a configured `qdrantUrl` as the legacy case.
+   */
+  vectorStoreBackend?: 'qdrant' | 'sqlite'
   qdrantUrl?: string
   qdrantApiKey?: string
 
@@ -273,6 +279,7 @@ export type PreviousConfigSnapshot = {
   embedderUseChatTemplate?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
+  vectorStoreBackend?: 'qdrant' | 'sqlite'
   vectorSearchMinScore?: number
   vectorSearchMaxResults?: number
   hybridSearchEnabled?: boolean
@@ -384,6 +391,7 @@ export interface ConfigSnapshot {
   embedderUseChatTemplate?: boolean
   qdrantUrl?: string
   qdrantApiKey?: string
+  vectorStoreBackend?: 'qdrant' | 'sqlite'
   vectorSearchMinScore?: number
   vectorSearchMaxResults?: number
   hybridSearchEnabled?: boolean

@@ -11,7 +11,7 @@
 - 代码结构大纲提取（带 AI 摘要）
 - 函数调用图分析（依赖追踪、路径分析）
 - 40+ 语言的 Tree-sitter 解析
-- Qdrant 向量数据库后端
+- 向量数据库后端：SQLite（默认，嵌入式 + sqlite-vec + FTS5）或 Qdrant（可选，通过 `vectorStoreBackend=qdrant` 切换）
 
 ## 项目结构
 

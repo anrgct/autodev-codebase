@@ -170,6 +170,38 @@ codebase index [path] [options]
 - 复制中途失败 → 记录警告，继续正常索引（不影响主流程）
 - git 命令失败（非 git 目录）→ 静默跳过
 
+### 6. 已知限制：源/目标 worktree 使用不同 vector-store 后端
+
+**场景**：源 worktree 的 `autodev-config.json` 配置的是 Qdrant，目标 worktree 配置的是 SQLite（或反之）。两个 demo 目录就处于这种状态——主 repo 的 `demo/autodev-config.json` 只设了 `qdrantUrl`（默认 Qdrant），而 `solid-panther` worktree 的同名文件加了 `"vectorStoreBackend": "sqlite"`。
+
+**会发生什么**：
+1. cloner 在 source 命名空间找到 Qdrant collection（87 points）→ 拷到 target 命名空间
+2. cloner 在 source 命名空间没找到 `~/.autodev-cache/vector-store/ws-{src-hash16}/index.db` → `skipped_missing_source`
+3. target 因为选了 SQLite，启动时看到的是空库，从零重建 86 blocks
+
+**后果**：
+- 源数据"复制成功"但对 target 一点用没有（孤儿 Qdrant collection 留在 target 命名空间下）
+- target 浪费一次全量嵌入
+- 用户看到 cache 列表里同时存在 target 的 SQLite（1.4 MB）和孤儿 Qdrant collection（87 pts），难以判断要不要清
+
+**为什么不做跨后端复制**：
+- Qdrant → SQLite 需要通过 REST `POST /points/scroll` 拉全部 points → 解码 payload + 320 维 vector → 写进 SQLite 的 `chunks` / `vec_chunks` / `fts_chunks` 三张表 → 触发 trigger 同步 FTS
+- 跨后端场景少（用户得显式改 `vectorStoreBackend`）；不值得在 cloner 里多挂一整套 backend 适配器
+- 维护代价：cloner 原本是"文件复制 + Qdrant snapshot"，加跨后端逻辑后变成"半套 SQLite ORM + 半套 Qdrant REST 客户端"
+
+**当前处理（2026-06-03 增强）**：
+- 新增 3 个纯函数 helper（`src/utils/index-cloner.ts`）：
+  - `observeSourceBackend(sourcePath)`：扫 `index.db` + 探 `GET /collections/{name}/exists`，返回 `'sqlite' | 'qdrant' | 'none'`
+  - `resolveTargetBackend(targetPath)`：读 target 的 `autodev-config.json`（与运行时工厂同一条 fallback 链：`vectorStoreBackend` > `qdrantUrl` > 未知）
+  - `detectBackendMismatch(source, target)`：只在两侧都能确定且不同时返回 `mismatch: true`
+- 在 `src/commands/index.ts:maybeCloneFromWorktree` 末尾 async-fire-and-forget 跑诊断（`void reportBackendMismatch(...).catch(noop)`），绝不阻塞主流程
+- 不匹配时打印**单条** WARN（包含 source/target 路径、源后端、目标后端、孤儿定位、对齐 config 或 `codebase cache --clear` 两种修法）
+
+**用户操作**（任选其一）：
+- 方案 A：对齐两个 worktree 的 `demo/autodev-config.json`，让 `vectorStoreBackend` 一致（推荐）
+- 方案 B：接受每次从零重建；保留孤儿作为历史
+- 方案 C：跑 `codebase cache --clear N` 显式清理孤儿（cache 子命令已支持 SQLite 和 Qdrant 两类，详见 `260515-cache-subcommand.md`）
+
 ## 实施计划
 
 ### 阶段 1：核心工具
@@ -274,6 +306,24 @@ codebase index [path] [options]
 
 ## 修订记录
 
+### 2026-06-03 (SQLite 后端支持)
+
+**新增：clone SQLite 向量存储**
+
+- **背景**：docs/plans/260529-local-vector-store.md 引入 `SQLiteVectorStore` 作为新的默认后端
+  （`~/.autodev-cache/vector-store/{ws-hash16}/index.db`）。原 clone 流程只复制
+  Qdrant collection，worktree 切到 SQLite 后端时目标 db 为空，导致
+  `Reconciling index with filesystem...` 阶段的 reconciler 看到空索引、首次跑需全量重建
+- **实施**：
+  - `src/utils/index-cloner.ts` 新增 `sqliteVectorStoreDbPath()` / `cloneSqliteVectorStore()` / `copyFileIfExists()`
+  - `IndexCloneResult` 新增 `sqliteVectorStore` + `sqliteVectorStoreCloned` 字段
+  - `cloneIndexFromSource` 接入 SQLite 复制步骤（best-effort，源不存在 → silent skip）
+  - 复制 `index.db` 同时复制 `-wal` / `-shm` / `-journal` sidecar（best-effort ENOENT）
+  - 6 个新单测全部通过；22 个 index-cloner 测试全过
+- **验证**：
+  - `npx vitest run src/utils/__tests__/index-cloner.test.ts`：22 / 22 通过
+  - `npx tsc --noEmit`：仅 2 个**已存在**的 `llamacpp-rerank.ts` 错误，与本次无关
+
 ### 2026-06-03
 
 **修复：clone 的 index cache 路径未改写导致缓存失效**
@@ -282,6 +332,32 @@ codebase index [path] [options]
 - **根因**：`rewriteIndexCachePaths` 中 cache 文件的 key 是**绝对路径**，clone 时只是 `fs.copyFile`，未将 source worktree 路径前缀替换为 target worktree 路径前缀，导致 `getHash()` 永远匹配不上
 - **修复**：`src/utils/index-cloner.ts` 的 `copyIndexCacheFile` 改为读入 JSON → 改写所有 key 的路径前缀 → 写出到目标
 - **测试**：新增 rewrite 测试用例，16 个 case 全部通过
+
+### 2026-06-03 (跨后端场景诊断)
+
+**背景**：`codebase index --demo` 在 worktree 跑时把 SQLite 库从零重建了 86 blocks；`codebase cache --list` 显示 worktree 命名空间下同时存在一份 1.4 MB 的 SQLite 和一个 87 pts 的孤儿 Qdrant collection。
+
+**根因**：源（主 repo 的 demo）和目标（worktree 的 demo）`autodev-config.json` 的 `vectorStoreBackend` 不一致；cloner 不知道这件事，按各自后端老老实实执行，结果是：Qdrant 那一面复制了但对 target 无用，SQLite 那一面源没数据。cloner 自身不报错，索引流程正常往下走，用户看到的是"复制没生效"。
+
+**修复**：
+- 在 `src/utils/index-cloner.ts` 末尾新增 3 个纯函数 helper：
+  - `observeSourceBackend(sourcePath, opts)`：扫 `~/.autodev-cache/vector-store/ws-{src-hash16}/index.db` + `GET /collections/{name}/exists`，返回 `'sqlite' | 'qdrant' | 'none'`
+  - `resolveTargetBackend(targetPath, opts)`：读 target 的 `autodev-config.json`，按 `vectorStoreBackend` > `qdrantUrl` > `unknown` 的优先级返回；支持注入 `readConfig` 让单测可控
+  - `detectBackendMismatch(source, target, ctx)`：纯函数，源/目标均确定且不同时返回 `mismatch: true` + `reason`
+- 在 `src/commands/index.ts:maybeCloneFromWorktree` 末尾挂一个 `void reportBackendMismatch(...).catch(noop)` 的 fire-and-forget 调用，绝不阻塞主流程
+- 诊断触发条件：源有数据 + 目标后端能确定 + 两侧不同 → 单条 WARN，命名 source/target 路径、源观察到的后端、目标配置的后端、孤儿定位、两种修法
+- 诊断失败兜底：被 `.catch` 吞掉，记一条 `debug` 即可
+
+**为什么不做跨后端复制**：cloner 是"文件复制 + Qdrant snapshot"的薄壳，加跨后端复制需要挂半套 SQLite ORM + 半套 Qdrant REST 客户端。详见上面"6. 已知限制"。
+
+**测试**（`src/utils/__tests__/index-cloner.test.ts`，新增 16 个 case，38 总数全过）：
+- `resolveTargetBackend`：explicit `vectorStoreBackend` / `qdrantUrl` 兜底 / 两者皆无 / 文件缺失 / JSON 损坏 / JSONC 注释 / 注入 readConfig 抛错
+- `observeSourceBackend`：仅 SQLite / 仅 Qdrant / 都没有 / SQLite 缺位但 Qdrant 存在
+- `detectBackendMismatch`：同后端 / 源 qdrant 目标 sqlite / 源 sqlite 目标 qdrant / 源 none / 目标 unknown
+
+**验证**：
+- `npx vitest run src/utils/__tests__/index-cloner.test.ts`：38 / 38 通过
+- `npx tsc -p tsconfig.json --noEmit`：仅 2 个**已存在**的 `llamacpp-rerank.ts` 错误
 
 ## 总结
 

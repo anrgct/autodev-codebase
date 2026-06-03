@@ -15,6 +15,7 @@ export class LlamaCppEmbedder implements IEmbedder {
   private _model: LlamaModel | null = null
   private _embeddingContext: LlamaEmbeddingContext | null = null
   private _loadingPromise: Promise<void> | null = null
+  private _nextEmbeddingLogTime = 0
 
   constructor(modelPath: string, gpuLayers?: number, logger?: LoggerLike) {
     this.modelPath = modelPath
@@ -60,6 +61,25 @@ export class LlamaCppEmbedder implements IEmbedder {
         for (let i = 0; i < vector.length; i++) vector[i] /= norm
       }
       embeddings.push(vector)
+    }
+
+    // Debug diagnostics: log dimension and first embedding stats (max once per second)
+    if (embeddings.length > 0 && Date.now() >= this._nextEmbeddingLogTime) {
+      this._nextEmbeddingLogTime = Date.now() + 1000
+      const dim = embeddings[0].length
+      const first5 = embeddings[0].slice(0, 5).map(v => v.toFixed(6))
+      let nanCount = 0, zeroCount = 0
+      for (const emb of embeddings) {
+        for (const v of emb) {
+          if (isNaN(v)) nanCount++
+          else if (v === 0) zeroCount++
+        }
+      }
+      this.logger?.debug(
+        `[LlamaCppEmbedder] Embedding stats: texts=${embeddings.length}, dim=${dim}, ` +
+        `emb[0][0..4]=[${first5.join(', ')}], ` +
+        `NaN count=${nanCount}, zero count=${zeroCount}`
+      )
     }
 
     return { embeddings }

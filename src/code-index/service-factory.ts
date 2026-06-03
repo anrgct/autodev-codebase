@@ -352,11 +352,11 @@ export class CodeIndexServiceFactory {
       }
     }
 
-    if (!config.qdrantUrl) {
-      throw new Error(t("embeddings:serviceFactory.qdrantUrlMissing"))
-    }
-
-    return new QdrantVectorStore(this.workspacePath, config.qdrantUrl, vectorSize, config.qdrantApiKey, this.logger)
+    // Dispatch through the factory so the backend choice is centralised.
+    // The Qdrant-specific qdrantUrlMissing error is now only thrown when
+    // the resolved backend is Qdrant (the factory does the check).
+    const { createVectorStore } = await import("./vector-store/factory")
+    return createVectorStore(config, this.workspacePath, vectorSize, provider, modelId, this.logger)
   }
 
   /**

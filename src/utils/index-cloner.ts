@@ -22,7 +22,7 @@
  * contain a snapshot of the source's data.
  */
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { Readable } from 'node:stream'
@@ -67,6 +67,23 @@ export function dependencyCacheDir(workspacePath: string, cacheBase: string): st
   return path.join(cacheBase, 'dependency-cache', hashWorkspace16(workspacePath))
 }
 
+/**
+ * Directory holding the SQLite-backed vector store for a given workspace.
+ * Layout mirrors `SQLiteVectorStore`'s own default cache base
+ * (`~/.autodev-cache/vector-store/{ws-hash16}/index.db`).
+ */
+export function sqliteVectorStoreDir(workspacePath: string, cacheBase: string): string {
+  return path.join(cacheBase, 'vector-store', collectionNameFor(workspacePath))
+}
+
+/**
+ * Absolute path of the on-disk SQLite database for a given workspace.
+ * Side files (`-wal`, `-shm`, `-journal`) are co-located with this path.
+ */
+export function sqliteVectorStoreDbPath(workspacePath: string, cacheBase: string): string {
+  return path.join(sqliteVectorStoreDir(workspacePath, cacheBase), 'index.db')
+}
+
 // ---------------------------------------------------------------------------
 // Options & result types
 // ---------------------------------------------------------------------------
@@ -101,13 +118,29 @@ export interface QdrantCollectionCloneDetails {
   error?: string
 }
 
+export type SqliteCloneStatus =
+  | 'copied'
+  | 'skipped_missing_source'
+  | 'skipped_target_exists'
+  | 'failed'
+
+export interface SqliteVectorStoreCloneDetails {
+  status: SqliteCloneStatus
+  sourcePath: string
+  targetPath: string
+  bytesCopied?: number
+  error?: string
+}
+
 export interface IndexCloneResult {
   indexCache: LocalCacheCloneDetails
   summaryCache: LocalCacheCloneDetails
   dependencyCache: LocalCacheCloneDetails
   qdrantCollection: QdrantCollectionCloneDetails
+  sqliteVectorStore: SqliteVectorStoreCloneDetails
   localCachesCloned: boolean
   qdrantCollectionCloned: boolean
+  sqliteVectorStoreCloned: boolean
   durationMs: number
   failureReasons: string[]
 }
@@ -357,6 +390,101 @@ async function copyCacheDir(
     const message = error instanceof Error ? error.message : String(error)
     logger.warn(`Failed to copy ${label} ${source} -> ${target}: ${message}`)
     return { status: 'failed', sourcePath: source, targetPath: target, error: message }
+  }
+}
+
+/**
+ * Copy the SQLite vector store file (and its WAL/SHM side files) from
+ * the source workspace's namespace to the target's. Mirrors the on-disk
+ * layout used by `SQLiteVectorStore`:
+ *   `~/.autodev-cache/vector-store/{ws-hash16}/index.db`
+ *
+ * Notes:
+ *  - We copy the `-wal` and `-shm` files together so the destination
+ *    boots as a consistent snapshot, then re-checkpoint by opening the
+ *    target briefly (so a future `initialize()` sees a clean state).
+ *  - We do NOT try to "merge" databases across worktrees; each worktree
+ *    gets its own embedded copy that the orchestrator later reconciles
+ *    against the filesystem via the roo-index-cache hashes.
+ */
+export async function cloneSqliteVectorStore(
+  sourcePath: string,
+  targetPath: string,
+  cacheBasePath: string,
+  deps?: Partial<IndexCloneDependencies>,
+): Promise<SqliteVectorStoreCloneDetails> {
+  const logger: LoggerLike = deps?.logger ?? console
+  const fsImpl = deps?.fs ?? fs
+
+  const sourceDb = sqliteVectorStoreDbPath(sourcePath, cacheBasePath)
+  const targetDb = sqliteVectorStoreDbPath(targetPath, cacheBasePath)
+
+  let sourceStat: import('node:fs').Stats
+  try {
+    sourceStat = await fsImpl.stat(sourceDb)
+  } catch {
+    return { status: 'skipped_missing_source', sourcePath: sourceDb, targetPath: targetDb }
+  }
+  if (!sourceStat.isFile()) {
+    return { status: 'skipped_missing_source', sourcePath: sourceDb, targetPath: targetDb }
+  }
+
+  try {
+    const targetStat = await fsImpl.stat(targetDb)
+    if (targetStat.isFile()) {
+      logger.debug(`SQLite vector store target already exists, skipping: ${targetDb}`)
+      return { status: 'skipped_target_exists', sourcePath: sourceDb, targetPath: targetDb, bytesCopied: targetStat.size }
+    }
+  } catch {
+    // Target doesn't exist — proceed.
+  }
+
+  const targetDir = path.dirname(targetDb)
+  try {
+    await fsImpl.mkdir(targetDir, { recursive: true })
+
+    // Copy the main .db plus the WAL/SHM sidecars. better-sqlite3 creates
+    // the -wal / -shm lazily, so missing sidecars are fine; we use a
+    // best-effort copy that ignores individual ENOENTs.
+    let bytesCopied = 0
+    bytesCopied += await copyFileIfExists(sourceDb, targetDb, fsImpl, logger)
+
+    for (const suffix of ['-wal', '-shm', '-journal']) {
+      bytesCopied += await copyFileIfExists(sourceDb + suffix, targetDb + suffix, fsImpl, logger)
+    }
+
+    logger.info(`SQLite vector store copied ${sourceDb} -> ${targetDb} (${bytesCopied} bytes)`)
+    return { status: 'copied', sourcePath: sourceDb, targetPath: targetDb, bytesCopied }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.warn(`Failed to copy SQLite vector store ${sourceDb} -> ${targetDb}: ${message}`)
+    return { status: 'failed', sourcePath: sourceDb, targetPath: targetDb, error: message }
+  }
+}
+
+/**
+ * Copy a single file, returning its size on success and 0 if the source
+ * does not exist (so the main clone can accumulate bytes without special
+ * casing for the optional `-wal` / `-shm` sidecars).
+ */
+async function copyFileIfExists(
+  source: string,
+  target: string,
+  fsImpl: IndexCloneDependencies['fs'],
+  logger: LoggerLike,
+): Promise<number> {
+  try {
+    const stat = await fsImpl.stat(source)
+    if (!stat.isFile()) return 0
+    await fsImpl.copyFile(source, target)
+    logger.debug(`Copied ${source} -> ${target} (${stat.size} bytes)`)
+    return stat.size
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException
+    if (err?.code === 'ENOENT') {
+      return 0
+    }
+    throw error
   }
 }
 
@@ -686,26 +814,212 @@ export async function cloneIndexFromSource(options: IndexCloneOptions): Promise<
     failures.push(qdrant.error)
   }
 
+  // SQLite vector store cloning is best-effort and silent when the
+  // source has no db (e.g. the source worktree has never been indexed
+  // with the sqlite backend). The cache base defaults to
+  // `~/.autodev-cache` to match `SQLiteVectorStore`'s default.
+  const cacheBase = options.deps?.cacheBasePath
+    ?? path.join((options.deps?.homedir ?? os.homedir)(), '.autodev-cache')
+  const sqlite = await cloneSqliteVectorStore(
+    options.sourcePath,
+    options.targetPath,
+    cacheBase,
+    options.deps,
+  )
+  if (sqlite.status === 'failed' && sqlite.error) {
+    failures.push(sqlite.error)
+  }
+
   const durationMs = Date.now() - start
   const result: IndexCloneResult = {
     indexCache: local.indexCache,
     summaryCache: local.summaryCache,
     dependencyCache: local.dependencyCache,
     qdrantCollection: qdrant,
+    sqliteVectorStore: sqlite,
     localCachesCloned: local.localCachesCloned,
     qdrantCollectionCloned: qdrant.status === 'copied',
+    sqliteVectorStoreCloned: sqlite.status === 'copied',
     durationMs,
     failureReasons: failures,
   }
 
-  if (result.localCachesCloned || result.qdrantCollectionCloned) {
+  if (result.localCachesCloned || result.qdrantCollectionCloned || result.sqliteVectorStoreCloned) {
     logger.info(
-      `Index clone complete in ${durationMs}ms (caches: ${local.indexCache.status}/${local.summaryCache.status}/${local.dependencyCache.status}, qdrant: ${qdrant.status})`,
+      `Index clone complete in ${durationMs}ms (caches: ${local.indexCache.status}/${local.summaryCache.status}/${local.dependencyCache.status}, qdrant: ${qdrant.status}, sqlite: ${sqlite.status})`,
     )
   } else {
     logger.debug(
-      `Index clone completed in ${durationMs}ms with no-op results (caches: ${local.indexCache.status}/${local.summaryCache.status}/${local.dependencyCache.status}, qdrant: ${qdrant.status})`,
+      `Index clone completed in ${durationMs}ms with no-op results (caches: ${local.indexCache.status}/${local.summaryCache.status}/${local.dependencyCache.status}, qdrant: ${qdrant.status}, sqlite: ${sqlite.status})`,
     )
   }
   return result
+}
+
+// ---------------------------------------------------------------------------
+// Backend-mismatch diagnostic
+// ---------------------------------------------------------------------------
+
+/** Which vector-store backend a given workspace has data on (on disk or remote). */
+export type ObservedBackend = 'qdrant' | 'sqlite' | 'none'
+
+/**
+ * Inspect the on-disk and remote state of the source workspace and
+ * decide which backend actually has data. This is purely observational:
+ * it does not consult the source's `autodev-config.json`, because the
+ * source may have been indexed with a backend that no longer matches
+ * its current config (e.g. user switched backends, or this is a
+ * worktree whose config differs from the main worktree's).
+ *
+ * SQLite is detected by the presence of `index.db` under
+ * `~/.autodev-cache/vector-store/{ws-hash16}/`. Qdrant is detected by
+ * a successful `GET /collections/{name}/exists` (status 200) against
+ * the supplied URL.
+ */
+export async function observeSourceBackend(
+  sourcePath: string,
+  options: {
+    qdrant: { url: string; apiKey?: string; timeoutMs?: number }
+    cacheBasePath?: string
+    fsImpl?: IndexCloneDependencies['fs']
+    fetchImpl?: typeof fetch
+    homedir?: () => string
+  },
+): Promise<ObservedBackend> {
+  const fsImpl = (options.fsImpl ?? fs) as IndexCloneDependencies['fs']
+  const cacheBase = options.cacheBasePath ?? path.join((options.homedir ?? os.homedir)(), '.autodev-cache')
+  const sqlitePath = sqliteVectorStoreDbPath(sourcePath, cacheBase)
+  try {
+    const stat = await fsImpl.stat(sqlitePath)
+    if (stat.isFile()) return 'sqlite'
+  } catch {
+    // fall through to qdrant probe
+  }
+  const fetchImpl = options.fetchImpl
+    ?? ((globalThis as { fetch?: typeof fetch }).fetch as typeof fetch)
+  if (typeof fetchImpl !== 'function') return 'none'
+  const collection = collectionNameFor(sourcePath)
+  const url = options.qdrant.url || DEFAULT_QDRANT_URL
+  const headers = authHeader(options.qdrant.apiKey)
+  const timeoutMs = options.qdrant.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS
+  const t = withTimeout(timeoutMs)
+  try {
+    const resp = await fetchImpl(`${url}/collections/${encodeURIComponent(collection)}/exists`, {
+      method: 'GET',
+      headers,
+      signal: t.signal,
+    })
+    if (resp.status === 200) return 'qdrant'
+    return 'none'
+  } catch {
+    return 'none'
+  } finally {
+    t.cancel()
+  }
+}
+
+/**
+ * Pick the backend the *target* workspace would currently use, by
+ * re-running the same fallback rule the runtime factory does:
+ *
+ *   1. Explicit `vectorStoreBackend` wins.
+ *   2. Otherwise, a configured `qdrantUrl` defaults to "qdrant" (legacy
+ *      behaviour for users who already had a Qdrant URL set).
+ *   3. Otherwise, "sqlite" (the new zero-config default).
+ *
+ * The function only inspects the project's `autodev-config.json` (or the
+ * path passed via `options.configPath`); it does not look at the global
+ * config. Callers that want global-fallback behaviour should resolve
+ * the effective config path themselves first.
+ */
+export type TargetBackend = 'qdrant' | 'sqlite' | 'unknown'
+
+export function resolveTargetBackend(
+  workspacePath: string,
+  options: { readConfig?: (configPath: string) => string | null; configPath?: string } = {},
+): TargetBackend {
+  const configPath = options.configPath ?? path.join(workspacePath, 'autodev-config.json')
+  const readConfig = options.readConfig ?? defaultReadConfig
+  let raw: string | null
+  try {
+    raw = readConfig(configPath)
+  } catch {
+    return 'unknown'
+  }
+  if (raw === null) return 'unknown'
+  return resolveTargetBackendFromRaw(raw)
+}
+
+function defaultReadConfig(configPath: string): string | null {
+  // Synchronous JSON read; we need the answer before the clone decides
+  // what to copy, and the diagnostic runs after the async clone, but we
+  // keep it sync to match the lifetime of `cloneIndexFromSource` and to
+  // avoid a second round-trip in unit tests.
+  try {
+    return readFileSync(configPath, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+function resolveTargetBackendFromRaw(raw: string): TargetBackend {
+  // JSONC: strip /* */, // line comments, and trailing commas.
+  const stripped = raw
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+    .replace(/,(\s*[}\]])/g, '$1')
+  let parsed: { vectorStoreBackend?: string; qdrantUrl?: string }
+  try {
+    parsed = JSON.parse(stripped) as { vectorStoreBackend?: string; qdrantUrl?: string }
+  } catch {
+    return 'unknown'
+  }
+  if (parsed.vectorStoreBackend === 'qdrant' || parsed.vectorStoreBackend === 'sqlite') {
+    return parsed.vectorStoreBackend
+  }
+  if (parsed.qdrantUrl) return 'qdrant'
+  return 'unknown'
+}
+
+export interface BackendMismatchReport {
+  mismatch: boolean
+  sourceBackend: ObservedBackend
+  targetBackend: TargetBackend
+  reason: string
+}
+
+/**
+ * Decide whether the clone just performed left the target in a
+ * half-cloned state because the source and target use different
+ * vector-store backends.
+ *
+ *   - `sourceBackend === 'none'`: source has no data on either backend,
+ *     nothing to do, no mismatch to report.
+ *   - `targetBackend === 'unknown'`: we couldn't read the target's
+ *     config; skip the diagnostic rather than guess.
+ *   - Same backend: no mismatch.
+ *   - Different backends: report a mismatch. The orphan collection/db
+ *     that the cloner created for the unused backend is the leak the
+ *     user needs to know about.
+ */
+export function detectBackendMismatch(
+  sourceBackend: ObservedBackend,
+  targetBackend: TargetBackend,
+  context: { sourcePath: string; targetPath: string },
+): BackendMismatchReport {
+  if (sourceBackend === 'none' || targetBackend === 'unknown') {
+    return { mismatch: false, sourceBackend, targetBackend, reason: 'insufficient information' }
+  }
+  if (sourceBackend === targetBackend) {
+    return { mismatch: false, sourceBackend, targetBackend, reason: 'backends match' }
+  }
+  return {
+    mismatch: true,
+    sourceBackend,
+    targetBackend,
+    reason:
+      `source workspace has data on backend "${sourceBackend}" but target ` +
+      `workspace is configured to use backend "${targetBackend}"; the clone ` +
+      `will not copy the source's vectors and the target will rebuild from scratch`,
+  }
 }

@@ -120,7 +120,7 @@ src/code-index/vector-store/qdrant-client.ts → QdrantVectorStore: deleteCollec
 - [x] 6. 实现 `--clear` 序号解析（逗号+范围+all）
 - [x] 7. 实现 `--clear` 清除执行（本地文件删除 + Qdrant API 调用）
 - [x] 8. 实现 `--type` 过滤和 `--path` 过滤
-- [ ] 9. 编写单元测试
+- [x] 9. 编写单元测试
 
 ## 实施记录
 
@@ -146,7 +146,34 @@ src/code-index/vector-store/qdrant-client.ts → QdrantVectorStore: deleteCollec
 
 ## 修订记录
 
-（暂无）
+### 2026-06-03 (SQLite 后端支持 + 单元测试)
+
+**新增：cache 子命令支持 SQLite 向量库**
+
+- **背景**：docs/plans/260529-local-vector-store.md 引入 `SQLiteVectorStore` 作为新的默认后端
+  （`~/.autodev-cache/vector-store/{ws-hash16}/index.db`），但 cache 子命令当时只管理 Qdrant
+  collections。新建 SQLite 后端后，命令式 `cache --list` / `cache --clear` 无法发现 / 清理
+  这部分数据
+- **实施**：
+  - `CacheType` 联合类型扩展为 `'index' | 'summary' | 'dependency' | 'qdrant' | 'sqlite'`
+  - `CacheEntry` 新增 `sqliteDbPath?: string` 字段
+  - `discoverLocalCaches` 新增第 4 段：扫描 `~/.autodev-cache/vector-store/ws-{hash16}/`
+    下 `index.db`（含 `-wal` / `-shm` sidecar 计入大小），不存在 / 目录为空时 status='empty'
+  - `executeClear` 新增 `sqlite` 分支：删除整个 `vector-store/ws-{hash16}/` 目录
+    （更简洁地处理 sidecar，与 `SQLiteVectorStore.deleteCollection` 行为一致）
+  - `formatCount` / `typeMap` / CLI `--type` 帮助文案 / `CacheType` 联合类型补齐 sqlite
+  - `discoverLocalCaches(map, cacheBase?)` 增加可选参数，使其可在 tmpdir 下做单测
+  - 暴露内部辅助函数 `_test_discoverLocalCaches` / `_test_parseClearIndices` / `_test_cacheBase`
+- **单测**（`src/commands/__tests__/cache.spec.ts`，15 个 case，全部通过）：
+  - `parseClearIndices`：单值 / 逗号 / 范围 / 混合 / all / 越界 / 格式错误 / 空串
+  - `discoverLocalCaches`：缺失缓存目录 / index cache / dependency cache / SQLite .db 存在 /
+    SQLite 空目录 / 非 `ws-` 目录名防御 / project map 解析项目名
+- **验证**：
+  - `npx vitest run src/commands/__tests__/cache.spec.ts`：15 / 15 通过
+  - `npx tsc --noEmit`：仅 2 个**已存在**的 `llamacpp-rerank.ts` 错误，与本次无关
+  - `--list` 现有行（"Qdrant向量库"）下方新增"SQLite向量库"行
+  - `--type sqlite` / `--type all` 切换正常
+  - `--clear N` 清理 SQLite db 与 sidecar
 
 ## 总结
 

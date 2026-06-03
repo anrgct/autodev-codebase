@@ -13,7 +13,7 @@ import { QdrantClient } from '@qdrant/js-client-rest';
 // Types
 // ============================================================================
 
-type CacheType = 'index' | 'summary' | 'dependency' | 'qdrant';
+type CacheType = 'index' | 'summary' | 'dependency' | 'qdrant' | 'sqlite';
 
 interface CacheEntry {
   /** 1-based display index */
@@ -42,6 +42,8 @@ interface CacheEntry {
   collectionName?: string;
   /** Qdrant-specific: API key */
   qdrantApiKey?: string;
+  /** SQLite-specific: path to the .db file (defaults to absolutePath) */
+  sqliteDbPath?: string;
 }
 
 // ============================================================================
@@ -90,18 +92,22 @@ function resolveProjectName(projectHash: string, map: ProjectMap): string {
 }
 
 /**
- * Discover all local cache entries by scanning ~/.autodev-cache/
+ * Discover all local cache entries by scanning `~/.autodev-cache/`
+ * (or an explicit `cacheBase` for tests).
  */
-async function discoverLocalCaches(map: ProjectMap): Promise<CacheEntry[]> {
+async function discoverLocalCaches(
+  map: ProjectMap,
+  cacheBase: string = CACHE_BASE,
+): Promise<CacheEntry[]> {
   const entries: CacheEntry[] = [];
 
   try {
-    await fs.promises.access(CACHE_BASE);
+    await fs.promises.access(cacheBase);
   } catch {
     return entries; // Cache directory doesn't exist
   }
 
-  const dirents = await fs.promises.readdir(CACHE_BASE, { withFileTypes: true });
+  const dirents = await fs.promises.readdir(cacheBase, { withFileTypes: true });
 
   // 1. Index caches: roo-index-cache-{sha256}.json
   for (const dirent of dirents) {
@@ -111,7 +117,7 @@ async function discoverLocalCaches(map: ProjectMap): Promise<CacheEntry[]> {
 
     const fullHash = match[1];
     const projectHash = fullHash.substring(0, 16);
-    const fullPath = path.join(CACHE_BASE, dirent.name);
+    const fullPath = path.join(cacheBase, dirent.name);
 
     let itemCount: number | undefined;
     let sizeBytes: number | undefined;
@@ -140,7 +146,7 @@ async function discoverLocalCaches(map: ProjectMap): Promise<CacheEntry[]> {
   }
 
   // 2. Summary caches: summary-cache/{projectHash}/files/...
-  const summaryDir = path.join(CACHE_BASE, 'summary-cache');
+  const summaryDir = path.join(cacheBase, 'summary-cache');
   try {
     const summaryProjects = await fs.promises.readdir(summaryDir, { withFileTypes: true });
     for (const dirent of summaryProjects) {
@@ -183,7 +189,7 @@ async function discoverLocalCaches(map: ProjectMap): Promise<CacheEntry[]> {
   }
 
   // 3. Dependency caches: dependency-cache/{projectHash}/analysis-cache.json
-  const depDir = path.join(CACHE_BASE, 'dependency-cache');
+  const depDir = path.join(cacheBase, 'dependency-cache');
   try {
     const depProjects = await fs.promises.readdir(depDir, { withFileTypes: true });
     for (const dirent of depProjects) {
@@ -223,6 +229,63 @@ async function discoverLocalCaches(map: ProjectMap): Promise<CacheEntry[]> {
     }
   } catch {
     // No dependency cache directory
+  }
+
+  // 4. SQLite vector stores: vector-store/{ws-hash16}/index.db
+  //    Layout mirrors SQLiteVectorStore's default cache base.
+  const sqliteDir = path.join(cacheBase, 'vector-store');
+  try {
+    const sqliteProjects = await fs.promises.readdir(sqliteDir, { withFileTypes: true });
+    for (const dirent of sqliteProjects) {
+      if (!dirent.isDirectory()) continue;
+      // dirent.name looks like `ws-7227c7664b102862` (ws-{hash16}); the
+      // project hash is the trailing 16 hex chars.
+      const projectHash = dirent.name.startsWith('ws-')
+        ? dirent.name.slice(3)
+        : dirent.name;
+      const dbPath = path.join(sqliteDir, dirent.name, 'index.db');
+
+      let sizeBytes: number | undefined;
+      let status: CacheEntry['status'] = 'ok';
+      try {
+        const stat = await fs.promises.stat(dbPath);
+        if (!stat.isFile()) {
+          // Directory exists but the .db does not — the worktree was
+          // prepared but never initialised. Treat as empty.
+          status = 'empty';
+          sizeBytes = 0;
+        } else {
+          sizeBytes = stat.size;
+          // Count points by looking at the .db's "chunks" table size. We
+          // avoid pulling in better-sqlite3 here — the cache command is
+          // a thin shell — so we report point count as "size in KB" by
+          // sizing the directory instead. This keeps the listing
+          // informative without a native dep.
+          const dirStats = await countDirStats(path.dirname(dbPath));
+          sizeBytes = dirStats.totalSize;
+        }
+      } catch {
+        status = 'empty';
+        sizeBytes = 0;
+      }
+
+      entries.push({
+        index: 0,
+        type: 'sqlite',
+        typeLabel: 'SQLite向量库',
+        projectHash,
+        projectName: resolveProjectName(projectHash, map),
+        itemCount: undefined,
+        sizeBytes,
+        path: `vector-store/${dirent.name}/index.db`,
+        absolutePath: dbPath,
+        sqliteDbPath: dbPath,
+        status,
+        statusDetail: '~/.autodev-cache/vector-store',
+      });
+    }
+  } catch {
+    // No vector-store directory
   }
 
   return entries;
@@ -385,6 +448,7 @@ function formatCount(type: CacheType, count?: number): string {
   if (count === undefined || count === null) return '-';
   const suffix =
     type === 'qdrant' ? ' pts' :
+    type === 'sqlite' ? ' db' :
     type === 'dependency' ? ' 条目' :
     ' 文件';
   return `${count.toLocaleString()}${suffix}`;
@@ -652,6 +716,31 @@ async function executeClear(
         await client.deleteCollection(t.collectionName);
         console.log(`[${t.index}] ✓ ${t.typeLabel} — 已删除集合 ${t.collectionName}`);
         clearedCount++;
+      } else if (t.type === 'sqlite') {
+        // SQLite: delete the entire vector-store directory (index.db +
+        // -wal / -shm / -journal sidecars). Removing the dir is simpler
+        // than chasing each side file and matches what the
+        // SQLiteVectorStore.deleteCollection() path does on disk.
+        if (!t.absolutePath) {
+          console.log(`[${t.index}] ✗ ${t.typeLabel} — 缺少路径信息，跳过`);
+          failedCount++;
+          continue;
+        }
+        const dir = path.dirname(t.absolutePath)
+        if (t.status === 'empty') {
+          // No .db file present — just remove the empty dir if any.
+          try {
+            await fs.promises.rm(dir, { recursive: true, force: true })
+          } catch {
+            // best-effort
+          }
+          console.log(`[${t.index}] ✓ ${t.typeLabel} — 已清理空目录 ${dir}`)
+          clearedCount++
+          continue
+        }
+        await removeDir(dir)
+        console.log(`[${t.index}] ✓ ${t.typeLabel} — 已删除 ${dir}`)
+        clearedCount++
       } else {
         // Local caches: delete files/directories
         if (!t.absolutePath) {
@@ -748,10 +837,11 @@ async function cacheHandler(options: any): Promise<void> {
       summary: 'summary',
       dependency: 'dependency',
       qdrant: 'qdrant',
+      sqlite: 'sqlite',
     };
     const targetType = typeMap[filterType];
     if (!targetType) {
-      console.error(`无效的 --type 值: ${filterType}。有效值: index, summary, dependency, qdrant, all`);
+      console.error(`无效的 --type 值: ${filterType}。有效值: index, summary, dependency, qdrant, sqlite, all`);
       process.exit(1);
     }
     filteredEntries = allEntries.filter((e) => e.type === targetType);
@@ -806,7 +896,7 @@ export function createCacheCommand(): Command {
     .description('管理缓存和向量数据（列出 / 清除）')
     .option('-l, --list', '列出所有缓存')
     .option('--clear <indices>', '按序号清除缓存（支持: 1, 1-3, 1,3-5, all）')
-    .option('--type <type>', '过滤类型: index, summary, dependency, qdrant, all（默认: all）')
+    .option('--type <type>', '过滤类型: index, summary, dependency, qdrant, sqlite, all（默认: all）')
     .option('-p, --path <path>', '项目路径（用于加载 Qdrant 配置）', '.')
     .option('--json', 'JSON 格式输出')
     .option('-y, --yes', '跳过确认提示')
@@ -816,3 +906,17 @@ export function createCacheCommand(): Command {
 
   return command;
 }
+
+// ============================================================================
+// Test exports — internal helpers that the unit-test suite drives directly
+// to avoid mocking commander / readline / process.exit.
+// ============================================================================
+
+/** @internal — runs the local cache discovery in isolation. */
+export const _test_discoverLocalCaches = discoverLocalCaches
+
+/** @internal — parses `--clear` argument values. */
+export const _test_parseClearIndices = parseClearIndices
+
+/** @internal — exposed so tests can run with a controlled cache base. */
+export const _test_cacheBase = CACHE_BASE

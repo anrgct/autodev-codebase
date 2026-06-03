@@ -78,33 +78,32 @@ export class DirectoryScanner implements IDirectoryScanner {
       fileSystem: this.deps.fileSystem,
       workspace: this.deps.workspace
     })
-    this.debug(`[Scanner] Found ${allPaths.length} paths from listFiles:`, allPaths.slice(0, 10))
+    this.debug(`[Scanner] Found ${allPaths.length} paths from listFiles`)
 
     // Filter out directories (marked with trailing '/')
     const filePaths = allPaths.filter((p) => !p.endsWith("/"))
-    this.debug(`[Scanner] After filtering directories: ${filePaths.length} files:`, filePaths.slice(0, 10))
+    this.debug(`[Scanner] After filtering directories: ${filePaths.length} files`)
 
     // Filter paths using workspace ignore rules
     const allowedPaths: string[] = []
     for (const filePath of filePaths) {
       const shouldIgnore = await this.deps.workspace.shouldIgnore(filePath)
-      this.debug(`[Scanner] shouldIgnore(${filePath}): ${shouldIgnore}`)
       if (!shouldIgnore) {
         allowedPaths.push(filePath)
       }
     }
-    this.debug(`[Scanner] After workspace ignore rules: ${allowedPaths.length} files:`, allowedPaths)
+    const ignoredCount = filePaths.length - allowedPaths.length
+    this.debug(`[Scanner] After workspace ignore rules: ${allowedPaths.length} files (removed ${ignoredCount})`)
 
     // Filter by supported extensions only
     const supportedPaths = allowedPaths.filter((filePath) => {
       const ext = this.deps.pathUtils.extname(filePath).toLowerCase()
       const extSupported = scannerExtensions.includes(ext)
 
-      this.debug(`[Scanner] File: ${filePath}, ext: ${ext}, extSupported: ${extSupported}`)
-
       return extSupported
     })
-    this.debug(`[Scanner] After extension filtering: ${supportedPaths.length} files:`, supportedPaths)
+    const extFilteredCount = allowedPaths.length - supportedPaths.length
+    this.debug(`[Scanner] After extension filtering: ${supportedPaths.length} files (removed ${extFilteredCount}) [${supportedPaths.join(', ')}]`)
 
     return supportedPaths
   }
@@ -162,10 +161,8 @@ export class DirectoryScanner implements IDirectoryScanner {
     const parsePromises = supportedPaths.map((filePath) =>
       parseLimiter(async () => {
         try {
-          this.debug(`[Scanner] Processing file: ${filePath}`)
           // Check file size
           const stats = await this.deps.fileSystem.stat(filePath)
-          this.debug(`[Scanner] File ${filePath} size: ${stats.size} bytes (limit: ${MAX_FILE_SIZE_BYTES})`)
           if (stats.size > MAX_FILE_SIZE_BYTES) {
             this.debug(`[Scanner] Skipping large file: ${filePath}`)
             skippedCount++ // Skip large files
@@ -182,15 +179,14 @@ export class DirectoryScanner implements IDirectoryScanner {
 
           // Check against cache
           const cachedFileHash = this.deps.cacheManager.getHash(filePath)
-          this.debug(`[Scanner] File ${filePath}: cachedHash=${cachedFileHash}, currentHash=${currentFileHash}`)
           if (cachedFileHash === currentFileHash) {
             // File is unchanged
-            this.debug(`[Scanner] Skipping unchanged file: ${filePath}`)
             skippedCount++
             return
           }
 
           // File is new or changed - parse it using the injected parser function
+          this.debug(`[Scanner] Processing file: ${filePath}`)
           const blocks = await this.deps.codeParser.parseFile(filePath, { content, fileHash: currentFileHash })
           const fileBlockCount = blocks.length
           onFileParsed?.(fileBlockCount)

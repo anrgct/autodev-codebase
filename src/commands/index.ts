@@ -2,6 +2,7 @@
  * Index command implementation
  */
 import { Command } from 'commander';
+import { createHash } from 'crypto';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import { CommandOptions, initializeManager, waitForIndexingCompletion, getLogger, initGlobalLogger, resolveWorkspacePath, registerProjectToCacheMap } from './shared';
@@ -14,6 +15,9 @@ import {
 import {
   cloneIndexFromSource,
   type IndexCloneResult,
+  observeSourceBackend,
+  resolveTargetBackend,
+  detectBackendMismatch,
 } from '../utils/index-cloner';
 
 /**
@@ -100,12 +104,60 @@ async function maybeCloneFromWorktree(
         `Worktree index clone completed with ${result.failureReasons.length} issue(s); continuing with normal indexing`,
       );
     }
+    // Run the backend-mismatch diagnostic off the critical path so a
+    // probe failure here never blocks indexing. The user-visible signal
+    // is a single WARN line that names the source/target backends and
+    // the two fix options.
+    void reportBackendMismatch(sourcePath, targetPath, qdrantUrl, logger).catch(() => {
+      // Swallow — already logged inside the helper if it failed.
+    });
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.warn(`Worktree index clone failed: ${message}; continuing with normal indexing`);
     return null;
   }
+}
+
+/**
+ * Observe the source's actual vector-store backend and the target's
+ * configured backend, and log a single prominent WARN if they
+ * disagree. Pure diagnostics — never throws, never blocks.
+ */
+async function reportBackendMismatch(
+  sourcePath: string,
+  targetPath: string,
+  qdrantUrl: string,
+  logger: ReturnType<typeof getLogger>,
+): Promise<void> {
+  try {
+    const sourceBackend = await observeSourceBackend(sourcePath, {
+      qdrant: { url: qdrantUrl, apiKey: undefined, timeoutMs: 5_000 },
+    });
+    const targetBackend = resolveTargetBackend(targetPath);
+    const report = detectBackendMismatch(sourceBackend, targetBackend, { sourcePath, targetPath });
+    if (!report.mismatch) return;
+    // The orphan is always in the *target* namespace, on the *source*'s
+    // backend. E.g. source=Qdrant + target=SQLite leaves a Qdrant
+    // collection named after the target's hash lying around.
+    const targetHash = hashForLog(targetPath);
+    const orphanHint =
+      report.sourceBackend === 'qdrant'
+        ? `the Qdrant collection \`ws-${targetHash}\` for the target workspace is now an orphan`
+        : `the SQLite vector store at \`~/.autodev-cache/vector-store/ws-${targetHash}/\` for the target workspace is now an orphan`;
+    logger.warn(
+      `[worktree-clone] Backend mismatch: source has data on "${report.sourceBackend}" but target is configured for "${report.targetBackend}". ` +
+      `The clone will not copy the source's vectors; the target will rebuild its index from scratch. ` +
+      `Either align \`vectorStoreBackend\` in both \`autodev-config.json\` files, or clear the orphan (${orphanHint}) via \`codebase cache --clear\`.`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.debug(`Backend-mismatch diagnostic failed: ${message}`);
+  }
+}
+
+function hashForLog(workspacePath: string): string {
+  return createHash('sha256').update(workspacePath).digest('hex').substring(0, 16);
 }
 
 async function resolveQdrantUrl(workspacePath: string, options: CommandOptions): Promise<string> {

@@ -11,116 +11,9 @@ import {
 } from "../constants"
 import { validateLimit, validateMinScore } from "../validate-search-params"
 import { Logger } from "../../utils/logger"
+import { compilePathFilters, compilePathFiltersToQdrant } from "./path-filter"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
-
-/**
- * Pattern Compiler for Glob-like Path Filtering
- * Compiles glob patterns to Qdrant substring filters
- */
-class PatternCompiler {
-  /**
-   * Compiles path filters to Qdrant filter structure
-   * @param pathFilters Array of path filter patterns
-   * @returns Qdrant filter object
-   */
-  static compile(pathFilters: string[]): any {
-    if (!pathFilters || pathFilters.length === 0) {
-      return {}
-    }
-
-    const includePatterns = pathFilters.filter(p => !p.startsWith('!'))
-    const excludePatterns = pathFilters.filter(p => p.startsWith('!')).map(p => p.slice(1))
-
-    const filter: any = {}
-
-    // Handle include patterns (OR semantics)
-    if (includePatterns.length > 0) {
-      const shouldClauses = includePatterns.flatMap(pattern =>
-        this.expandPattern(pattern).map(expanded => ({
-          must: this.extractSubstrings(expanded).map(s => ({
-            key: "filePathLower",
-            match: { text: s.toLowerCase() }
-          }))
-        }))
-      )
-
-      if (shouldClauses.length > 0) {
-        filter.should = shouldClauses
-        // Note: Qdrant's should clause defaults to OR logic, no min_should needed
-      }
-    }
-
-    // Handle exclude patterns
-    if (excludePatterns.length > 0) {
-      const mustNotClauses = excludePatterns.flatMap(pattern =>
-        this.expandPattern(pattern).map(expanded => ({
-          must: this.extractSubstrings(expanded).map(s => ({
-            key: "filePathLower",
-            match: { text: s.toLowerCase() }
-          }))
-        }))
-      )
-
-      if (mustNotClauses.length > 0) {
-        filter.must_not = mustNotClauses
-      }
-    }
-
-    return filter
-  }
-
-  /**
-   * Expands brace patterns like {a,b} into multiple patterns
-   * @param pattern Input pattern
-   * @returns Array of expanded patterns
-   */
-  private static expandPattern(pattern: string): string[] {
-    const braceRegex = /{([^}]+)}/g
-    let match = braceRegex.exec(pattern)
-
-    if (!match) return [pattern]
-
-    const options = match[1].split(',').map(opt => opt.trim()).filter(Boolean)
-    const prefix = pattern.substring(0, match.index)
-    const suffix = pattern.substring(match.index + match[0].length)
-
-    return options.flatMap(option =>
-      this.expandPattern(prefix + option + suffix)
-    )
-  }
-
-  /**
-   * Extracts substrings from a pattern by splitting on glob wildcards
-   * @param pattern Input pattern
-   * @returns Array of substrings to match
-   */
-  private static extractSubstrings(pattern: string): string[] {
-    const cleanPattern = pattern.replace(/^!/, '')
-
-    // First, remove unsupported character classes [] by removing entire segments containing them
-    // Split by ** and * first to identify segments
-    const segments = cleanPattern.split(/(\*\*|\*)/)
-
-    // Process segments: keep only valid substrings (not wildcards, not character classes)
-    const validParts = segments.filter(part => {
-      // Remove wildcard tokens themselves (they are separators, not substrings to match)
-      if (part === '**' || part === '*') return false
-      if (part.length === 0) return false
-      // Remove segments containing character classes [] - they are not supported
-      if (part.includes('[') || part.includes(']')) return false
-      // ? is treated as a regular character, keep it
-      return true
-    })
-
-    // Filter out standalone path separators (only "/" or "\")
-    // but keep segments that contain path separators with other content (e.g., "src/", "/b")
-    return validParts.filter(part => {
-      const isStandaloneSeparator = part === '/' || part === '\\'
-      return !isStandaloneSeparator
-    })
-  }
-}
 
 /**
  * Qdrant implementation of the vector store interface
@@ -130,6 +23,8 @@ export class QdrantVectorStore implements IVectorStore {
   private readonly vectorSize: number
   private readonly workspacePath: string
   private readonly qdrantUrl: string = "http://localhost:6333"
+  private readonly embedderProvider: string
+  private readonly embedderModelId: string
 
   private client: QdrantClient
   private readonly collectionName: string
@@ -141,8 +36,10 @@ export class QdrantVectorStore implements IVectorStore {
    * @param urlOrVectorSize Either the URL to Qdrant server or the vector size (for backward compatibility)
    * @param vectorSizeOrApiKey Either the vector size or API key (for backward compatibility)
    * @param apiKey Optional API key (for backward compatibility)
+   * @param embedderProvider Embedder provider name (for provider change detection)
+   * @param embedderModelId Embedder model ID (for model change detection)
    */
-  constructor(workspacePath: string, urlOrVectorSize: string | number, vectorSizeOrApiKey?: number | string, apiKey?: string, logger?: LoggerLike) {
+  constructor(workspacePath: string, urlOrVectorSize: string | number, vectorSizeOrApiKey?: number | string, apiKey?: string, logger?: LoggerLike, embedderProvider?: string, embedderModelId?: string) {
     // Handle backward compatibility: (workspacePath, url, vectorSize, apiKey)
     let url: string
     let vectorSize: number
@@ -164,6 +61,8 @@ export class QdrantVectorStore implements IVectorStore {
     this.qdrantUrl = url
     this.workspacePath = workspacePath
     this.vectorSize = vectorSize
+    this.embedderProvider = embedderProvider ?? ''
+    this.embedderModelId = embedderModelId ?? ''
     this.logger = logger ?? new Logger({ name: 'QdrantVectorStore' })
 
     try {
@@ -289,7 +188,8 @@ export class QdrantVectorStore implements IVectorStore {
               )
               created = await this._recreateCollectionWithNewDimension(existingVectorSize)
             } else {
-              created = false // Exists and correct
+              // Dimension matches — check for embedder provider/model change
+              created = await this._checkEmbedderChange()
             }
         } else {
           // Exists but wrong vector size, recreate with enhanced error handling
@@ -299,6 +199,11 @@ export class QdrantVectorStore implements IVectorStore {
 
       // Create payload indexes
       await this._createPayloadIndexes()
+
+      // Write/update the metadata point with current embedder info.
+      // This lets the next session detect provider/model changes.
+      await this._ensureEmbedderMetadata()
+
       return created
     } catch (error: any) {
       const errorMessage = error?.message || error
@@ -396,6 +301,134 @@ export class QdrantVectorStore implements IVectorStore {
       // Preserve the original error context using custom property
       ;(dimensionMismatchError as any).cause = recreationError
       throw dimensionMismatchError
+    }
+  }
+
+  /**
+   * Check whether the embedder provider or model has changed since the last
+   * index session by reading the metadata point. If they differ, recreate the
+   * collection so stored vectors match the current embedder.
+   *
+   * This is a no-op (returns `false`) when no prior metadata exists — that
+   * covers both first-run and upgrade-from-old-version scenarios. The current
+   * provider/model are written into the metadata point at the end of
+   * `initialize()` so subsequent sessions can detect changes.
+   */
+  private async _checkEmbedderChange(): Promise<boolean> {
+    // No provider info configured — skip check
+    if (!this.embedderProvider && !this.embedderModelId) return false
+
+    try {
+      const { existingProvider, existingModelId } = await this._readEmbedderMetadata()
+
+      // No prior metadata — backward compat, don't trigger rebuild
+      if (existingProvider === null && existingModelId === null) return false
+
+      if (existingProvider !== null && existingProvider !== this.embedderProvider) {
+        this.logger.warn(
+          `Embedder provider changed (${existingProvider} → ${this.embedderProvider}). ` +
+          `Dropping existing collection and rebuilding.`
+        )
+        await this._recreateCollectionWithNewDimension(this.vectorSize)
+        return true
+      }
+
+      if (existingModelId !== null && existingModelId !== this.embedderModelId) {
+        this.logger.warn(
+          `Embedder model changed (${existingModelId} → ${this.embedderModelId}). ` +
+          `Dropping existing collection and rebuilding.`
+        )
+        await this._recreateCollectionWithNewDimension(this.vectorSize)
+        return true
+      }
+
+      return false
+    } catch (error) {
+      this.logger.warn(`Failed to check embedder change, skipping:`, error)
+      return false
+    }
+  }
+
+  /** Deterministic UUID for the singleton metadata point. */
+  private _metadataId(): string {
+    return uuidv5("__indexing_metadata__", QDRANT_CODE_BLOCK_NAMESPACE)
+  }
+
+  /**
+   * Read embedder provider and model ID from the existing metadata point.
+   * Returns `{ existingProvider, existingModelId }` where null means
+   * the value was missing (old metadata before this feature was added).
+   */
+  private async _readEmbedderMetadata(): Promise<{ existingProvider: string | null; existingModelId: string | null }> {
+    try {
+      const metadataPoints = await this.client.retrieve(this.collectionName, {
+        ids: [this._metadataId()],
+      })
+
+      if (metadataPoints.length === 0 || !metadataPoints[0].payload) {
+        return { existingProvider: null, existingModelId: null }
+      }
+
+      const payload = metadataPoints[0].payload as Record<string, unknown>
+      return {
+        existingProvider: (payload['embedder_provider'] as string) ?? null,
+        existingModelId: (payload['embedder_model_id'] as string) ?? null,
+      }
+    } catch {
+      return { existingProvider: null, existingModelId: null }
+    }
+  }
+
+  /**
+   * Write/update the singleton metadata point with the current embedder
+   * provider and model ID. This is called at the end of `initialize()` so
+   * the next session can detect provider/model changes.
+   *
+   * We use a zero vector because the metadata point is excluded from search
+   * results via the `type != "metadata"` filter and never participates in
+   * ANN queries.
+   */
+  private async _ensureEmbedderMetadata(): Promise<void> {
+    if (!this.embedderProvider && !this.embedderModelId) return
+
+    try {
+      // Read existing metadata to preserve the indexing_complete flag
+      const existingPoints = await this.client.retrieve(this.collectionName, {
+        ids: [this._metadataId()],
+      })
+
+      let payload: Record<string, unknown> = {
+        type: "metadata",
+        embedder_provider: this.embedderProvider,
+        embedder_model_id: this.embedderModelId,
+      }
+
+      // Preserve existing indexing state if present
+      if (existingPoints.length > 0 && existingPoints[0].payload) {
+        const existing = existingPoints[0].payload as Record<string, unknown>
+        if (existing['indexing_complete'] !== undefined) {
+          payload['indexing_complete'] = existing['indexing_complete']
+        }
+        if (existing['completed_at'] !== undefined) {
+          payload['completed_at'] = existing['completed_at']
+        }
+        if (existing['started_at'] !== undefined) {
+          payload['started_at'] = existing['started_at']
+        }
+      }
+
+      await this.client.upsert(this.collectionName, {
+        points: [
+          {
+            id: this._metadataId(),
+            vector: new Array(this.vectorSize).fill(0),
+            payload,
+          },
+        ],
+        wait: true,
+      })
+    } catch (error) {
+      this.logger.warn(`Failed to write embedder metadata:`, error)
     }
   }
 
@@ -571,12 +604,12 @@ export class QdrantVectorStore implements IVectorStore {
       hybridOptions?: HybridSearchOptions,
     ): Promise<VectorStoreSearchResult[]> {
       try {
-        // Build Qdrant filter using PatternCompiler for pathFilters
+        // Build Qdrant filter using the shared PathFilter compiler
         let qdrantFilter: any = undefined
 
-        // Use PatternCompiler to compile path filters
+        // Use the shared PathFilter compiler
         if (filter?.pathFilters && filter.pathFilters.length > 0) {
-          qdrantFilter = PatternCompiler.compile(filter.pathFilters)
+          qdrantFilter = compilePathFiltersToQdrant(compilePathFilters(filter.pathFilters))
         }
 
       // 合并现有的metadata排除
@@ -838,10 +871,8 @@ export class QdrantVectorStore implements IVectorStore {
       }
 
       // Check if the indexing completion marker exists
-      // Use a deterministic UUID generated from a constant string
-      const metadataId = uuidv5("__indexing_metadata__", QDRANT_CODE_BLOCK_NAMESPACE)
       const metadataPoints = await this.client.retrieve(this.collectionName, {
-        ids: [metadataId],
+        ids: [this._metadataId()],
       })
 
       // If marker exists, use it to determine completion status
@@ -867,19 +898,17 @@ export class QdrantVectorStore implements IVectorStore {
    */
   async markIndexingComplete(): Promise<void> {
     try {
-      // Create a metadata point with a deterministic UUID to mark indexing as complete
-      // Use uuidv5 to generate a consistent UUID from a constant string
-      const metadataId = uuidv5("__indexing_metadata__", QDRANT_CODE_BLOCK_NAMESPACE)
-
       await this.client.upsert(this.collectionName, {
         points: [
           {
-            id: metadataId,
+            id: this._metadataId(),
             vector: new Array(this.vectorSize).fill(0),
             payload: {
               type: "metadata",
               indexing_complete: true,
               completed_at: Date.now(),
+              embedder_provider: this.embedderProvider,
+              embedder_model_id: this.embedderModelId,
             },
           },
         ],
@@ -904,19 +933,17 @@ export class QdrantVectorStore implements IVectorStore {
    */
   async markIndexingIncomplete(): Promise<void> {
     try {
-      // Create a metadata point with a deterministic UUID to mark indexing as incomplete
-      // Use uuidv5 to generate a consistent UUID from a constant string
-      const metadataId = uuidv5("__indexing_metadata__", QDRANT_CODE_BLOCK_NAMESPACE)
-
       await this.client.upsert(this.collectionName, {
         points: [
           {
-            id: metadataId,
+            id: this._metadataId(),
             vector: new Array(this.vectorSize).fill(0),
             payload: {
               type: "metadata",
               indexing_complete: false,
               started_at: Date.now(),
+              embedder_provider: this.embedderProvider,
+              embedder_model_id: this.embedderModelId,
             },
           },
         ],

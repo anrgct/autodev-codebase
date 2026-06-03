@@ -246,6 +246,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
         expectedDimension,
         "test-key",
         undefined,
+        "openai",
+        "text-embedding-3-small",
       )
     })
 
@@ -269,6 +271,8 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
         1024,
         "test-key",
         undefined,
+        "openai-compatible",
+        "custom-model",
       )
     })
 
@@ -311,12 +315,15 @@ const MockedQdrantVectorStore = QdrantVectorStore as unknown as MockedClass<type
         embedderModelId: "text-embedding-3-small",
         embedderModelDimension: 1536,
         embedderOpenAiApiKey: "test-key",
+        // Explicitly set the Qdrant backend so the factory does not fall
+        // back to SQLite (the new default for missing qdrantUrl).
+        vectorStoreBackend: "qdrant",
         qdrantUrl: undefined,
         qdrantApiKey: "test-key",
       }
       mockConfigManager.getConfig.mockReturnValue(config)
 
-      await expect(factory.createVectorStore()).rejects.toThrow("Qdrant URL missing for vector store creation")
+      await expect(factory.createVectorStore()).rejects.toThrow(/Qdrant vector store backend selected but no qdrantUrl/)
     })
   })
 

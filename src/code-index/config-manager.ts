@@ -35,6 +35,7 @@ const REQUIRES_RESTART_KEYS: (keyof CodeIndexConfig)[] = [
   'embedderUseChatTemplate',           // Chat template change requires model reload
   'qdrantUrl',                          // Vector store location
   'qdrantApiKey',                       // Vector store authentication
+  'vectorStoreBackend',                 // Switching backends requires re-initialisation
 ]
 
 /**
@@ -156,43 +157,53 @@ export class CodeIndexConfigManager {
 
   /**
    * Checks if the service is properly configured based on the embedder type.
+   * When the SQLite backend is selected (the new default), `qdrantUrl` is
+   * not required; for the Qdrant backend it is still mandatory.
    */
   public isConfigured(): boolean {
     if (!this.config) return false
 
-    const { embedderProvider, qdrantUrl } = this.config
+    const { embedderProvider, qdrantUrl, vectorStoreBackend } = this.config
+    // Mirror the factory's resolution rule. We can't import the helper
+    // here (config-manager is loaded very early in the boot path), so the
+    // rule is inlined. Keep both copies in sync.
+    const isQdrantBackend =
+      vectorStoreBackend === 'qdrant' ||
+      (vectorStoreBackend === undefined && !!qdrantUrl)
+    const requiresQdrantUrl = isQdrantBackend
+    const vectorStoreOk = requiresQdrantUrl ? !!qdrantUrl : true
 
     if (embedderProvider === "openai") {
       const openAiKey = this.config.embedderOpenAiApiKey
-      return !!(openAiKey && qdrantUrl)
+      return !!(openAiKey && vectorStoreOk)
     } else if (embedderProvider === "ollama") {
       const ollamaBaseUrl = this.config.embedderOllamaBaseUrl
-      return !!(ollamaBaseUrl && qdrantUrl)
+      return !!(ollamaBaseUrl && vectorStoreOk)
     } else if (embedderProvider === "openai-compatible") {
       const baseUrl = this.config.embedderOpenAiCompatibleBaseUrl
       const apiKey = this.config.embedderOpenAiCompatibleApiKey
-      return !!(baseUrl && apiKey && qdrantUrl)
+      return !!(baseUrl && apiKey && vectorStoreOk)
     } else if (embedderProvider === "gemini") {
       const apiKey = this.config.embedderGeminiApiKey
-      return !!(apiKey && qdrantUrl)
+      return !!(apiKey && vectorStoreOk)
     } else if (embedderProvider === "mistral") {
       const apiKey = this.config.embedderMistralApiKey
-      return !!(apiKey && qdrantUrl)
+      return !!(apiKey && vectorStoreOk)
     } else if (embedderProvider === "vercel-ai-gateway") {
       const apiKey = this.config.embedderVercelAiGatewayApiKey
-      return !!(apiKey && qdrantUrl)
+      return !!(apiKey && vectorStoreOk)
     } else if (embedderProvider === "openrouter") {
       const apiKey = this.config.embedderOpenRouterApiKey
-      return !!(apiKey && qdrantUrl)
+      return !!(apiKey && vectorStoreOk)
     } else if (embedderProvider === "jina") {
       const apiKey = this.config.embedderJinaApiKey
-      return !!(apiKey && qdrantUrl)
+      return !!(apiKey && vectorStoreOk)
     } else if (embedderProvider === "llamacpp") {
       const modelPath = this.config.embedderGgufPath
-      return !!(modelPath && qdrantUrl)
+      return !!(modelPath && vectorStoreOk)
     } else if (embedderProvider === "llamacpp-llm") {
       const modelPath = this.config.embedderGgufLlmPath
-      return !!(modelPath && qdrantUrl)
+      return !!(modelPath && vectorStoreOk)
     }
     return false
   }
@@ -233,6 +244,7 @@ export class CodeIndexConfigManager {
       embedderOpenRouterBatchSize: config.embedderOpenRouterBatchSize,
       qdrantUrl: config.qdrantUrl ?? "",
       qdrantApiKey: config.qdrantApiKey ?? "",
+      vectorStoreBackend: config.vectorStoreBackend,
       vectorSearchMinScore: config.vectorSearchMinScore,
       vectorSearchMaxResults: config.vectorSearchMaxResults,
       hybridSearchEnabled: config.hybridSearchEnabled,
@@ -415,6 +427,13 @@ export class CodeIndexConfigManager {
       return true
     }
 
+    // Vector store backend change — switching between Qdrant and SQLite
+    // requires a fresh IVectorStore and a re-index. The two backends are
+    // not data-compatible.
+    if ((prev?.vectorStoreBackend) !== this.config.vectorStoreBackend) {
+      return true
+    }
+
     // Vector dimension changes (still important for compatibility)
     if (this._hasVectorDimensionChanged(prevProvider, prev?.embedderModelId)) {
       return true
@@ -425,6 +444,9 @@ export class CodeIndexConfigManager {
 
   /**
    * Checks if model changes result in vector dimension changes that require restart.
+   * Returns true if the provider changed (different providers always produce
+   * different embedding spaces, even at the same dimension) or if the model
+   * identity changed within the same provider and the dimensions differ.
    */
   private _hasVectorDimensionChanged(prevProvider: EmbedderProvider, prevModelId?: string): boolean {
     if (!this.config) return true
@@ -433,22 +455,32 @@ export class CodeIndexConfigManager {
     const currentModelId = this.config.embedderModelId ?? getDefaultModelId(currentProvider)
     const resolvedPrevModelId = prevModelId ?? getDefaultModelId(prevProvider)
 
-    // If model IDs are the same and provider is the same, no dimension change
-    if (prevProvider === currentProvider && resolvedPrevModelId === currentModelId) {
-      return false
-    }
-
-    // Get vector dimensions for both models
-    const prevDimension = getModelDimension(prevProvider, resolvedPrevModelId)
-    const currentDimension = getModelDimension(currentProvider, currentModelId)
-
-    // If we can't determine dimensions, be safe and restart
-    if (prevDimension === undefined || currentDimension === undefined) {
+    // Provider change ALWAYS invalidates existing embeddings, even if the
+    // vector dimension happens to be the same. Different providers use
+    // fundamentally different model architectures and produce incompatible
+    // embedding spaces — searching with one provider's query vector against
+    // another provider's stored vectors would return garbage results.
+    if (prevProvider !== currentProvider) {
       return true
     }
 
-    // Only restart if dimensions actually changed
-    return prevDimension !== currentDimension
+    // Same provider, check if model identity changed
+    if (resolvedPrevModelId !== currentModelId) {
+      // Get vector dimensions for both models
+      const prevDimension = getModelDimension(prevProvider, resolvedPrevModelId)
+      const currentDimension = getModelDimension(currentProvider, currentModelId)
+
+      // If we can't determine dimensions, be safe and restart
+      if (prevDimension === undefined || currentDimension === undefined) {
+        return true
+      }
+
+      // Only restart if dimensions actually changed
+      return prevDimension !== currentDimension
+    }
+
+    // Same provider, same model — no dimension change
+    return false
   }
 
   /**

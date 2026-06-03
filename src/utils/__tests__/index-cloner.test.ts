@@ -10,12 +10,18 @@ import {
   indexCacheFileName,
   summaryCacheDir,
   dependencyCacheDir,
+  sqliteVectorStoreDbPath,
   cloneLocalCaches,
   cloneQdrantCollection,
+  cloneSqliteVectorStore,
   cloneIndexFromSource,
+  observeSourceBackend,
+  resolveTargetBackend,
+  detectBackendMismatch,
   type IndexCloneDependencies,
   type LocalCacheCloneDetails,
   type QdrantCollectionCloneDetails,
+  type SqliteVectorStoreCloneDetails,
 } from '../index-cloner'
 
 // Fixed workspace paths used throughout these tests. The expected Qdrant
@@ -546,5 +552,279 @@ describe('cloneIndexFromSource (integration shape)', () => {
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true })
     }
+  })
+})
+
+describe('sqliteVectorStoreDbPath', () => {
+  it('places the db under the cache base in a collection-name subdir', () => {
+    const cacheBase = '/Users/x/.autodev-cache'
+    const dbPath = sqliteVectorStoreDbPath('/Users/x/source', cacheBase)
+    expect(dbPath).toBe(
+      path.join(cacheBase, 'vector-store', collectionNameFor('/Users/x/source'), 'index.db'),
+    )
+  })
+})
+
+describe('cloneSqliteVectorStore', () => {
+  let tempRoot: string
+  let cacheBase: string
+  let sourcePath: string
+  let targetPath: string
+
+  beforeEach(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'sqlite-clone-'))
+    cacheBase = path.join(tempRoot, 'autodev-cache')
+    await fs.mkdir(cacheBase, { recursive: true })
+    sourcePath = path.join(tempRoot, 'source')
+    targetPath = path.join(tempRoot, 'target')
+  })
+
+  afterEach(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
+
+  it('skips when the source db does not exist', async () => {
+    const result = await cloneSqliteVectorStore(
+      sourcePath,
+      targetPath,
+      cacheBase,
+      { fs, logger: makeLogger() },
+    )
+    expect(result.status).toBe<SqliteVectorStoreCloneDetails['status']>('skipped_missing_source')
+  })
+
+  it('copies the main db file and reports bytes copied', async () => {
+    const sourceDb = sqliteVectorStoreDbPath(sourcePath, cacheBase)
+    await fs.mkdir(path.dirname(sourceDb), { recursive: true })
+    const payload = Buffer.from('SQLite-format-placeholder'.repeat(128))
+    await fs.writeFile(sourceDb, payload)
+
+    const result = await cloneSqliteVectorStore(
+      sourcePath,
+      targetPath,
+      cacheBase,
+      { fs, logger: makeLogger() },
+    )
+
+    expect(result.status).toBe<SqliteVectorStoreCloneDetails['status']>('copied')
+    expect(result.bytesCopied).toBe(payload.length)
+    const targetDb = sqliteVectorStoreDbPath(targetPath, cacheBase)
+    const written = await fs.readFile(targetDb)
+    expect(written.equals(payload)).toBe(true)
+  })
+
+  it('also copies the -wal / -shm side files when present', async () => {
+    const sourceDb = sqliteVectorStoreDbPath(sourcePath, cacheBase)
+    await fs.mkdir(path.dirname(sourceDb), { recursive: true })
+    await fs.writeFile(sourceDb, Buffer.from('main-db'))
+    await fs.writeFile(sourceDb + '-wal', Buffer.from('wal-data'))
+    await fs.writeFile(sourceDb + '-shm', Buffer.from('shm-data'))
+
+    const result = await cloneSqliteVectorStore(
+      sourcePath,
+      targetPath,
+      cacheBase,
+      { fs, logger: makeLogger() },
+    )
+
+    expect(result.status).toBe<SqliteVectorStoreCloneDetails['status']>('copied')
+    // 7 ('main-db') + 8 ('wal-data') + 8 ('shm-data') = 23
+    expect(result.bytesCopied).toBe(23)
+    expect((await fs.readFile(sqliteVectorStoreDbPath(targetPath, cacheBase) + '-wal')).toString()).toBe('wal-data')
+    expect((await fs.readFile(sqliteVectorStoreDbPath(targetPath, cacheBase) + '-shm')).toString()).toBe('shm-data')
+  })
+
+  it('skips when the target db already exists', async () => {
+    const sourceDb = sqliteVectorStoreDbPath(sourcePath, cacheBase)
+    const targetDb = sqliteVectorStoreDbPath(targetPath, cacheBase)
+    await fs.mkdir(path.dirname(sourceDb), { recursive: true })
+    await fs.mkdir(path.dirname(targetDb), { recursive: true })
+    await fs.writeFile(sourceDb, Buffer.from('source-data'))
+    await fs.writeFile(targetDb, Buffer.from('existing-data'))
+
+    const result = await cloneSqliteVectorStore(
+      sourcePath,
+      targetPath,
+      cacheBase,
+      { fs, logger: makeLogger() },
+    )
+
+    expect(result.status).toBe<SqliteVectorStoreCloneDetails['status']>('skipped_target_exists')
+    const targetContents = await fs.readFile(targetDb)
+    expect(targetContents.toString()).toBe('existing-data')
+  })
+
+  it('returns a failed status with an error message when copyFile throws', async () => {
+    const sourceDb = sqliteVectorStoreDbPath(sourcePath, cacheBase)
+    await fs.mkdir(path.dirname(sourceDb), { recursive: true })
+    await fs.writeFile(sourceDb, Buffer.from('source-data'))
+
+    // Inject a failing copyFile so the success path cannot run.
+    const fakeFs = {
+      ...fs,
+      copyFile: vi.fn(async () => {
+        throw new Error('disk full')
+      }),
+    }
+    const result = await cloneSqliteVectorStore(
+      sourcePath,
+      targetPath,
+      cacheBase,
+      { fs: fakeFs as any, logger: makeLogger() },
+    )
+
+    expect(result.status).toBe<SqliteVectorStoreCloneDetails['status']>('failed')
+    expect(result.error).toContain('disk full')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Backend-mismatch diagnostic helpers
+// ---------------------------------------------------------------------------
+
+describe('resolveTargetBackend', () => {
+  it('returns the explicit vectorStoreBackend value when set', () => {
+    const readConfig = () => JSON.stringify({ vectorStoreBackend: 'sqlite', qdrantUrl: 'http://x' })
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('sqlite')
+  })
+
+  it('returns qdrant when only qdrantUrl is configured (legacy fallback)', () => {
+    const readConfig = () => JSON.stringify({ qdrantUrl: 'http://localhost:6333' })
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('qdrant')
+  })
+
+  it('returns unknown when neither is set', () => {
+    const readConfig = () => JSON.stringify({ embedderProvider: 'openai' })
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('unknown')
+  })
+
+  it('returns unknown when the config file is missing', () => {
+    const readConfig = () => null
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('unknown')
+  })
+
+  it('returns unknown when the JSON is malformed', () => {
+    const readConfig = () => '{ this is not json'
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('unknown')
+  })
+
+  it('strips JSONC comments before parsing', () => {
+    const readConfig = () =>
+      '{\n  // comment with "qdrantUrl" string\n  "vectorStoreBackend": "qdrant",\n}'
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('qdrant')
+  })
+
+  it('propagates throws from the readConfig callback as unknown', () => {
+    const readConfig = () => {
+      throw new Error('disk error')
+    }
+    expect(resolveTargetBackend('/whatever', { readConfig })).toBe('unknown')
+  })
+})
+
+describe('observeSourceBackend', () => {
+  let tempRoot: string
+  let cacheBase: string
+
+  beforeEach(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'observe-backend-'))
+    cacheBase = path.join(tempRoot, 'autodev-cache')
+    await fs.mkdir(cacheBase, { recursive: true })
+  })
+
+  afterEach(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  })
+
+  it('returns sqlite when index.db exists for the source workspace', async () => {
+    const sourcePath = '/Users/x/source'
+    const dbDir = path.join(cacheBase, 'vector-store', collectionNameFor(sourcePath))
+    await fs.mkdir(dbDir, { recursive: true })
+    await fs.writeFile(path.join(dbDir, 'index.db'), Buffer.alloc(64))
+
+    const mock = createMockFetch(() => ({ status: 404 }))
+    const result = await observeSourceBackend(sourcePath, {
+      qdrant: { url: 'http://localhost:6333' },
+      cacheBasePath: cacheBase,
+      fetchImpl: mock.fetchImpl,
+    })
+    expect(result).toBe('sqlite')
+    // Qdrant should NOT have been probed once sqlite was found.
+    expect(mock.calls).toHaveLength(0)
+  })
+
+  it('returns qdrant when the source collection exists and no SQLite db', async () => {
+    const sourcePath = '/Users/x/source'
+    const mock = createMockFetch(() => ({ status: 200 }))
+    const result = await observeSourceBackend(sourcePath, {
+      qdrant: { url: 'http://localhost:6333' },
+      cacheBasePath: cacheBase,
+      fetchImpl: mock.fetchImpl,
+    })
+    expect(result).toBe('qdrant')
+    expect(mock.calls).toHaveLength(1)
+  })
+
+  it('returns none when neither backend has data', async () => {
+    const sourcePath = '/Users/x/source'
+    const mock = createMockFetch(() => ({ status: 404 }))
+    const result = await observeSourceBackend(sourcePath, {
+      qdrant: { url: 'http://localhost:6333' },
+      cacheBasePath: cacheBase,
+      fetchImpl: mock.fetchImpl,
+    })
+    expect(result).toBe('none')
+  })
+
+  it('returns qdrant even when SQLite sidecar (-wal) is missing', async () => {
+    // Defensive: an empty vector-store dir (no index.db) should fall
+    // through to the Qdrant probe and not be mis-reported as sqlite.
+    const sourcePath = '/Users/x/source'
+    const dbDir = path.join(cacheBase, 'vector-store', collectionNameFor(sourcePath))
+    await fs.mkdir(dbDir, { recursive: true })
+    // No index.db written.
+
+    const mock = createMockFetch(() => ({ status: 200 }))
+    const result = await observeSourceBackend(sourcePath, {
+      qdrant: { url: 'http://localhost:6333' },
+      cacheBasePath: cacheBase,
+      fetchImpl: mock.fetchImpl,
+    })
+    expect(result).toBe('qdrant')
+  })
+})
+
+describe('detectBackendMismatch', () => {
+  const ctx = { sourcePath: '/src', targetPath: '/tgt' }
+
+  it('does not report a mismatch when both backends match', () => {
+    expect(detectBackendMismatch('qdrant', 'qdrant', ctx).mismatch).toBe(false)
+    expect(detectBackendMismatch('sqlite', 'sqlite', ctx).mismatch).toBe(false)
+  })
+
+  it('reports a mismatch when source is qdrant but target is sqlite', () => {
+    const r = detectBackendMismatch('qdrant', 'sqlite', ctx)
+    expect(r.mismatch).toBe(true)
+    expect(r.reason).toContain('qdrant')
+    expect(r.reason).toContain('sqlite')
+  })
+
+  it('reports a mismatch when source is sqlite but target is qdrant', () => {
+    const r = detectBackendMismatch('sqlite', 'qdrant', ctx)
+    expect(r.mismatch).toBe(true)
+    expect(r.reason).toContain('sqlite')
+    expect(r.reason).toContain('qdrant')
+  })
+
+  it('does not report a mismatch when the source has no data on either backend', () => {
+    expect(detectBackendMismatch('none', 'sqlite', ctx).mismatch).toBe(false)
+    expect(detectBackendMismatch('none', 'qdrant', ctx).mismatch).toBe(false)
+  })
+
+  it('does not report a mismatch when the target backend cannot be determined', () => {
+    // Better to be silent than to mis-diagnose: unknown target means
+    // we have no information, so skip the warning entirely.
+    expect(detectBackendMismatch('qdrant', 'unknown', ctx).mismatch).toBe(false)
+    expect(detectBackendMismatch('sqlite', 'unknown', ctx).mismatch).toBe(false)
   })
 })

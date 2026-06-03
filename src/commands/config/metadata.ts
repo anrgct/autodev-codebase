@@ -110,6 +110,11 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   // Vector Store
   qdrantUrl: { type: 'string', description: 'Qdrant server URL' },
   qdrantApiKey: { type: 'string', description: 'Qdrant API key' },
+  vectorStoreBackend: {
+    type: 'enum',
+    enumValues: ['qdrant', 'sqlite'] as const,
+    description: 'Vector store backend. "sqlite" is the default (zero-config, embedded in ~/.autodev-cache/); "qdrant" requires a running Qdrant service.'
+  },
 
   // Vector Search
   vectorSearchMinScore: { type: 'number', minValue: 0, maxValue: 1, description: 'Minimum similarity score for search results' },
