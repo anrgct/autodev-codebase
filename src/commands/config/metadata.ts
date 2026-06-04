@@ -106,6 +106,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   },
   embedderLlmInstructionPrefix: { type: 'boolean', description: 'Enable instruction prefix for llamacpp-llm queries (may not help all models)' },
   embedderUseChatTemplate: { type: 'boolean', description: 'Wrap text in MiniCPM ChatML format (<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n) before embedding extraction. Uses the model with its instruct-tuned distribution.' },
+  embedderLateChunkingContextSize: { type: 'integer', minValue: 0, description: 'Late-chunking context window upper limit (tokens). 0 = auto (use model\'s actual context size). Smaller values speed up indexing at the cost of cross-chunk context.' },
 
   // Vector Store
   qdrantUrl: { type: 'string', description: 'Qdrant server URL' },

@@ -169,6 +169,12 @@ export interface CodeIndexConfig {
   // (<|im_start|>user\n{text}<|im_end|>\n<|im_start|>assistant\n) 再送入 getEmbeddingsForTokens，
   // 让模型在 instruct-tuned 的语义空间下提取 hidden states
 
+  // late-chunking 子批次切分的上下文窗口上限（token 数）。
+  // 设为 0/undefined = 自动适配模型的实际 context size。
+  // 手动调小可加快索引速度（代价：降低跨 chunk 上下文效果）。
+  embedderLateChunkingContextSize?: number
+
+  // Index only mode
   // Vector Store
   /**
    * Which vector store backend to use. Defaults to "sqlite" for new
@@ -277,6 +283,7 @@ export type PreviousConfigSnapshot = {
   embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
   embedderUseChatTemplate?: boolean
+  embedderLateChunkingContextSize?: number
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorStoreBackend?: 'qdrant' | 'sqlite'
@@ -389,6 +396,7 @@ export interface ConfigSnapshot {
   embedderQueryPoolingLayer?: "last" | number | string
   embedderLlmInstructionPrefix?: boolean
   embedderUseChatTemplate?: boolean
+  embedderLateChunkingContextSize?: number
   qdrantUrl?: string
   qdrantApiKey?: string
   vectorStoreBackend?: 'qdrant' | 'sqlite'

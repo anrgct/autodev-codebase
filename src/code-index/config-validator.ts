@@ -507,6 +507,19 @@ export class ConfigValidator {
       })
     }
 
+    // Validate embedderLateChunkingContextSize type
+    if (config.embedderLateChunkingContextSize !== undefined) {
+      if (typeof config.embedderLateChunkingContextSize !== "number" ||
+          config.embedderLateChunkingContextSize < 0 ||
+          !Number.isInteger(config.embedderLateChunkingContextSize)) {
+        issues.push({
+          path: 'embedderLateChunkingContextSize',
+          code: 'invalid_type',
+          message: `embedderLateChunkingContextSize must be a non-negative integer, got: ${config.embedderLateChunkingContextSize}`
+        })
+      }
+    }
+
     // Validate embedder batch sizes
     if (config.embedderOllamaBatchSize !== undefined && config.embedderOllamaBatchSize <= 0) {
       issues.push({

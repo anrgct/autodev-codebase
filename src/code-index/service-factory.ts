@@ -169,6 +169,7 @@ export class CodeIndexServiceFactory {
         config.embedderLlmInstructionPrefix,
         this._resolveIndexLayer(config),
         config.embedderUseChatTemplate,
+        config.embedderLateChunkingContextSize ?? 0,
       )
     }
 
@@ -232,6 +233,7 @@ export class CodeIndexServiceFactory {
       config.embedderLlmInstructionPrefix,
       this._resolveQueryLayer(config),
       config.embedderUseChatTemplate,
+      config.embedderLateChunkingContextSize ?? 0,
     )
   }
 

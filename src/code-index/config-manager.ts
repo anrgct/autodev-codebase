@@ -33,6 +33,7 @@ const REQUIRES_RESTART_KEYS: (keyof CodeIndexConfig)[] = [
   'embedderPoolingLayer',              // Pooling layer change requires model reload
   'embedderQueryPoolingLayer',         // Query pooling layer change requires model reload
   'embedderUseChatTemplate',           // Chat template change requires model reload
+  'embedderLateChunkingContextSize',    // Late-chunking context window change requires model reload
   'qdrantUrl',                          // Vector store location
   'qdrantApiKey',                       // Vector store authentication
   'vectorStoreBackend',                 // Switching backends requires re-initialisation
@@ -266,6 +267,7 @@ export class CodeIndexConfigManager {
       embedderQueryPoolingLayer: config.embedderQueryPoolingLayer,
       embedderLlmInstructionPrefix: config.embedderLlmInstructionPrefix,
       embedderUseChatTemplate: config.embedderUseChatTemplate,
+      embedderLateChunkingContextSize: config.embedderLateChunkingContextSize,
       rerankerMaxRetries: config.rerankerMaxRetries,
       rerankerRetryDelayMs: config.rerankerRetryDelayMs,
       rerankerLlamaCppServer: config.rerankerLlamaCppServer,
@@ -407,6 +409,10 @@ export class CodeIndexConfigManager {
     }
 
     if ((prev?.embedderUseChatTemplate ?? false) !== (this.config.embedderUseChatTemplate ?? false)) {
+      return true
+    }
+
+    if ((prev?.embedderLateChunkingContextSize ?? 0) !== (this.config.embedderLateChunkingContextSize ?? 0)) {
       return true
     }
 

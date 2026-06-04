@@ -48,6 +48,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
    */
   private _contextSize: number = 0  // model.trainContextSize, from GGUF metadata
   private _embeddingContextSize: number = 0  // actual context size allocated in the embedding context
+  private readonly _lateChunkingContextSize: number  // 0 = auto (use actual context size)
 
   constructor(
     modelPath: string,
@@ -58,6 +59,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     enableLlmPrefix?: boolean,
     poolingLayer?: "last" | number | string,
     useChatTemplate?: boolean,
+    lateChunkingContextSize?: number,
   ) {
     this.modelPath = modelPath
     this.gpuLayers = gpuLayers
@@ -66,6 +68,7 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
     this._rawPoolingLayer = poolingLayer ?? "last"
     this._enableLlmPrefix = enableLlmPrefix ?? false
     this._useChatTemplate = useChatTemplate ?? false
+    this._lateChunkingContextSize = lateChunkingContextSize ?? 0
     this.logger = logger
   }
 
@@ -151,9 +154,14 @@ export class LlamaCppLlmEmbedder implements IEmbedder {
       )
       // 读取实际分配到的 context size（库自动按显存适配）
       this._embeddingContextSize = (this._embeddingContexts[0] as any)?._llamaContext?.contextSize ?? this._contextSize
+      // 如果配置了 lateChunkingContextSize > 0，覆盖实际分配值以控制子批次切分上限
+      if (this._lateChunkingContextSize > 0) {
+        this._embeddingContextSize = this._lateChunkingContextSize
+      }
       this.logger?.info(
         `[LlamaCppLlmEmbedder] Created ${this.concurrency} embedding context(s) for pool, layer=${embdLayer}` +
-        ` (ctx=${this._embeddingContextSize}, batchSize=${batchSize})`,
+        ` (ctx=${this._embeddingContextSize}, batchSize=${batchSize})` +
+        (this._lateChunkingContextSize > 0 ? `, context size=${this._lateChunkingContextSize}` : ''),
       )
       this.logger?.info(
         `[LlamaCppLlmEmbedder] Model loaded`
