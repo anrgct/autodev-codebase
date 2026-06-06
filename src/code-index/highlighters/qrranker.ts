@@ -990,7 +990,7 @@ export class QRRankerHighlighter implements IHighlighter {
     // First set query range to the prefill range so cbEval has a valid
     // initial slice (this row data is unused; we only read decode positions).
     context.setKqSoftMaxQueryRange(queryStart, queryEnd);
-    const gen = sequence.evaluate(tokens, { temperature: 0 });
+    const gen = sequence.evaluate(tokens, { temperature: 0.6 });
 
     // iter 1: prefill + sample token_1
     const first = await gen.next();

@@ -368,7 +368,7 @@ export class QRRankerReranker implements IReranker {
     // initial slice (the prefill row data is unused; only decode positions
     // are read below). This keeps C++ state consistent.
     context.setKqSoftMaxQueryRange(queryStart, queryEnd);
-    const gen = sequence.evaluate(tokens, { temperature: 0 });
+    const gen = sequence.evaluate(tokens, { temperature: 0.6 });
 
     // iter 1: prefill + sample token_1
     const first = await gen.next();

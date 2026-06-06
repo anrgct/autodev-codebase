@@ -132,6 +132,8 @@ module.exports = [
       intro: `
 import { fileURLToPath as __fileURLToPath__ } from 'url';
 import { dirname as __dirname__ } from 'path';
+const __filename = __fileURLToPath__(import.meta.url);
+const __dirname = __dirname__(__filename);
 const __getScriptDir__ = () => __dirname__(__fileURLToPath__(import.meta.url));
 `.trim(),
     },
@@ -144,10 +146,11 @@ const __getScriptDir__ = () => __dirname__(__fileURLToPath__(import.meta.url));
       if (['fs', 'path', 'child_process', 'readline', 'crypto', 'os', 'stream', 'util'].includes(id)) {
         return true;
       }
-      // Externalize @realtimex/node-llama-cpp (native addon - must NOT be bundled)
+      // Externalize native addons (must NOT be bundled)
       if (id === 'node-llama-cpp' || id.startsWith('node-llama-cpp/') ||
           id === '@realtimex/node-llama-cpp' || id.startsWith('@realtimex/node-llama-cpp/') ||
-          id.startsWith('@node-llama-cpp/')) {
+          id.startsWith('@node-llama-cpp/') ||
+          id === 'better-sqlite3' || id === 'sqlite-vec') {
         return true;
       }
       // Bundle everything else (including web-tree-sitter, fzf, tslib, etc.)
@@ -186,6 +189,8 @@ const __getScriptDir__ = () => __dirname__(__fileURLToPath__(import.meta.url));
       intro: `
 import { fileURLToPath as __fileURLToPath__ } from 'url';
 import { dirname as __dirname__ } from 'path';
+const __filename = __fileURLToPath__(import.meta.url);
+const __dirname = __dirname__(__filename);
 const __getScriptDir__ = () => __dirname__(__fileURLToPath__(import.meta.url));
 `.trim(),
     },
@@ -198,10 +203,11 @@ const __getScriptDir__ = () => __dirname__(__fileURLToPath__(import.meta.url));
       if (['fs', 'path', 'child_process', 'readline', 'crypto', 'os', 'stream', 'util'].includes(id)) {
         return true;
       }
-      // Externalize @realtimex/node-llama-cpp (native addon - must NOT be bundled)
+      // Externalize native addons (must NOT be bundled)
       if (id === 'node-llama-cpp' || id.startsWith('node-llama-cpp/') ||
           id === '@realtimex/node-llama-cpp' || id.startsWith('@realtimex/node-llama-cpp/') ||
-          id.startsWith('@node-llama-cpp/')) {
+          id.startsWith('@node-llama-cpp/') ||
+          id === 'better-sqlite3' || id === 'sqlite-vec') {
         return true;
       }
       // Bundle everything else (including web-tree-sitter, fzf, tslib, etc.)

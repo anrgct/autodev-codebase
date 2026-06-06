@@ -72,6 +72,12 @@ export function getLogger(): Logger {
  */
 export function resolveWorkspacePath(inputPath: string, demo: boolean): string {
   let resolvedPath = inputPath || '.';
+
+  // Expand tilde (~) to home directory
+  if (resolvedPath.startsWith('~')) {
+    resolvedPath = path.join(os.homedir(), resolvedPath.slice(1));
+  }
+
   if (!path.isAbsolute(resolvedPath)) {
     resolvedPath = path.join(process.cwd(), resolvedPath);
   }
