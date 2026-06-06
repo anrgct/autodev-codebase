@@ -30,7 +30,7 @@ embdLayer=7: tokens=12, valid=12, distinct=true
 tokens=36323, nan=3555, zero=32768, valid=0
 ```
 
-复现脚本：`scripts/evidence/260530-per-token-zero-repro.ts`
+复现脚本：`scripts/evidence/260530-nan-zero-end-to-end.ts`（阶段 1）
 
 ## 归因分析
 

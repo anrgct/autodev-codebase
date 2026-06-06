@@ -29,10 +29,12 @@ describe("parseSourceCodeDefinitionsForFile with Swift", () => {
   let parsedResult: string | undefined
 
   // Run once before all tests to parse the Swift code
+  // tree-sitter-swift query compilation is slow under web-tree-sitter 0.23 + Node 24 (~17s),
+  // so we override the default 15s hookTimeout for this suite.
   beforeAll(async () => {
     // Parse Swift code once and store the result
     parsedResult = await testParseSourceCodeDefinitions("/test/file.swift", sampleSwiftContent, testOptions)
-  })
+  }, 60_000)
 
   beforeEach(() => {
     vi.clearAllMocks()

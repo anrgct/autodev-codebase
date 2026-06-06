@@ -370,7 +370,7 @@ export class LlamaCppReranker implements IReranker {
    * Clean up resources. Stops the server process if running.
    * Call this when the reranker is no longer needed.
    */
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this._serverProcess) {
       // Remove process-level listeners to avoid leaks
       const cleanup = (this._serverProcess as any)._cleanup

@@ -68,7 +68,7 @@ embdLayer=7: tokens=12, valid=12, distinct=true, ref[0..6]=[6.502e-1, 6.507e+0, 
 [2026-05-30T14:44:36.515Z] Per-token uniqueness check: nTokens=38610, NaN count=1869440, zero count=10485760
 ```
 
-脚本：`scripts/evidence/260530-per-token-zero-repro.ts`
+脚本：`scripts/evidence/260530-nan-zero-end-to-end.ts`（阶段 1）
 
 ## 归因分析
 

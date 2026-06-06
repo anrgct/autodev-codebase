@@ -61,22 +61,22 @@ declare global {
   /**
    * Hook that runs before each test in the current describe block
    */
-  const beforeEach: <T = void>(fn: () => T | Promise<T>) => void
+  const beforeEach: <T = void>(fn: () => T | Promise<T>, timeout?: number) => void
 
   /**
    * Hook that runs after each test in the current describe block
    */
-  const afterEach: <T = void>(fn: () => T | Promise<T>) => void
+  const afterEach: <T = void>(fn: () => T | Promise<T>, timeout?: number) => void
 
   /**
    * Hook that runs once before all tests in the current describe block
    */
-  const beforeAll: <T = void>(fn: () => T | Promise<T>) => void
+  const beforeAll: <T = void>(fn: () => T | Promise<T>, timeout?: number) => void
 
   /**
    * Hook that runs once after all tests in the current describe block
    */
-  const afterAll: <T = void>(fn: () => T | Promise<T>) => void
+  const afterAll: <T = void>(fn: () => T | Promise<T>, timeout?: number) => void
 
   /**
    * Jest compatibility global object

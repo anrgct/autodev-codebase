@@ -146,7 +146,7 @@ P12 把 8192 个 zero 变成了 NaN，暴露了 GPU 的真实输出。
 
 #### 精确边界测试
 
-- `260601-nan-boundary-test.ts`：按 batch 分析 NaN 分布
+- 阶段 3：按 batch 分析 NaN 分布（target=25000t）
 - 发现边界在 batch 4 的 ~7000 tokens 处
 - 第 4 批 1055→6995 tokens ✅，7039+ tokens ❌
 
@@ -165,7 +165,7 @@ P12 把 8192 个 zero 变成了 NaN，暴露了 GPU 的真实输出。
 
 #### batchSize 安全值测试
 
-- `260601-nan-bs-test.ts`：batchSize=8192/6500/5500/4500
+- 阶段 4：batchSize=8192/6500/5500/4500
 - 5500 及以下完全干净
 
 #### 部署修复
@@ -196,7 +196,4 @@ P12 把 8192 个 zero 变成了 NaN，暴露了 GPU 的真实输出。
 
 | 脚本 | 作用 |
 |------|------|
-| `scripts/evidence/260530-per-token-zero-repro.ts` | 原始复现脚本 |
-| `scripts/evidence/260601-nan-boundary-test.ts` | 按 batch 分析 NaN 分布 |
-| `scripts/evidence/260601-nan-bs-test.ts` | 不同 batchSize 对比测试 |
-| `scripts/evidence/260601-nan-cpu-test.ts` | CPU-only 验证 |
+| `scripts/evidence/260530-nan-zero-end-to-end.ts` | 端到端诊断（5 阶段串行） |
