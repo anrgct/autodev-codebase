@@ -1,8 +1,12 @@
 // Build patched llama-addon.node from source.
 //
 // Two-pass compilation:
-//   Pass 1: getLlama() → download llama.cpp + cmake compile
-//   Pass 2: if llama.h lacks patch markers, patch source + cmake --build
+//   Pass 1: getLlama() → download llama.cpp + cmake compile (original sources)
+//   Pass 2: overwrite with patched source files from vendor/llama-cpp-patches/
+//           → copy patched AddonContext → cmake --build (incremental)
+//
+// C++ patches are stored as full files in vendor/llama-cpp-patches/
+// (same strategy as vendor/node-llama-cpp/dist/ for JS/DTS layer).
 //
 // Usage: node vendor/llama-addon/build.mjs
 //   or:  npm run build:llamacpp
@@ -10,6 +14,7 @@
 import { execSync } from "node:child_process";
 import {
     copyFileSync,
+    cpSync,
     existsSync,
     mkdirSync,
     readFileSync,
@@ -29,6 +34,7 @@ const PROJECT_ROOT = resolve(__dirname, "../..");
 const LLAMA_DIR = join(PROJECT_ROOT, "node_modules/@realtimex/node-llama-cpp/llama");
 const ADDON_SRC_DIR = join(LLAMA_DIR, "addon");
 const LLAMA_CPP_DIR = join(LLAMA_DIR, "llama.cpp");
+const LLAMA_CPP_PATCHES_DIR = join(PROJECT_ROOT, "vendor/llama-cpp-patches");
 const PREBUILT_DIR = join(PROJECT_ROOT, "node_modules/@realtimex");
 const PLATFORM_PKG_PREFIX = "node-llama-cpp-";
 
@@ -118,95 +124,27 @@ async function pass1_downloadAndCompile() {
     });
 }
 
-// ---- Pass 2: patch + rebuild ----
+// ---- Pass 2: overwrite llama.cpp source with patched files ----
 
-function pass2_patchAndRebuild(tag) {
+function pass2_applyPatches() {
+    if (!existsSync(LLAMA_CPP_PATCHES_DIR)) {
+        log("Pass 2: vendor/llama-cpp-patches/ not found, skipping");
+        return;
+    }
+
     const llamaHeader = join(LLAMA_CPP_DIR, "include", "llama.h");
-
     if (!existsSync(llamaHeader)) {
         log("Pass 2: llama.cpp source not found, skipping");
         return;
     }
 
-    log("Pass 2: checking and patching headers...");
+    log("Pass 2: applying patched source files ...");
+    log(`  source: ${LLAMA_CPP_PATCHES_DIR}`);
+    log(`  target: ${LLAMA_CPP_DIR}`);
+    cpSync(LLAMA_CPP_PATCHES_DIR, LLAMA_CPP_DIR, { recursive: true, force: true });
+    log("Pass 2: patched source files applied.");
 
-    // Patch 1: llama.h — add embd_layer to llama_context_params
-    patchFile(
-        join(LLAMA_CPP_DIR, "include", "llama.h"),
-        "bool embeddings;  // if true, extract embeddings",
-        "bool embeddings;  // if true, extract embeddings\n        int32_t embd_layer;  // -1 = last layer, 0..n_layer-1 = target layer",
-    );
-
-    // Patch 2: llama-cparams.h — add embd_layer to llama_cparams
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-cparams.h"),
-        "bool embeddings;",
-        "bool embeddings;\n    int32_t embd_layer = -1;",
-    );
-
-    // Patch 3: llama-context.cpp — copy embd_layer in constructor
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "    cparams.embeddings                  = params.embeddings;",
-        "    cparams.embeddings                  = params.embeddings;\n    cparams.embd_layer                  = params.embd_layer;",
-    );
-
-    // Patch 4: llama-context.cpp — add embd_layer to default params
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "/*.embeddings                  =*/ false,",
-        "/*.embeddings                  =*/ false,\n        /*.embd_layer                  =*/ -1,",
-    );
-
-    // Patch 5: llama.h — add llama_get_embeddings_raw() declaration (for per-token accum buffer)
-    patchFile(
-        join(LLAMA_CPP_DIR, "include", "llama.h"),
-        "LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);",
-        "LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);\n\n    // Get the raw embeddings buffer (all token rows in batch order, without output_reorder).\n    // When pooling_type is NONE and the decode() patch extracts all token rows,\n    // this buffer contains n_tokens * n_embd floats in batch position order.\n    LLAMA_API float * llama_get_embeddings_raw(struct llama_context * ctx);",
-    );
-
-    // Patch 6: llama-context.cpp — output_reserve: size embd for n_batch when pooling_type is NONE
-    // (needed because the decode() patch below extracts ALL token rows, not just logits-enabled ones)
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "embd.size          = has_embd          ? n_embd_out*n_outputs_max  : 0;",
-        "embd.size          = has_embd          ? (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE ? n_embd_out*n_batch : n_embd_out*n_outputs_max) : 0;",
-    );
-
-    // Patch 7: llama-context.cpp — decode(): extract ALL token rows for NONE pooling
-    // (uses n_tokens_prev/ubatch.n_tokens instead of n_outputs_prev/n_outputs)
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "case LLAMA_POOLING_TYPE_NONE:\n                    {\n                        // extract token embeddings\n                        GGML_ASSERT(embd.data != nullptr);\n                        const uint32_t n_embd_out = hparams.n_embd_out();\n                        float * embd_out = embd.data + n_outputs_prev*n_embd_out;\n\n                        if (n_outputs) {\n                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);\n                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd_out <= (int64_t) embd.size);\n                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd_out*sizeof(float));\n                        }\n                    } break;",
-        "case LLAMA_POOLING_TYPE_NONE:\n                    {\n                        // extract token embeddings for ALL tokens (not just logits-enabled ones).\n                        // uses n_tokens_prev / ubatch.n_tokens instead of n_outputs_prev / n_outputs.\n                        // see docs/plans/260530-late-chunking-batch-split.md\n                        GGML_ASSERT(embd.data != nullptr);\n                        const uint32_t n_embd_out = hparams.n_embd_out();\n                        float * embd_out = embd.data + n_tokens_prev*n_embd_out;\n\n                        if (ubatch.n_tokens) {\n                            GGML_ASSERT( n_tokens_prev + ubatch.n_tokens <= cparams.n_batch);\n                            GGML_ASSERT((n_tokens_prev + ubatch.n_tokens)*n_embd_out <= (int64_t) embd.size);\n                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, ubatch.n_tokens*n_embd_out*sizeof(float));\n                        }\n                    } break;",
-    );
-
-    // Patch 8: llama-context.cpp — add llama_get_embeddings_raw() implementation
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "float * llama_get_embeddings_ith(llama_context * ctx, int32_t i) {\n    ctx->synchronize();\n\n    return ctx->get_embeddings_ith(i);\n}",
-        "float * llama_get_embeddings_ith(llama_context * ctx, int32_t i) {\n    ctx->synchronize();\n\n    return ctx->get_embeddings_ith(i);\n}\n\nfloat * llama_get_embeddings_raw(llama_context * ctx) {\n    return ctx->get_embeddings_data();\n}",
-    );
-
-    // Patch 9: llama-context.h — add get_embeddings_data() to llama_context
-    // (returns embd.data without calling output_reorder, needed for raw buffer access)
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.h"),
-        "float * get_embeddings();\n    float * get_embeddings_ith(int32_t i);",
-        "float * get_embeddings();\n    float * get_embeddings_data();  // raw embd.data (no output_reorder)\n    float * get_embeddings_ith(int32_t i);",
-    );
-
-    // Patch 10: llama-context.cpp — implement get_embeddings_data()
-    patchFile(
-        join(LLAMA_CPP_DIR, "src", "llama-context.cpp"),
-        "float * llama_context::get_embeddings() {\n    output_reorder();\n\n    return embd.data;\n}",
-        "float * llama_context::get_embeddings() {\n    output_reorder();\n\n    return embd.data;\n}\n\nfloat * llama_context::get_embeddings_data() {\n    return embd.data;\n}",
-    );
-
-    log("Headers patched.");
-
-    // Patch 5: model files — external script (adds mid-layer embd extraction)
-    // Check if model files already have embd_layer support (from previous run)
+    // Model files — external script (adds mid-layer embd extraction)
     const checkModelFile = join(LLAMA_CPP_DIR, "src", "models", "gemma.cpp");
     const modelAlreadyPatched = existsSync(checkModelFile)
         ? readFileSync(checkModelFile, "utf8").includes("embd_layer")
@@ -236,25 +174,6 @@ function pass2_patchAndRebuild(tag) {
     }
 
     log("Pass 2 complete.");
-}
-
-// Inline file patching: replace first occurrence of oldText with newText
-function patchFile(filePath, oldText, newText) {
-    if (!existsSync(filePath)) {
-        log("  skip: " + filePath + " not found");
-        return;
-    }
-    let c = readFileSync(filePath, "utf8");
-    if (c.includes(newText)) {
-        return; // already patched or natively supported
-    }
-    if (!c.includes(oldText)) {
-        log("  WARNING: pattern not found in " + filePath + " — upstream may have changed");
-        return;
-    }
-    c = c.replace(oldText, newText);
-    writeFileSync(filePath, c);
-    log("  patched: " + filePath);
 }
 
 // ---- Collect artifacts ----
@@ -307,9 +226,10 @@ function collectDylibs(binaryPath, outputDir) {
 
 // ---- Main ----
 // Build order matters: our patched AddonContext references fields (like embd_layer)
-// that only exist in llama.h AFTER we patch it. So:
-//   Pass 1: getLlama downloads + compiles with original AddonContext (from npm install)
-//   Pass 2: patch llama.h + models, then copy patched AddonContext, then rebuild
+// that only exist in llama.h AFTER we overwrite with patched sources. So:
+//   Pass 1: getLlama downloads + compiles with ORIGINAL AddonContext (from npm install)
+//   Pass 2: overwrite sources with vendor/llama-cpp-patches/ + model script
+//           → copy patched AddonContext → cmake --build (incremental)
 
 async function main() {
     const tag = detectPlatformTag();
@@ -333,8 +253,8 @@ async function main() {
     // Pass 1: download + compile (uses ORIGINAL AddonContext from npm install)
     await pass1_downloadAndCompile();
 
-    // Pass 2: patch llama.h + model files if needed
-    pass2_patchAndRebuild(tag);
+    // Pass 2: overwrite llama.cpp source with patched files + model script
+    pass2_applyPatches();
 
     // Now copy our patched AddonContext (llama.h now has embd_layer from Pass 2)
     log("Copying patched C++ files to node_modules...");

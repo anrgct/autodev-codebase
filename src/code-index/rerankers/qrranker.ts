@@ -382,7 +382,7 @@ export class QRRankerReranker implements IReranker {
 
     // Collect per-position attention, then average.
     const scoreStack: Float32Array[] = [];
-    let lastSampled: Token | undefined;
+    const generatedTokens: Token[] = [first.value]; // include the first sampled token
     for (let i = 0; i < N; i++) {
       const decodePos = promptLength + i;
       context.setKqSoftMaxQueryRange(decodePos, decodePos + 1);
@@ -397,13 +397,13 @@ export class QRRankerReranker implements IReranker {
       // the single query token at decodePos. nQueryTokens will be 1.
       const stepScores = this._extractPerKvScoresFromKq(context, decodePos, decodePos + 1);
       scoreStack.push(stepScores);
-      lastSampled = step.value;
+      generatedTokens.push(step.value);
     }
 
-    const lastText = lastSampled ? model.detokenize([lastSampled]).slice(0, 40) : "(none)";
-    this.logger?.debug(
-      `[QRRanker] Decode-stage attention collected: ` +
-      `${scoreStack.length}/${N} positions, last sampled="${lastText}"`,
+    // Log the full generated text (推理输出)
+    const fullText = model.detokenize(generatedTokens);
+    this.logger?.info(
+      `[QRRanker] Decode-stage inference output (${generatedTokens.length} tokens, ${scoreStack.length}/${N} positions):\n${fullText}`,
     );
 
     if (scoreStack.length === 0) {

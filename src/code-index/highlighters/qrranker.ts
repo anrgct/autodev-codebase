@@ -1005,7 +1005,7 @@ export class QRRankerHighlighter implements IHighlighter {
     // Collect attention from decode positions for token_1 ... token_N.
     // iter k (k=2..N+1) decodes token_{k-1} at position promptLength + k - 2.
     const scoreStack: Float32Array[] = [];
-    let lastSampled: Token | undefined;
+    const generatedTokens: Token[] = [first.value]; // include the first sampled token
     for (let i = 0; i < N; i++) {
       const decodePos = promptLength + i;
       context.setKqSoftMaxQueryRange(decodePos, decodePos + 1);
@@ -1020,13 +1020,13 @@ export class QRRankerHighlighter implements IHighlighter {
       // the single query token at decodePos. nQueryTokens will be 1.
       const stepScores = this.computePerTokenScores(context, decodePos, decodePos + 1);
       scoreStack.push(stepScores);
-      lastSampled = step.value;
+      generatedTokens.push(step.value);
     }
 
-    const lastText = lastSampled ? model.detokenize([lastSampled]).slice(0, 40) : "(none)";
-    this.logger?.debug(
-      `[QRRankerHighlighter] Decode-stage attention collected: ` +
-      `${scoreStack.length}/${N} positions, last sampled="${lastText}"`,
+    // Log the full generated text (推理输出)
+    const fullText = model.detokenize(generatedTokens);
+    this.logger?.info(
+      `[QRRankerHighlighter] Decode-stage inference output (${generatedTokens.length} tokens, ${scoreStack.length}/${N} positions):\n${fullText}`,
     );
 
     if (scoreStack.length === 0) {

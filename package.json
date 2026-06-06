@@ -22,7 +22,7 @@
     "test:e2e": "npx vitest --config vitest.e2e.config.ts",
     "test:coverage": "vitest run --coverage",
     "push": "npm publish --access public",
-    "postinstall": "npx tsx scripts/deploy-llamacpp-patch.ts"
+    "postinstall": "npm run build && npx tsx scripts/deploy-llamacpp-patch.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.13.1",
