@@ -247,6 +247,16 @@ export interface CodeIndexConfig {
   escalatePort?: number
   escalateHost?: string
   escalateStickyProTtlMs?: number
+
+  // QRRanker shared tuning: number of decode steps to average attention over.
+  // 0 = default (prefill-only, PURE_SYMBOL_LINE_PENALTY=0.01 cleans up symbol lines).
+  //     Safe default, no decode cost.
+  // 20+: prefill + N greedy decode steps, average their per-position kq_soft_max.
+  //      Better semantic focus, ~2.2x cost at N=20. See
+  //      docs/plans/260604-qrranker-highlight-penalty.md.
+  // Applied to both the highlighter (when provider=qrranker) and the reranker
+  // (when provider=qrranker). Use the same value for both.
+  qrrankerDecodeSteps?: number
 }
 
 /**
@@ -343,6 +353,7 @@ export type PreviousConfigSnapshot = {
   escalateProModel?: string
   escalatePort?: number
   escalateHost?: string
+  qrrankerDecodeSteps?: number
 }
 
 /**
@@ -454,4 +465,5 @@ export interface ConfigSnapshot {
   escalateProModel?: string
   escalatePort?: number
   escalateHost?: string
+  qrrankerDecodeSteps?: number
 }

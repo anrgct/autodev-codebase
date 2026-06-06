@@ -64,6 +64,7 @@ const HOT_RELOADABLE_KEYS: (keyof CodeIndexConfig)[] = [
   'highlighterMode',                    // Highlighter selection mode
   'highlighterThreshold',               // Highlighter threshold
   'highlighterConcurrency',             // Highlighter concurrency
+  'qrrankerDecodeSteps',                // QRRanker decode-stage attention steps (shared by highlighter & reranker)
   'embedderConcurrency',                // Embedder concurrency
   'summarizerProvider',                 // Summarizer provider
   'summarizerOllamaBaseUrl',            // Summarizer Ollama URL
@@ -295,6 +296,7 @@ export class CodeIndexConfigManager {
       highlighterMode: config.highlighterMode,
       highlighterThreshold: config.highlighterThreshold,
       highlighterConcurrency: config.highlighterConcurrency,
+      qrrankerDecodeSteps: config.qrrankerDecodeSteps,
     }
   }
 

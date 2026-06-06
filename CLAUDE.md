@@ -176,3 +176,4 @@ codebase config --set key=value --global        # 设置全局配置
 - 测试脚本写在scripts/evidence目录，用YYMMDD-开头的文件名命名
 - 重命名文件时使用git mv命令
 - --log-level=debug可以输出调试日志
+- `npm run dev -- xxx --json` 在 stdout 开头打印两行 npm preamble（`> @autodev/...`），会破坏 JSON 输出，无法直接 `| jq`。解决方法：用 `npx tsx src/cli.ts xxx --json 2>/dev/null | jq` 替代，或保存到文件后跳过前两行

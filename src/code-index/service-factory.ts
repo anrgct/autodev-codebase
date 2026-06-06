@@ -539,6 +539,8 @@ export class CodeIndexServiceFactory {
         this.warn("Reranker is enabled with qrranker provider but rerankerGgufQrrankerPath is not configured")
         return undefined
       }
+      // Resolve shared qrrankerDecodeSteps from the root CodeIndexConfig.
+      const decodeSteps = this.configManager.getConfig()?.qrrankerDecodeSteps ?? 0
       return new QRRankerReranker(
         qrrankerPath,
         this.logger,
@@ -546,6 +548,7 @@ export class CodeIndexServiceFactory {
         config.concurrency || 2,
         config.maxRetries || 2,
         config.retryDelayMs || 1000,
+        decodeSteps,
       )
     }
 
@@ -705,6 +708,8 @@ export class CodeIndexServiceFactory {
         this.warn("Highlighter is enabled with qrranker provider but highlighterGgufQrrankerPath is not configured")
         return undefined
       }
+      // Resolve shared qrrankerDecodeSteps from the root CodeIndexConfig.
+      const decodeSteps = this.configManager.getConfig()?.qrrankerDecodeSteps ?? 0
       // Model is loaded lazily on first highlight() call (independent of reranker)
       return new QRRankerHighlighter(
         config.ggufQrrankerPath,
@@ -712,6 +717,7 @@ export class CodeIndexServiceFactory {
         this.logger,
         config.mode ?? "topk",
         config.threshold ?? 0.5,
+        decodeSteps,
       )
     }
 

@@ -199,6 +199,11 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   escalatePort: { type: 'integer', minValue: 1, maxValue: 65535, description: 'Local proxy server listening port (default: 8080)' },
   escalateHost: { type: 'string', description: 'Local proxy server listening host (default: localhost)' },
   escalateStickyProTtlMs: { type: 'integer', minValue: 0, description: 'Sticky pro TTL in milliseconds (default: 300000 = 5 min). Set 0 to disable.' },
+
+  // QRRanker shared tuning: average attention over N decode steps.
+  // 0 = default (prefill-only, no decode cost). 20+ = prefill + N decode.
+  // See docs/plans/260604-qrranker-highlight-penalty.md.
+  qrrankerDecodeSteps: { type: 'integer', minValue: 0, description: 'QRRanker decode steps for attention averaging (0=prefill-only default, 20+=decode-stage, ~2.2x cost at N=20). Shared by highlighter & reranker.' }
 }
 
 /**

@@ -45,6 +45,7 @@ export class QRRankerReranker implements IReranker {
   private readonly concurrency: number;
   private readonly maxRetries: number;
   private readonly retryDelayMs: number;
+  private readonly decodeSteps: number;
   private _model: LlamaModel | null = null;
   private _loadingPromise: Promise<LlamaModel> | null = null;
   private _contexts: LlamaContext[] = [];
@@ -57,6 +58,7 @@ export class QRRankerReranker implements IReranker {
     concurrency: number = 1,
     maxRetries: number = 2,
     retryDelayMs: number = 1000,
+    decodeSteps: number = 0,
   ) {
     this.modelPath = modelPath;
     this.logger = logger;
@@ -64,6 +66,7 @@ export class QRRankerReranker implements IReranker {
     this.concurrency = concurrency;
     this.maxRetries = maxRetries;
     this.retryDelayMs = retryDelayMs;
+    this.decodeSteps = Math.max(0, Math.floor(decodeSteps));
   }
 
   // ─── Model Loading ──────────────────────────────────────────────────
@@ -144,6 +147,13 @@ export class QRRankerReranker implements IReranker {
 
   /**
    * Build the QRRanker input prompt in the same format as the Python/C++ demo.
+   *
+   * The trailing chatml tokens (`<|im_end|>\n<|im_start|>assistant\n` + an
+   * empty `<think>` block) are required for the model to leave user mode and
+   * enter assistant mode. Without them the model keeps generating as the
+   * user, which makes the QR attention reflect "rewriting the query" rather
+   * than "drafting the answer". Verified in the decode-stage experiment:
+   * docs/plans/260605-decode-attention-comparison.md.
    */
   private buildPrompt(query: string, candidates: RerankerCandidate[]): string {
     let prompt = "<|im_start|>user\nHere are some retrieved chunks:\n\n";
@@ -152,7 +162,11 @@ export class QRRankerReranker implements IReranker {
       prompt += this.chunkText(candidates[i], i);
     }
 
-    prompt += `Use the retrieved chunks to answer the user's query.\n\nQuery: ${query}`;
+    prompt +=
+      `Use the retrieved chunks to answer the user's query.\n\nQuery: ${query}` +
+      "<|im_end|>\n" +
+      "<|im_start|>assistant\n" +
+      "<think>\n\n</think>\n\n";
     return prompt;
   }
 
@@ -207,40 +221,26 @@ export class QRRankerReranker implements IReranker {
   // ─── QR Score Computation ───────────────────────────────────────────
 
   /**
-   * Compute QR relevance scores from collected kq_soft_max attention data.
+   * Aggregate QR-head attention from the current kq_soft_max state into a
+   * single per-KV-position score vector. Each position is the mean attention
+   * received across all valid QR heads × query rows in the slice.
    *
-   * kq_soft_max tensor layout (row-major):
-   *   ne[0] = n_kv    (KV cache dimension)
-   *   ne[1] = n_tokens (query tokens dimension)
-   *   ne[2] = n_head   (attention heads dimension)
-   *   ne[3] = 1
-   *
-   * Element access: data[head * n_tokens * n_kv + tok * n_kv + kv]
-   *
-   * C++ cbEval stores only query token rows, so n_tokens is nQueryTokens
-   * even when llama.cpp splits long inputs into multiple micro-batches.
-   *
-   * @returns { chunkScores, perChunkTokenScores }
-   *   chunkScores: aggregate score per chunk
-   *   perChunkTokenScores: per-KV-token scores for each chunk's token range
+   * Used by both prefill (one call after evaluate) and decode (one call per
+   * decode step, then averaged). Callers must have set the kq_soft_max query
+   * range and run the appropriate evaluate/decode step beforehand.
    */
-  private computeQRScores(
+  private _extractPerKvScoresFromKq(
     context: LlamaContext,
-    chunkRanges: Array<{ start: number; end: number }>,
     queryStart: number,
     queryEnd: number,
-  ): { chunkScores: number[]; perChunkTokenScores: Float32Array[] } {
+  ): Float32Array {
     const shape = context.getKqSoftMaxShape();
     const nKv = shape.nKv;
     const nTokens = shape.nTokens;
     const nHead = shape.nHead;
-    const nChunks = chunkRanges.length;
     const nQueryTokens = queryEnd - queryStart;
 
-    this.logger?.debug(
-      `[QRRanker] kq_soft_max shape: nKv=${nKv}, nTokens=${nTokens}, nHead=${nHead}, ` +
-      `nLayers=${shape.nLayers}, layers=[${shape.layers.join(",")}]`,
-    );
+    const kqShapeInfo = `nKv=${nKv}, nTokens=${nTokens}, nHead=${nHead}, nLayers=${shape.nLayers}, layers=[${shape.layers.join(",")}]`;
 
     // Per-KV-position scores aggregated across all QR heads
     const perKvScores = new Float32Array(nKv);
@@ -250,6 +250,9 @@ export class QRRankerReranker implements IReranker {
     const QR_SOURCE_NHEAD = 32;
 
     const mappedHeads: string[] = [];
+    // Accumulate missing layer counts so we can emit a single summary log
+    // instead of one line per skipped head.
+    const missingLayerCounts = new Map<number, number>();
     // totalLayers includes the output layer (+1). Subtract 1 to get actual transformer
     // block count for proportional layer mapping.
     // See docs/plans/260601-qrranker-dynamic-layer-range.md
@@ -266,7 +269,7 @@ export class QRRankerReranker implements IReranker {
         : Math.min(Math.round(rawLayer * nModelLayerBlocks / QR_ORIGINAL_NLAYER), nModelLayerBlocks - 1);
       const layerData = context.getKqSoftMax(layer);
       if (!layerData) {
-        this.logger?.debug(`[QRRanker] Layer ${layer} kq_soft_max data missing, skipping head (${layer}, ${head})`);
+        missingLayerCounts.set(layer, (missingLayerCounts.get(layer) ?? 0) + 1);
         continue;
       }
       mappedHeads.push(`${layer}:${head}`);
@@ -283,7 +286,16 @@ export class QRRankerReranker implements IReranker {
       validHeads++;
     }
 
-    this.logger?.debug(`[QRRanker] QR heads (nHead=${nHead}): ${mappedHeads.join(" ")}`);
+    const headsLog = `[QRRanker] QR heads (nHead=${nHead}): ${mappedHeads.join(" ")}`;
+    if (missingLayerCounts.size > 0) {
+      const summary = [...missingLayerCounts.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([layer, count]) => `Layer ${layer} (×${count})`)
+        .join(", ");
+      this.logger?.debug(`${headsLog}  |  skipped: ${summary}  |  kq: ${kqShapeInfo}`);
+    } else {
+      this.logger?.debug(`${headsLog}  |  kq: ${kqShapeInfo}`);
+    }
 
     // Normalize by (validHeads × query tokens) so scores are in [0, 1]
     const normalizer = validHeads * nQueryTokens;
@@ -293,7 +305,19 @@ export class QRRankerReranker implements IReranker {
       }
     }
 
-    // Sum per-chunk aggregate scores and extract per-token slices
+    return perKvScores;
+  }
+
+  /**
+   * Slice the aggregated per-KV scores into per-chunk score totals and
+   * per-chunk per-token slices (used to feed the highlighter).
+   */
+  private computeChunkScores(
+    perKvScores: Float32Array,
+    chunkRanges: Array<{ start: number; end: number }>,
+  ): { chunkScores: number[]; perChunkTokenScores: Float32Array[] } {
+    const nKv = perKvScores.length;
+    const nChunks = chunkRanges.length;
     const chunkScores = new Array<number>(nChunks).fill(0);
     const perChunkTokenScores: Float32Array[] = [];
 
@@ -311,6 +335,93 @@ export class QRRankerReranker implements IReranker {
     }
 
     return { chunkScores, perChunkTokenScores };
+  }
+
+  /**
+   * Decode-stage attention: prefill, then sample N greedy tokens, reading
+   * per-position kq_soft_max at each decode step. Returns the average of
+   * the N per-position per-kv score vectors.
+   *
+   * Flow (using evaluate() async generator):
+   *   iter 1: prefill + sample token_1   (no attention read; prefill slice is unused)
+   *   iter k (k >= 2): decode token_{k-1} at position promptLength + k - 2
+   *     BEFORE next(): setKqSoftMaxQueryRange(decodePos, decodePos + 1)
+   *     AFTER  next(): read kq_soft_max for that single position
+   *
+   * Note: this runs in listwise mode — the model is generating a single
+   * "summary" of all batched candidates. The averaged attention reflects
+   * "the model's focus while drafting a holistic answer" and should weight
+   * the truly relevant candidates higher.
+   */
+  private async _collectDecodeStageAttention(
+    context: LlamaContext,
+    sequence: ReturnType<LlamaContext["getSequence"]>,
+    tokens: Token[],
+    queryStart: number,
+    queryEnd: number,
+    model: LlamaModel,
+  ): Promise<Float32Array> {
+    const N = this.decodeSteps;
+    const promptLength = tokens.length;
+
+    // First set query range to the prefill range so cbEval has a valid
+    // initial slice (the prefill row data is unused; only decode positions
+    // are read below). This keeps C++ state consistent.
+    context.setKqSoftMaxQueryRange(queryStart, queryEnd);
+    const gen = sequence.evaluate(tokens, { temperature: 0 });
+
+    // iter 1: prefill + sample token_1
+    const first = await gen.next();
+    if (first.done || !first.value) {
+      this.logger?.warn(
+        `[QRRanker] Decode generator ended before producing first token; ` +
+        `falling back to prefill attention`,
+      );
+      return this._extractPerKvScoresFromKq(context, queryStart, queryEnd);
+    }
+
+    // Collect per-position attention, then average.
+    const scoreStack: Float32Array[] = [];
+    let lastSampled: Token | undefined;
+    for (let i = 0; i < N; i++) {
+      const decodePos = promptLength + i;
+      context.setKqSoftMaxQueryRange(decodePos, decodePos + 1);
+      const step = await gen.next();
+      if (step.done || !step.value) {
+        this.logger?.debug(
+          `[QRRanker] Decode stopped early at iter ${i + 2}/${N + 1}`,
+        );
+        break;
+      }
+      // After this .next() returns, the kq_soft_max contains attention from
+      // the single query token at decodePos. nQueryTokens will be 1.
+      const stepScores = this._extractPerKvScoresFromKq(context, decodePos, decodePos + 1);
+      scoreStack.push(stepScores);
+      lastSampled = step.value;
+    }
+
+    const lastText = lastSampled ? model.detokenize([lastSampled]).slice(0, 40) : "(none)";
+    this.logger?.debug(
+      `[QRRanker] Decode-stage attention collected: ` +
+      `${scoreStack.length}/${N} positions, last sampled="${lastText}"`,
+    );
+
+    if (scoreStack.length === 0) {
+      this.logger?.warn(
+        `[QRRanker] No decode positions captured; falling back to prefill attention`,
+      );
+      return this._extractPerKvScoresFromKq(context, queryStart, queryEnd);
+    }
+
+    // Average per-KV-position scores across all captured decode steps.
+    const nKv = scoreStack[0].length;
+    const avg = new Float32Array(nKv);
+    for (const s of scoreStack) {
+      for (let kv = 0; kv < nKv; kv++) avg[kv] += s[kv];
+    }
+    const denom = scoreStack.length;
+    for (let kv = 0; kv < nKv; kv++) avg[kv] /= denom;
+    return avg;
   }
 
   // ─── IReranker Interface ────────────────────────────────────────────
@@ -378,10 +489,12 @@ export class QRRankerReranker implements IReranker {
     // Ensure context is large enough for this batch.
     // If the pooled context (at trainContextSize) is sufficient, use it directly;
     // otherwise create a one-off larger context.
-    const neededSize = tokens.length + 1024;
+    // +decodeSteps reserves room for the N tokens that the decode path will sample.
+    const neededSize = tokens.length + 1024 + this.decodeSteps;
     if (context.contextSize < neededSize) {
       this.logger?.warn(
-        `[QRRanker] Batch tokens (${tokens.length}) exceed pooled context size (${context.contextSize}), ` +
+        `[QRRanker] Batch tokens (${tokens.length}) + decodeSteps (${this.decodeSteps}) ` +
+        `exceed pooled context size (${context.contextSize}), ` +
         `creating temporary context of size ${neededSize}`,
       );
       const tempContext = await model.createContext({
@@ -441,12 +554,29 @@ export class QRRankerReranker implements IReranker {
       );
     }
 
-    await sequence.evaluateWithoutGeneratingNewTokens(tokens);
+    // Run forward pass and collect per-KV scores.
+    //   - prefill mode: 1 evaluate() with no generation, scores are read straight
+    //     from kq_soft_max after the call.
+    //   - decode mode:  prefill + N greedy decode steps; we average N per-position
+    //     kq_soft_max reads into a single per-kv vector.
+    let perKvScores: Float32Array;
+    if (this.decodeSteps > 0) {
+      perKvScores = await this._collectDecodeStageAttention(
+        context, sequence, tokens, queryStart, queryEnd, model,
+      );
+    } else {
+      await sequence.evaluateWithoutGeneratingNewTokens(tokens);
+      perKvScores = this._extractPerKvScoresFromKq(context, queryStart, queryEnd);
+    }
+
     this.logger?.debug(
-      `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs`,
+      `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs, ` +
+      `mode=${this.decodeSteps > 0 ? `decode(N=${this.decodeSteps})` : "prefill"}`,
     );
 
-    const { chunkScores, perChunkTokenScores } = this.computeQRScores(context, chunkRanges, queryStart, queryEnd);
+    const { chunkScores, perChunkTokenScores } = this.computeChunkScores(
+      perKvScores, chunkRanges,
+    );
 
     const results: RerankerResult[] = batch.map((candidate, i) => {
       // Slice per-token scores to code region only, so the highlighter can
