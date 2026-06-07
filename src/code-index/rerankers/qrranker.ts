@@ -99,8 +99,8 @@ export class QRRankerReranker implements IReranker {
       const model = await this._ensureModel();
       const rawSize = model.trainContextSize ?? 32768;
       const contextSize = Math.min(rawSize, 32768);
-      this.logger?.debug(
-        `[QRRanker] Creating ${this.concurrency} context(s) for pool (contextSize=${contextSize})`,
+      this.logger?.info(
+        `[QRRanker] Context pool: contextSize=${contextSize}, batchSize=4096`,
       );
       // Create contexts sequentially to avoid simultaneous VRAM spikes.
       // If some fail due to VRAM pressure, we still get partial pool.
@@ -140,33 +140,64 @@ export class QRRankerReranker implements IReranker {
     return `Document ${index + 1}`;
   }
 
+  // ─── Prompt Template ──────────────────────────────────────────────
+
+  /**
+   * Return the chat-template components for the current model.
+   * Different model families use different turn-delimiter tokens:
+   *   - ChatML (Qwen, original QRRanker): <|im_start|> / <|im_end|>
+   *   - Gemma:  <start_of_turn> / <end_of_turn>
+   */
+  private _getPromptTemplate(model: LlamaModel) {
+    // Detect the chat template by probing the tokenizer for model-specific
+    // turn-delimiter tokens. Gemma models have <start_of_turn> in their
+    // vocabulary; ChatML models have <|im_start|>.
+    // We check this at the tokenizer level because GGUF metadata paths
+    // vary across node-llama-cpp versions.
+    const gemmaToken = model.tokenize("<start_of_turn>")[0];
+    const isGemma = gemmaToken !== undefined && Number(gemmaToken) > 0;
+    const tmpl = isGemma ? {
+      userTurn:    "<start_of_turn>user\n",
+      userEnd:     "<end_of_turn>\n",
+      assistantTurn: "<start_of_turn>model\n",
+      assistantPrefix: "Based on the retrieved chunks, the answer is:",
+      prefix: "Here are some retrieved chunks:\n\n",
+      suffix: "Use the retrieved chunks to answer the user's query.\n\nQuery: ",
+    } : {
+      userTurn:    "<|im_start|>user\n",
+      userEnd:     "<|im_end|>\n",
+      assistantTurn: "<|im_start|>assistant\n",
+      assistantPrefix: "<think>\n\n</think>\n\n",
+      prefix: "Here are some retrieved chunks:\n\n",
+      suffix: "Use the retrieved chunks to answer the user's query.\n\nQuery: ",
+    };
+    return { ...tmpl, isGemma };
+  }
+
   /** Build the formatted chunk text for prompt insertion: "[N] Title: content\n\n" */
   private chunkText(c: RerankerCandidate, index: number): string {
     return `[${index + 1}] Title: ${this.candidateTitle(c, index)}: ${c.content}\n\n`;
   }
 
   /**
-   * Build the QRRanker input prompt in the same format as the Python/C++ demo.
+   * Build the QRRanker input prompt using the model-appropriate chat template.
    *
-   * The trailing chatml tokens (`<|im_end|>\n<|im_start|>assistant\n` + an
-   * empty `<think>` block) are required for the model to leave user mode and
-   * enter assistant mode. Without them the model keeps generating as the
-   * user, which makes the QR attention reflect "rewriting the query" rather
-   * than "drafting the answer". Verified in the decode-stage experiment:
-   * docs/plans/260605-decode-attention-comparison.md.
+   * The trailing assistant turn prefix triggers the model to enter "answer"
+   * mode. For ChatML models a `<think>` block is prepended to encourage the
+   * model to reason about the chunks before producing an answer; Gemma models
+   * do this internally without explicit think tags.
+   * See docs/plans/260605-decode-attention-comparison.md.
    */
-  private buildPrompt(query: string, candidates: RerankerCandidate[]): string {
-    let prompt = "<|im_start|>user\nHere are some retrieved chunks:\n\n";
+  private buildPrompt(query: string, candidates: RerankerCandidate[], model: LlamaModel): string {
+    const t = this._getPromptTemplate(model);
+    let prompt = t.userTurn + t.prefix;
 
     for (let i = 0; i < candidates.length; i++) {
       prompt += this.chunkText(candidates[i], i);
     }
 
-    prompt +=
-      `Use the retrieved chunks to answer the user's query.\n\nQuery: ${query}` +
-      "<|im_end|>\n" +
-      "<|im_start|>assistant\n" +
-      "<think>\n\n</think>\n\n";
+    prompt += t.suffix + query + t.userEnd + t.assistantTurn + t.assistantPrefix;
+
     return prompt;
   }
 
@@ -185,30 +216,32 @@ export class QRRankerReranker implements IReranker {
     queryStart: number;
     queryEnd: number;
   } {
-    const promptPrefix = "<|im_start|>user\nHere are some retrieved chunks:\n\n";
+    const t = this._getPromptTemplate(model);
+    const promptPrefix = t.userTurn + t.prefix;
 
-    // Tokenize prefix to find starting offset
-    const prefixTokens = model.tokenize(promptPrefix);
-    let tokenOffset = prefixTokens.length;
+    // Build the full prompt first
+    const fullPrompt = this.buildPrompt(query, candidates, model);
+    const tokens = model.tokenize(fullPrompt);
 
+    // Compute chunk ranges using incremental prefix tokenization.
+    // This is necessary because BPE tokenizers can merge tokens across
+    // adjacent chunk boundaries when the full prompt is tokenized together.
+    // Tokenizing each chunk independently and summing their lengths would
+    // overcount tokens, producing chunk ranges that exceed the actual
+    // token count and cause Float32Array out-of-range errors.
+    let cumulativeText = promptPrefix;
     const chunkRanges: Array<{ start: number; end: number }> = [];
+    let prevEnd = model.tokenize(promptPrefix).length;
 
-    // Tokenize each chunk individually to compute ranges
     for (let i = 0; i < candidates.length; i++) {
-      const chunkTokens = model.tokenize(this.chunkText(candidates[i], i));
-      chunkRanges.push({ start: tokenOffset, end: tokenOffset + chunkTokens.length });
-      tokenOffset += chunkTokens.length;
+      cumulativeText += this.chunkText(candidates[i], i);
+      const currentEnd = model.tokenize(cumulativeText).length;
+      chunkRanges.push({ start: prevEnd, end: currentEnd });
+      prevEnd = currentEnd;
     }
 
-    // Tokenize the query closing part
-    const queryPart = `Use the retrieved chunks to answer the user's query.\n\nQuery: ${query}`;
-    const queryTokens = model.tokenize(queryPart);
-    const queryStart = tokenOffset;
-    const queryEnd = tokenOffset + queryTokens.length;
-
-    // Build the full token sequence
-    const fullPrompt = this.buildPrompt(query, candidates);
-    const tokens = model.tokenize(fullPrompt);
+    const queryStart = prevEnd;
+    const queryEnd = tokens.length;
 
     this.logger?.debug(
       `[QRRanker] Tokenized: ${tokens.length} tokens, ${chunkRanges.length} chunks, ` +
@@ -321,9 +354,19 @@ export class QRRankerReranker implements IReranker {
     const chunkScores = new Array<number>(nChunks).fill(0);
     const perChunkTokenScores: Float32Array[] = [];
 
+    // Track which chunks get zero scores due to exceed the model's
+    // kq_soft_max KV limit (nKv < chunk start).
+    let skippedChunks = 0;
+
     for (let ci = 0; ci < nChunks; ci++) {
       const { start, end } = chunkRanges[ci];
       const chunkLen = Math.min(end, nKv) - start;
+      if (chunkLen <= 0) {
+        skippedChunks++;
+        // Chunk is beyond the KV cache — give it zero score.
+        perChunkTokenScores.push(new Float32Array(0));
+        continue;
+      }
       const tokenScores = new Float32Array(chunkLen);
       let sum = 0;
       for (let kv = start; kv < start + chunkLen; kv++) {
@@ -332,6 +375,13 @@ export class QRRankerReranker implements IReranker {
       }
       chunkScores[ci] = sum;
       perChunkTokenScores.push(tokenScores);
+    }
+
+    if (skippedChunks > 0) {
+      this.logger?.warn(
+        `[QRRanker] ${skippedChunks}/${nChunks} chunks exceed kq_soft_max KV ` +
+        `capacity (nKv=${nKv}), assigned zero rerank score`,
+      );
     }
 
     return { chunkScores, perChunkTokenScores };
@@ -368,19 +418,22 @@ export class QRRankerReranker implements IReranker {
     // initial slice (the prefill row data is unused; only decode positions
     // are read below). This keeps C++ state consistent.
     context.setKqSoftMaxQueryRange(queryStart, queryEnd);
+    const prefillStart = Date.now();
     const gen = sequence.evaluate(tokens, { temperature: 0.6 });
 
     // iter 1: prefill + sample token_1
     const first = await gen.next();
+    const prefillTime = Date.now() - prefillStart;
     if (first.done || !first.value) {
       this.logger?.warn(
         `[QRRanker] Decode generator ended before producing first token; ` +
-        `falling back to prefill attention`,
+        `falling back to prefill attention (prefill: ${prefillTime}ms)`,
       );
       return this._extractPerKvScoresFromKq(context, queryStart, queryEnd);
     }
 
     // Collect per-position attention, then average.
+    const decodeStart = Date.now();
     const scoreStack: Float32Array[] = [];
     const generatedTokens: Token[] = [first.value]; // include the first sampled token
     for (let i = 0; i < N; i++) {
@@ -400,10 +453,13 @@ export class QRRankerReranker implements IReranker {
       generatedTokens.push(step.value);
     }
 
+    const decodeTime = Date.now() - decodeStart;
+
     // Log the full generated text (推理输出)
     const fullText = model.detokenize(generatedTokens);
     this.logger?.info(
-      `[QRRanker] Decode-stage inference output (${generatedTokens.length} tokens, ${scoreStack.length}/${N} positions):\n${fullText}`,
+      `[QRRanker] Decode-stage inference output (${generatedTokens.length} tokens, ${scoreStack.length}/${N} positions) ` +
+      `[prefill: ${prefillTime}ms, decode: ${decodeTime}ms]:\n${fullText}`,
     );
 
     if (scoreStack.length === 0) {
@@ -482,7 +538,8 @@ export class QRRankerReranker implements IReranker {
   ): Promise<RerankerResult[]> {
     const model = this._model!;
 
-    // Tokenize and compute chunk ranges
+    // Tokenize and compute chunk ranges (uses incremental prefix tokenization
+    // to avoid BPE cross-boundary merging mismatches).
     const { tokens, chunkRanges, queryStart, queryEnd } =
       this.tokenizeWithChunkRanges(model, query, batch);
 
@@ -499,7 +556,7 @@ export class QRRankerReranker implements IReranker {
       );
       const tempContext = await model.createContext({
         contextSize: Math.min(model.trainContextSize ?? 32768, neededSize),
-        batchSize: Math.min(tokens.length, 4096),
+        batchSize: 4096,
         sequences: 1,
         flashAttention: false,
         collectKqSoftMax: true,
@@ -511,9 +568,8 @@ export class QRRankerReranker implements IReranker {
       }
     }
 
-    const ubatch = Math.min(tokens.length, 4096);
     this.logger?.info(
-      `[QRRanker] Processing ${tokens.length} tokens with batchSize=${ubatch}`,
+      `[QRRanker] Processing ${tokens.length} tokens with batchSize=4096`,
     );
     return await this._runQrPass(context, model, tokens, chunkRanges, queryStart, queryEnd, batch);
   }
@@ -571,7 +627,8 @@ export class QRRankerReranker implements IReranker {
 
     this.logger?.debug(
       `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs, ` +
-      `mode=${this.decodeSteps > 0 ? `decode(N=${this.decodeSteps})` : "prefill"}`,
+      `mode=${this.decodeSteps > 0 ? `decode(N=${this.decodeSteps})` : "prefill"}` +
+      `, nKv=${perKvScores.length}`,
     );
 
     const { chunkScores, perChunkTokenScores } = this.computeChunkScores(

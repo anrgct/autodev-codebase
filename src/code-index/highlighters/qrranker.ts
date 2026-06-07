@@ -377,8 +377,9 @@ const QR_QRRANKER_NLAYER = 25;  // QRRanker cropped model blocks
  * per-token query→document relevance scores, then maps tokens to lines via
  * character-offset proportional mapping.
  *
- * Performs an independent forward pass for each highlight() call, using the
- * same chatml prompt format as QRRankerReranker.
+ * Performs an independent forward pass for each highlight() call, using
+ * the model-appropriate chat template (ChatML for Qwen, Gemma format for
+ * Gemma 3, auto-detected via tokenizer).
  *
  * When `decodeSteps > 0` the forward pass follows a prefill + decode pattern
  * (model samples N greedy tokens), and per-token scores are averaged across
@@ -436,24 +437,52 @@ export class QRRankerHighlighter implements IHighlighter {
   // ─── Prompt Construction ────────────────────────────────────────────
 
   /**
-   * Build the QRRanker input prompt in chatml format (single chunk).
-   * Matches the format used by QRRankerReranker.buildPrompt().
-   *
-   * The trailing chatml tokens (`<|im_end|>\n<|im_start|>assistant\n` + an
-   * empty `<think>` block) are required for the model to leave user mode and
-   * enter assistant mode. Without them the model keeps generating as the
-   * user, which makes the QR attention reflect "rewriting the query" rather
-   * than "drafting the answer". Verified in the decode-stage experiment:
-   * docs/plans/260605-decode-attention-comparison.md.
+   * Return the chat-template components for the current model.
+   * Different model families use different turn-delimiter tokens:
+   *   - ChatML (Qwen, original QRRanker): <|im_start|> / <|im_end|>
+   *   - Gemma:  <start_of_turn> / <end_of_turn>
    */
-  private buildPrompt(query: string, codeChunk: string): string {
+  private _getPromptTemplate(model: LlamaModel) {
+    // Detect the chat template by probing the tokenizer for model-specific
+    // turn-delimiter tokens. Gemma models have <start_of_turn> in their
+    // vocabulary; ChatML models have <|im_start|>.
+    // We check this at the tokenizer level because GGUF metadata paths
+    // vary across node-llama-cpp versions.
+    const gemmaToken = model.tokenize("<start_of_turn>")[0];
+    const isGemma = gemmaToken !== undefined && Number(gemmaToken) > 0;
+    const tmpl = isGemma ? {
+      userTurn:    "<start_of_turn>user\n",
+      userEnd:     "<end_of_turn>\n",
+      assistantTurn: "<start_of_turn>model\n",
+      assistantPrefix: "Based on the retrieved chunks, the answer is:",
+      prefix: "Here are some retrieved chunks:\n\n",
+      suffix: "Use the retrieved chunks to answer the user's query.\n\nQuery: ",
+    } : {
+      userTurn:    "<|im_start|>user\n",
+      userEnd:     "<|im_end|>\n",
+      assistantTurn: "<|im_start|>assistant\n",
+      assistantPrefix: "<think>\n\n</think>\n\n",
+      prefix: "Here are some retrieved chunks:\n\n",
+      suffix: "Use the retrieved chunks to answer the user's query.\n\nQuery: ",
+    };
+    return { ...tmpl, isGemma };
+  }
+
+  /**
+   * Build the QRRanker input prompt using the model-appropriate chat template.
+   *
+   * The trailing assistant turn prefix triggers the model to enter "answer"
+   * mode. For ChatML models a `<think>` block is prepended to encourage the
+   * model to reason about the chunks before producing an answer; Gemma models
+   * do this internally without explicit think tags.
+   * See docs/plans/260605-decode-attention-comparison.md.
+   */
+  private buildPrompt(query: string, codeChunk: string, model: LlamaModel): string {
+    const t = this._getPromptTemplate(model);
     return (
-      "<|im_start|>user\nHere are some retrieved chunks:\n\n" +
+      t.userTurn + t.prefix +
       `[1] Title: code\n${codeChunk}\n\n` +
-      "Use the retrieved chunks to answer the user's query.\n\n" +
-      `Query: ${query}<|im_end|>\n` +
-      "<|im_start|>assistant\n" +
-      "<think>\n\n</think>\n\n"
+      t.suffix + query + t.userEnd + t.assistantTurn + t.assistantPrefix
     );
   }
 
@@ -507,7 +536,7 @@ export class QRRankerHighlighter implements IHighlighter {
     queryStart: number;
     queryEnd: number;
   } {
-    const fullPrompt = this.buildPrompt(query, codeChunk);
+    const fullPrompt = this.buildPrompt(query, codeChunk, model);
     const tokens = model.tokenize(fullPrompt);
 
     // Tokenize anchor sequences
@@ -544,11 +573,12 @@ export class QRRankerHighlighter implements IHighlighter {
     }
 
     // Fallback: character-offset estimation
+    const t = this._getPromptTemplate(model);
     if (codeStart < 0) {
       this.logger?.warn(
         `[QRRankerHighlighter] Code subsequence search failed, using character-offset fallback`,
       );
-      const promptPrefix = "<|im_start|>user\nHere are some retrieved chunks:\n\n[1] Title: code\n";
+      const promptPrefix = `${t.userTurn}${t.prefix}[1] Title: code\n`;
       const prefixTokens = model.tokenize(promptPrefix);
       codeStart = prefixTokens.length;
       codeEnd = codeStart + codeTokens.length;
@@ -558,7 +588,7 @@ export class QRRankerHighlighter implements IHighlighter {
       this.logger?.warn(
         `[QRRankerHighlighter] Query subsequence search failed, using character-offset fallback`,
       );
-      const promptSuffix = "\n\nUse the retrieved chunks to answer the user's query.\n\nQuery: ";
+      const promptSuffix = `\n\n${t.suffix}`;
       const suffixTokens = model.tokenize(promptSuffix);
       const queryTokens = model.tokenize(query);
       queryStart = (codeEnd > 0 ? codeEnd : tokens.length) + suffixTokens.length;
@@ -990,20 +1020,23 @@ export class QRRankerHighlighter implements IHighlighter {
     // First set query range to the prefill range so cbEval has a valid
     // initial slice (this row data is unused; we only read decode positions).
     context.setKqSoftMaxQueryRange(queryStart, queryEnd);
+    const prefillStart = Date.now();
     const gen = sequence.evaluate(tokens, { temperature: 0.6 });
 
     // iter 1: prefill + sample token_1
     const first = await gen.next();
+    const prefillTime = Date.now() - prefillStart;
     if (first.done || !first.value) {
       this.logger?.warn(
         `[QRRankerHighlighter] Decode generator ended before producing first token; ` +
-        `falling back to prefill attention`,
+        `falling back to prefill attention (prefill: ${prefillTime}ms)`,
       );
       return this.computePerTokenScores(context, queryStart, queryEnd);
     }
 
     // Collect attention from decode positions for token_1 ... token_N.
     // iter k (k=2..N+1) decodes token_{k-1} at position promptLength + k - 2.
+    const decodeStart = Date.now();
     const scoreStack: Float32Array[] = [];
     const generatedTokens: Token[] = [first.value]; // include the first sampled token
     for (let i = 0; i < N; i++) {
@@ -1023,10 +1056,13 @@ export class QRRankerHighlighter implements IHighlighter {
       generatedTokens.push(step.value);
     }
 
+    const decodeTime = Date.now() - decodeStart;
+
     // Log the full generated text (推理输出)
     const fullText = model.detokenize(generatedTokens);
     this.logger?.info(
-      `[QRRankerHighlighter] Decode-stage inference output (${generatedTokens.length} tokens, ${scoreStack.length}/${N} positions):\n${fullText}`,
+      `[QRRankerHighlighter] Decode-stage inference output (${generatedTokens.length} tokens, ${scoreStack.length}/${N} positions) ` +
+      `[prefill: ${prefillTime}ms, decode: ${decodeTime}ms]:\n${fullText}`,
     );
 
     if (scoreStack.length === 0) {

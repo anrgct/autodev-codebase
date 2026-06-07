@@ -531,9 +531,11 @@ bool AddonContext::cbEval(ggml_tensor *t, bool ask, void *user_data) {
     }
 
     if (ask) {
-        // Always update shape metadata to reflect the latest (largest) KV cache.
-        // Across micro-batches, n_kv grows as more tokens are cached.
-        ctx->kqN_Kv = (int)t->ne[0];
+        // Update shape metadata: nKv reflects the full context width (consistent
+        // across micro-batches), not per-micro-batch tensor width. This ensures
+        // the JS side sees a single stable nKv and the buffer uses a uniform stride.
+        // See docs/plans/260523-qrranker-ubatch-overflow-fix.md
+        ctx->kqN_Kv = ctx->context_params.n_ctx;
         ctx->kqN_Tokens = (int)t->ne[1];
         ctx->kqN_Head = (int)t->ne[2];
         return true;
@@ -559,30 +561,35 @@ bool AddonContext::cbEval(ggml_tensor *t, bool ask, void *user_data) {
             // This micro-batch covers part of the query range
             const int n_query_in_mb = mb_query_end - mb_query_start;
             const int n_query_full   = ctx->kqQueryEnd - ctx->kqQueryStart;
+            // Use the full context width as the consistent buffer stride
+            // so that all micro-batches write to the same column layout.
+            // The per-micro-batch tensor may have n_kv < buf_n_kv (grows as
+            // more tokens are cached); we only copy n_kv actual KV positions
+            // per row and leave the rest as the zero-initialized margin.
+            const int buf_n_kv = ctx->kqN_Kv;
 
-            // Initialize or resize buf for full query range
+            // Initialize or resize buf for full query range with consistent stride
             if (buf.empty()) {
-                buf.resize(n_head * n_query_full * n_kv, 0.0f);
+                buf.resize(n_head * n_query_full * buf_n_kv, 0.0f);
             }
 
             // Copy query rows from this micro-batch and accumulate into buf.
-            // IMPORTANT: use t->nb[] strides, NOT row-major formula, because
-            // Metal backend may add padding between rows for alignment.
-            //
-            // Read entire head's query block at once (single ggml_backend_tensor_get
-            // call per head) to avoid potential Metal buffer offset issues with many
-            // small reads.
+            // Copy row-by-row because the tensor's n_kv (t->ne[0]) may differ
+            // from buf_n_kv across micro-batches.
             std::vector<float> tmp_head(n_query_in_mb * n_kv);
             for (int h = 0; h < n_head; h++) {
                 // Read the entire [h, mb_query_start..mb_query_end, :] block
                 const size_t src_offset = (size_t)h * t->nb[2] + (size_t)mb_query_start * t->nb[1];
                 const size_t block_size = (size_t)n_query_in_mb * n_kv * float_size;
                 ggml_backend_tensor_get(t, tmp_head.data(), src_offset, block_size);
-                // Accumulate into buf (layout: [head][n_query][n_kv])
+                // Accumulate into buf (layout: [head][n_query_full][buf_n_kv])
                 const int query_dst_start = batch_start + mb_query_start - ctx->kqQueryStart;
-                const size_t dst_offset = ((size_t)h * n_query_full + (size_t)query_dst_start) * n_kv;
-                for (size_t i = 0; i < (size_t)n_query_in_mb * n_kv; i++) {
-                    buf[dst_offset + i] += tmp_head[i];
+                for (int q = 0; q < n_query_in_mb; q++) {
+                    const size_t dst_row = ((size_t)h * n_query_full + (size_t)(query_dst_start + q)) * buf_n_kv;
+                    const size_t src_row = (size_t)q * n_kv;
+                    for (int kv = 0; kv < n_kv; kv++) {
+                        buf[dst_row + kv] += tmp_head[src_row + kv];
+                    }
                 }
             }
         }
