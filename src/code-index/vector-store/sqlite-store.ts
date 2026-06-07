@@ -1040,13 +1040,18 @@ function reciprocalRankFusion(
 }
 
 /**
- * FTS5 reserved characters that, if they appear in a bareword, would be
- * parsed as part of the query syntax rather than as a search term. We
- * escape by wrapping the term in double quotes (the FTS5 string-literal
- * syntax). Inside a quoted string, embedded double quotes are doubled
- * per the FTS5 spec.
+ * FTS5 reserved characters — see
+ * <https://www.sqlite.org/fts5.html#full_text_query_syntax>.
+ *
+ * These characters have meaning in FTS5 query syntax. To use them as
+ * literal text the bareword must be wrapped in double quotes (the FTS5
+ * string-literal syntax). Inside a quoted string, embedded double quotes
+ * are doubled per the FTS5 spec.
+ *
+ * Note: `-` is the NOT prefix operator in FTS5, so any bareword
+ * containing a hyphen must be quoted to prevent FTS5 from misparsing.
  */
-const FTS5_RESERVED = /["*():^]/
+const FTS5_RESERVED = /["*():^\-+]/
 
 /**
  * Turn the user-supplied search string into an FTS5 query that mirrors

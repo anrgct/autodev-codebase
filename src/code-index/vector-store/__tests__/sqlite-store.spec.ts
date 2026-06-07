@@ -442,6 +442,10 @@ describe('buildFtsBm25Query', () => {
     expect(buildFtsBm25Query('foo:bar')).toBe('"foo:bar"')
   })
 
+  it('quotes barewords containing a hyphen (FTS5 NOT operator)', () => {
+    expect(buildFtsBm25Query('--log-level=debug')).toBe('"--log-level=debug"')
+  })
+
   it('preserves doubled-quote escape inside phrases ("" -> ")', () => {
     // Per the FTS5 spec, `""` inside a phrase string is the escape for
     // a literal `"`. The user input `"a""b"` therefore represents a
