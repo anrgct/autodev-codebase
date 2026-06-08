@@ -77,7 +77,7 @@ export class LlamaContext {
     /** @internal */ _allocatedContextSize;
     /** @internal */ _disposed = false;
     onDispose = new EventRelay();
-    constructor({ _model }, { sequences, contextSize, batchSize, flashAttention = _model.defaultContextFlashAttention, threads, batching: { dispatchSchedule: batchingDispatchSchedule = "nextCycle", itemPrioritizationStrategy: batchingItemsPrioritizationStrategy = "maximumParallelism" } = {}, swaFullCache = _model.defaultContextSwaFullCache, performanceTracking = false, experimentalKvCacheKeyType, experimentalKvCacheValueType, _embeddings, _ranking, collectKqSoftMax = false, _embdLayer }) {
+    constructor({ _model }, { sequences, contextSize, batchSize, flashAttention = _model.defaultContextFlashAttention, threads, batching: { dispatchSchedule: batchingDispatchSchedule = "nextCycle", itemPrioritizationStrategy: batchingItemsPrioritizationStrategy = "maximumParallelism" } = {}, swaFullCache = _model.defaultContextSwaFullCache, performanceTracking = false, experimentalKvCacheKeyType, experimentalKvCacheValueType, _embeddings, _ranking, collectKqSoftMax = false, _embdLayer, kvUnified }) {
         if (_model.disposed)
             throw new DisposedError();
         this._llama = _model._llama;
@@ -115,7 +115,8 @@ export class LlamaContext {
             kvCacheKeyType: this._kvCacheKeyType,
             kvCacheValueType: this._kvCacheValueType,
             swaFullCache: this._swaFullCache,
-            collectKqSoftMax: collectKqSoftMax
+            collectKqSoftMax: collectKqSoftMax,
+            kvUnified
         }));
         this._batchingOptions = {
             dispatchSchedule: batchingDispatchSchedule,
@@ -638,7 +639,7 @@ export class LlamaContext {
     }
     /** @internal */
     static async _create(options, { _model }) {
-        const kvUnified = false;
+        const kvUnified = options.kvUnified ?? false;
         const sequences = Math.max(1, Math.floor(options.sequences ?? getDefaultContextSequences()));
         const flashAttention = _model.flashAttentionSupported
             ? Boolean(options.flashAttention ?? _model.defaultContextFlashAttention)

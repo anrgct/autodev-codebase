@@ -498,6 +498,10 @@ AddonContext::AddonContext(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Ad
             context_params.swa_full = options.Get("swaFullCache").As<Napi::Boolean>().Value();
         }
 
+        if (options.Has("kvUnified")) {
+            context_params.kv_unified = options.Get("kvUnified").As<Napi::Boolean>().Value();
+        }
+
         // ---- QRRanker: kq_soft_max collection ----
         if (options.Has("collectKqSoftMax") && options.Get("collectKqSoftMax").As<Napi::Boolean>().Value()) {
             collectKqSoftMax = true;

@@ -141,6 +141,7 @@ export type LlamaContextOptions = {
      * Defaults to `false` (inherited from the model option `defaultContextSwaFullCache`);
      */
     swaFullCache?: boolean;
+    kvUnified?: boolean;
     /**
      * QRRanker: enable collection of kq_soft_max attention tensors during decode.
      * When enabled, forces flash attention off and collects intermediate attention weights
