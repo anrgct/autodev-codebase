@@ -582,8 +582,8 @@ async function createSummarizerForOutline(
       loggerOptions: {
         name: 'Outline',
         level: 'error',
-        timestamps: false,
-        colors: false
+        timestamps: true,
+        colors: true
       },
       configOptions: {
         configPath: resolvedConfigPath
@@ -597,11 +597,12 @@ async function createSummarizerForOutline(
     const configManager = new CodeIndexConfigManager(deps.configProvider);
     await configManager.initialize();
 
-    // Create service factory
+    // Create service factory (pass logger so summarizer can use it)
     const factory = new CodeIndexServiceFactory(
       configManager,
       workspacePath,
-      new CacheManager(workspacePath)
+      new CacheManager(workspacePath),
+      deps.logger
     );
 
     // Create and return summarizer

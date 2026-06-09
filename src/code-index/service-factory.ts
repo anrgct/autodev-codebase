@@ -649,6 +649,9 @@ export class CodeIndexServiceFactory {
         config.temperature ?? 0,
         this.logger,
         config.concurrency ?? 2,
+        // sequences: 池子大小, 默认 = 并发数 (1:1).
+        // 之前 ×2 是兑底 _reclaimUnusedSequenceId race 的余量; 池化后 race 已避免, 不再需要.
+        (config as any).sequences ?? (config.concurrency ?? 2),
       )
     }
 

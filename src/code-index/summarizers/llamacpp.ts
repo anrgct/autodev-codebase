@@ -1,5 +1,5 @@
 import { ISummarizer, SummarizerRequest, SummarizerResult, SummarizerInfo, SummarizerBatchRequest, SummarizerBatchResult } from "../interfaces"
-import { LlamaModel, LlamaChatSession, QwenChatWrapper, LlamaContext } from "@realtimex/node-llama-cpp"
+import { LlamaModel, LlamaChatSession, QwenChatWrapper, LlamaContext, LlamaContextSequence } from "@realtimex/node-llama-cpp"
 import { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
@@ -10,7 +10,10 @@ export class LlamaCppSummarizer implements ISummarizer {
   private readonly temperature: number
   private readonly logger?: LoggerLike
   private readonly _concurrency: number
+  private readonly _sequences: number
   private _contexts: LlamaContext[] = []
+  private _sequencePool: LlamaContextSequence[] = []
+  private _seqIdx: number = 0
   private _contextPoolPromise: Promise<void> | null = null
 
   constructor(
@@ -19,12 +22,16 @@ export class LlamaCppSummarizer implements ISummarizer {
     temperature: number = 0,
     logger?: LoggerLike,
     concurrency: number = 2,
+    sequences?: number,
   ) {
     this.model = model
     this.defaultLanguage = defaultLanguage
     this.temperature = temperature
     this.logger = logger
     this._concurrency = concurrency
+    // 池化: slot 数 = 并发数. 之前 ×2 是为兑底 _reclaimUnusedSequenceId 的
+    // fire-and-forget race, 现在池化方案完全避开了 race, 不再需要冗余 slot.
+    this._sequences = sequences ?? concurrency
   }
 
   private async _ensureContexts(): Promise<typeof this._contexts> {
@@ -35,13 +42,20 @@ export class LlamaCppSummarizer implements ISummarizer {
     }
 
     this._contextPoolPromise = (async () => {
-      this.logger?.debug(`[LlamaCppSummarizer] Creating ${this._concurrency} context(s) for pool`)
-      this._contexts = await Promise.all(
-        Array.from({ length: this._concurrency }, () =>
-          this.model.createContext({ contextSize: Math.min(this.model.trainContextSize ?? 32768, 32768) })
-        )
-      )
-      this.logger?.info(`[LlamaCppSummarizer] Created ${this._concurrency} context(s) for pool`)
+      this.logger?.debug(`[LlamaCppSummarizer] Creating context with ${this._sequences} sequence(s)`)
+      const ctx = await this.model.createContext({
+        contextSize: Math.min(this.model.trainContextSize ?? 32768, 32768),
+        sequences: this._sequences,
+      })
+      this._contexts = [ctx]
+      // Pooling: 一次性从 context 拿 _sequences 个 sequence, 永久持有
+      // 避免 _reclaimUnusedSequenceId 的 fire-and-forget race
+      // (见 docs/plans/260608-no-sequences-left-root-cause.md)
+      // clearHistory() 负责在每次 call 前重置 KV cache, 不再调 native dispose
+      for (let i = 0; i < this._sequences; i++) {
+        this._sequencePool.push(ctx.getSequence())
+      }
+      this.logger?.info(`[LlamaCppSummarizer] Created 1 context with ${this._sequences} pooled sequence(s)`)
     })()
 
     await this._contextPoolPromise
@@ -103,6 +117,80 @@ export class LlamaCppSummarizer implements ISummarizer {
     return null
   }
 
+  /**
+   * Attempt to repair malformed JSON from model output.
+   * Tracks both {} and [] bracket depth to handle trailing extra brackets
+   * that some models (e.g. MiniCPM-V) occasionally produce.
+   */
+  private tryRepairJson(text: string): string | null {
+    const startIndex = text.indexOf('{')
+    if (startIndex === -1) return null
+
+    const stack: string[] = []
+    let inString = false
+    let escapeNext = false
+    let result = ''
+    let foundComplete = false
+
+    for (let i = startIndex; i < text.length; i++) {
+      const char = text[i]
+
+      if (escapeNext) {
+        escapeNext = false
+        result += char
+        continue
+      }
+
+      if (char === '\\') {
+        escapeNext = true
+        result += char
+        continue
+      }
+
+      if (char === '"') {
+        inString = !inString
+        result += char
+        continue
+      }
+
+      if (inString) {
+        result += char
+        continue
+      }
+
+      if (char === '{') {
+        stack.push('{')
+        result += char
+      } else if (char === '[') {
+        stack.push('[')
+        result += char
+      } else if (char === '}') {
+        if (stack.length > 0 && stack[stack.length - 1] === '{') {
+          stack.pop()
+          result += char
+          if (stack.length === 0) {
+            foundComplete = true
+            break
+          }
+        } else {
+          // Mismatched: extra content after valid JSON
+          break
+        }
+      } else if (char === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === '[') {
+          stack.pop()
+          result += char
+        }
+        // Ignore mismatched ] (model may add extra trailing bracket)
+      } else {
+        result += char
+      }
+    }
+
+    if (foundComplete) return result
+    return null
+  }
+
   private buildPrompt(request: SummarizerBatchRequest): string {
     const { blocks, language, document, filePath } = request
 
@@ -137,14 +225,18 @@ export class LlamaCppSummarizer implements ISummarizer {
       prompt += `IMPORTANT: Respond in **Chinese (中文)**. Each description must be 30-80 Chinese characters.\n\n`
     }
 
-    prompt += `IMPORTANT: Respond with ONLY the JSON object, no extra text.\n\n`
+    const placeholder = language === 'Chinese' ? '[描述]' : '[DESCRIPTION]'
 
+    prompt += `Output format:\n`
+    for (let i = 1; i <= blocks.length; i++) {
+      prompt += `{"index":${i},"summary":"${placeholder}"}\n`
+    }
     if (blocks.length === 1) {
-      prompt += `Return format: {"summaries": "description"} (single string)\n`
+      prompt += `\nReplace ${placeholder} with the actual description. `
+      prompt += `Output ONLY this one line, nothing else.\n`
     } else {
-      const descs = Array.from({length: blocks.length}, (_, i) => `"snippet${i + 1}_desc"`).join(', ')
-      prompt += `Return format: {"summaries": [${descs}]} (EXACTLY ${blocks.length} descriptions)\n`
-      prompt += `CRITICAL: You MUST output EXACTLY ${blocks.length} item(s) and nothing else. You MUST NOT describe any other snippets.\n`
+      prompt += `\nReplace each ${placeholder} with the actual description. `
+      prompt += `Output exactly ${blocks.length} lines. Do NOT add any text before or after.\n`
     }
 
     return prompt
@@ -154,16 +246,14 @@ export class LlamaCppSummarizer implements ISummarizer {
     const prompt = this.buildPrompt(request)
     this.logger?.debug(`Summarizing ${request.blocks.length} blocks for ${request.filePath || 'unknown file'}`)
 
-    const contexts = await this._ensureContexts()
-    // Round-robin: pick a context, erase its accumulated state, use it
-    const context = contexts[request.blocks.length % contexts.length]
+    await this._ensureContexts()
 
-    // Erase context sequence so each call starts fresh
-    const sequence = context.getSequence()
-    await sequence.eraseContextTokenRanges([{
-      start: 0,
-      end: sequence.nextTokenIndex,
-    }])
+    // 池化分配: 轮询从池中借一个 sequence, 不调 dispose
+    // (避免 _reclaimUnusedSequenceId 的 fire-and-forget race)
+    const sequence = this._sequencePool[this._seqIdx++ % this._sequencePool.length]
+
+    // clearHistory 重置 KV cache, 用 withLock(锁) 串行化访问同一个 context
+    await sequence.clearHistory()
 
     const chatWrapper = new QwenChatWrapper({
       variation: "3.5",
@@ -178,65 +268,111 @@ export class LlamaCppSummarizer implements ISummarizer {
 
     const responseText = response.trim()
 
-    // Try to extract JSON from the response with multiple fallback strategies
-    let parsedResponse: any
-    try {
-      parsedResponse = JSON.parse(responseText)
-    } catch {
-      let jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/) ||
-              responseText.match(/```\s*([\s\S]*?)\s*```/)
-      if (jsonMatch) {
+    // Parse JSONL format: each line is {"index": N, "summary": "..."}
+    // JSONL is more robust than a single JSON array because each line is independent
+    let jsonl = responseText
+
+    // Strip markdown code block fences if present
+    const codeBlockMatch = jsonl.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
+    if (codeBlockMatch) {
+      jsonl = codeBlockMatch[1].trim()
+    }
+
+    // Also handle inline backtick wrapping
+    jsonl = jsonl.replace(/^`+|`+$/g, '').trim()
+
+    const summariesMap = new Map<number, string>()
+    const lines = jsonl.split('\n')
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+
+      let parsed: any
+      try {
+        parsed = JSON.parse(trimmed)
+      } catch {
+        this.logger?.warn(`[RAW] ${trimmed}`)
+        // Attempt repair for malformed JSON lines
+        const extracted = this.tryRepairJson(trimmed) ?? this.extractCompleteJsonObject(trimmed)
+        if (!extracted) continue
         try {
-          parsedResponse = JSON.parse(jsonMatch[1].trim())
+          parsed = JSON.parse(extracted)
         } catch {
-          const extracted = this.extractCompleteJsonObject(responseText)
-          if (extracted) {
-            parsedResponse = JSON.parse(extracted)
-          } else {
-            throw new Error(`Failed to parse batch response JSON after multiple attempts`)
-          }
+          continue // Skip unparseable lines
         }
-      } else {
-        const extracted = this.extractCompleteJsonObject(responseText)
-        if (extracted) {
-          parsedResponse = JSON.parse(extracted)
-        } else {
-          throw new Error(`Could not extract JSON from batch response`)
-        }
+      }
+
+      if (parsed && typeof parsed === 'object' && typeof parsed.summary === 'string') {
+        const index = typeof parsed.index === 'number' ? parsed.index : summariesMap.size + 1
+        summariesMap.set(index, parsed.summary.trim())
       }
     }
 
-    let summariesArray: string[] = []
+    if (summariesMap.size === 0) {
+      // Print full raw output for debugging
+      this.logger?.warn(`[RAW] ${responseText}`)
 
-    if (typeof parsedResponse.summaries === 'string') {
-      summariesArray = [parsedResponse.summaries]
-    } else if (Array.isArray(parsedResponse.summaries)) {
-      summariesArray = parsedResponse.summaries
-    } else {
-      throw new Error(`Invalid batch response format: 'summaries' must be array or string`)
-    }
+      // Fallback: try parsing the entire response as a single JSON object
+      // (handles cases where model ignores JSONL instruction and outputs old format)
+      try {
+        const parsedFallback = JSON.parse(responseText)
+        if (parsedFallback && typeof parsedFallback === 'object') {
+          let fallbackSummaries: string[] = []
+          if (typeof parsedFallback.summaries === 'string') {
+            fallbackSummaries = [parsedFallback.summaries]
+          } else if (Array.isArray(parsedFallback.summaries)) {
+            fallbackSummaries = parsedFallback.summaries.map((s: any) =>
+              typeof s === 'string' ? s : (s.summary || '')
+            )
+          } else if (typeof parsedFallback.summary === 'string') {
+            fallbackSummaries = [parsedFallback.summary]
+          }
 
-    if (summariesArray.length !== request.blocks.length) {
+          if (fallbackSummaries.length > 0) {
+            const summaries = fallbackSummaries.slice(0, request.blocks.length).map((text) => ({
+              summary: text.trim(),
+              language: request.language,
+            }))
+            while (summaries.length < request.blocks.length) {
+              summaries.push({ summary: '', language: request.language })
+            }
+            return { summaries }
+          }
+        }
+      } catch {
+        // Fallback also failed, will throw below
+      }
+
       throw new Error(
-        `Batch response length mismatch: expected ${request.blocks.length}, got ${summariesArray.length}`
+        `Failed to parse any JSONL lines from batch response. ` +
+        `Expected ${request.blocks.length} block(s). See [RAW] log above for full output.`
       )
     }
 
-    const summaries = summariesArray.map((item: any) => {
-      const text = typeof item === 'string' ? item : (item.desc1 || item.summary || '')
-      return {
-        summary: text.trim(),
-        language: request.language
-      }
-    })
+    // Sort by index to preserve order, slice to expected count
+    const sortedEntries = Array.from(summariesMap.entries()).sort(([a], [b]) => a - b)
+    const summaries: { summary: string; language: string }[] = sortedEntries
+      .slice(0, request.blocks.length)
+      .map(([, summary]) => ({
+        summary,
+        language: request.language,
+      }))
+
+    // Pad with empty summaries if model returned fewer than expected
+    while (summaries.length < request.blocks.length) {
+      summaries.push({ summary: '', language: request.language })
+    }
 
     return { summaries }
   }
 
   async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
     try {
-      const contexts = await this._ensureContexts()
-      const sequence = contexts[0].getSequence()
+      await this._ensureContexts()
+      // 池化: 复用 _sequencePool[0] 验证, 不再 getSequence + dispose (避免 race)
+      const sequence = this._sequencePool[0]
+      await sequence.clearHistory()
       const chatWrapper = new QwenChatWrapper({
         variation: "3.5",
         thoughts: "discourage",
@@ -256,11 +392,19 @@ export class LlamaCppSummarizer implements ISummarizer {
   }
 
   async dispose(): Promise<void> {
-    for (const ctx of this._contexts) {
-      await ctx.dispose().catch(() => {});
+    // 先 dispose 池中所有 sequence, 释放 sequence slot
+    // (LlamaContextSequence.dispose 同步返回 void)
+    for (const seq of this._sequencePool) {
+      try { seq.dispose() } catch {}
     }
-    this._contexts = [];
-    this._contextPoolPromise = null;
+    this._sequencePool = []
+    this._seqIdx = 0
+
+    for (const ctx of this._contexts) {
+      await ctx.dispose().catch(() => {})
+    }
+    this._contexts = []
+    this._contextPoolPromise = null
   }
 
   get summarizerInfo(): SummarizerInfo {
