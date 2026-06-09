@@ -173,7 +173,25 @@ codebase config --set key=value --global        # 设置全局配置
 - 项目测试运行不需要build，直接npx tsx xxx.ts运行
 - 可以搜索docs/目录了解项目wiki，搜索docs/plans目录了解之前的任务记录
 - 项目配置在autodev-config.json中，可以通过codebase config --get/--set命令进行查看和修改，demo目录有单独的autodev-config.json，需要用codebase config --path=demo来指定，项目根目录的autodev-config.json、~/.autodev-cache/autodev-config.json、demo/autodev-config.json是独立的
-- 测试脚本写在scripts/evidence目录，用YYMMDD-开头的文件名命名
-- 重命名文件时使用git mv命令
-- --log-level=debug可以输出调试日志
-- `npm run dev -- xxx --json` 在 stdout 开头打印两行 npm preamble（`> @autodev/...`），会破坏 JSON 输出，无法直接 `| jq`。解决方法：用 `npx tsx src/cli.ts xxx --json 2>/dev/null | jq` 替代，或保存到文件后跳过前两行
+- `--log-level=debug`可以输出调试日志
+
+## 提交规范
+
+使用 [Conventional Commits](https://www.conventionalcommits.org/) 格式，英文：
+
+- `feat:` — 新功能
+- `fix:` — 修复
+- `refactor:` — 重构，不改行为
+- `docs:` — 文档
+- `chore:` — 杂项（构建、CI、配置等）
+- `perf:` — 性能优化
+- `test:` — 测试
+- `revert:` — 回退
+
+示例：
+```
+feat: support prefix caching via system prompt separation
+
+Put shared context into system prompt to enable KV cache reuse
+across batches. 55.4s -> ~20s.
+```
