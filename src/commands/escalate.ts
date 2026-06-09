@@ -54,26 +54,26 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
 
   // CLI overrides (highest priority)
   const cliOverrides: Record<string, unknown> = {}
-  if (options.apiBase) cliOverrides.escalateApiBase = options.apiBase
-  if (options.apiKey !== undefined) cliOverrides.escalateApiKey = options.apiKey
-  if (options.flashModel) cliOverrides.escalateFlashModel = options.flashModel
-  if (options.proModel) cliOverrides.escalateProModel = options.proModel
+  if (options.apiBase) cliOverrides['escalateApiBase'] = options.apiBase
+  if (options.apiKey !== undefined) cliOverrides['escalateApiKey'] = options.apiKey
+  if (options.flashModel) cliOverrides['escalateFlashModel'] = options.flashModel
+  if (options.proModel) cliOverrides['escalateProModel'] = options.proModel
   if (options.port) {
     if (!/^\d+$/.test(options.port)) {
       throw new Error(`Invalid --port value: "${options.port}" (must be a numeric string)`)
     }
-    cliOverrides.escalatePort = parseInt(options.port, 10)
+    cliOverrides['escalatePort'] = parseInt(options.port, 10)
   }
-  if (options.host) cliOverrides.escalateHost = options.host
+  if (options.host) cliOverrides['escalateHost'] = options.host
 
   // Merge: CLI > ConfigProvider (global+project+default)
-  const apiBase = String(cliOverrides.escalateApiBase ?? fullConfig.escalateApiBase ?? 'https://api.deepseek.com/v1')
-  const apiKey = cliOverrides.escalateApiKey ?? fullConfig.escalateApiKey ?? undefined
-  const flashModel = String(cliOverrides.escalateFlashModel ?? fullConfig.escalateFlashModel ?? 'deepseek-v4-flash')
-  const proModel = String(cliOverrides.escalateProModel ?? fullConfig.escalateProModel ?? 'deepseek-v4-pro')
-  const host = String(cliOverrides.escalateHost ?? fullConfig.escalateHost ?? 'localhost')
+  const apiBase = String(cliOverrides['escalateApiBase'] ?? fullConfig.escalateApiBase ?? 'https://api.deepseek.com/v1')
+  const apiKey = cliOverrides['escalateApiKey'] ?? fullConfig.escalateApiKey ?? undefined
+  const flashModel = String(cliOverrides['escalateFlashModel'] ?? fullConfig.escalateFlashModel ?? 'deepseek-v4-flash')
+  const proModel = String(cliOverrides['escalateProModel'] ?? fullConfig.escalateProModel ?? 'deepseek-v4-pro')
+  const host = String(cliOverrides['escalateHost'] ?? fullConfig.escalateHost ?? 'localhost')
 
-  const portRaw = cliOverrides.escalatePort ?? fullConfig.escalatePort
+  const portRaw = cliOverrides['escalatePort'] ?? fullConfig.escalatePort
   const port = typeof portRaw === 'number' ? portRaw : 8080
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid escalatePort: ${port} (must be an integer in [1, 65535])`)

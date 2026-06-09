@@ -56,6 +56,8 @@ export interface OutlineOptions {
     error: (message: string) => void;
     warn?: (message: string) => void;
   };
+  /** Log level for summarizer (pass through from --log-level) */
+  logLevel?: string;
   /** Skip workspace ignore checks (for single-file mode) */
   skipIgnoreCheck?: boolean;
 }
@@ -92,7 +94,7 @@ interface OutlineData {
  * @returns Formatted outline (text or JSON)
  */
 export async function extractOutline(options: OutlineOptions): Promise<string> {
-  const { filePath, workspacePath, json, summarize, title, clearSummarizeCache, configPath, fileSystem, pathUtils, logger } = options;
+  const { filePath, workspacePath, json, summarize, title, clearSummarizeCache, configPath, fileSystem, pathUtils, logger, logLevel } = options;
 
   // Resolve target path (handle both absolute and relative paths)
   let targetPath = filePath;
@@ -115,7 +117,7 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
 
   // Return output based on format
   if (json) {
-    const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, title, clearSummarizeCache, configPath, logger);
+    const output = await getOutlineAsJson(targetPath, fileSystem, pathUtils, workspacePath, summarize, title, clearSummarizeCache, configPath, logger, logLevel);
     return output;
   } else {
     const output = await getOutlineAsText(
@@ -128,7 +130,8 @@ export async function extractOutline(options: OutlineOptions): Promise<string> {
       title,
       clearSummarizeCache,
       configPath,
-      logger
+      logger,
+      logLevel
     );
     return output;
   }
@@ -176,7 +179,8 @@ async function getOutlineAsText(
     info: (message: string) => void;
     error: (message: string) => void;
     warn?: (message: string) => void;
-  }
+  },
+  logLevel?: string
 ): Promise<string> {
   // 1. Build structured definitions (NEW single source of truth)
   const outlineData = await buildOutlineDefinitions(
@@ -196,7 +200,7 @@ async function getOutlineAsText(
   }
 
   // 3. Create summarizer
-  const summarizer = await createSummarizerForOutline(workspacePath, configPath);
+  const summarizer = await createSummarizerForOutline(workspacePath, configPath, logLevel);
   if (!summarizer) {
     if (logger?.warn) logger.warn('Warning: Summarizer not configured. Continuing without summaries.');
     else logger?.info('Warning: Summarizer not configured. Continuing without summaries.');
@@ -244,7 +248,8 @@ async function getOutlineAsJson(
     info: (message: string) => void;
     error: (message: string) => void;
     warn?: (message: string) => void;
-  }
+  },
+  logLevel?: string
 ): Promise<string> {
   // 1. Build structured definitions (same as text path)
   const workspace = createFallbackWorkspace(workspacePath, pathUtils);
@@ -260,7 +265,7 @@ async function getOutlineAsJson(
 
   // 2. Generate summaries if requested
   if (summarize) {
-    const summarizer = await createSummarizerForOutline(workspacePath, configPath);
+    const summarizer = await createSummarizerForOutline(workspacePath, configPath, logLevel);
     if (summarizer) {
       // Apply cache and generate summaries
       await applySummaryCache(
@@ -568,7 +573,8 @@ export async function createStorageForOutline(workspacePath: string): Promise<IS
  */
 async function createSummarizerForOutline(
   workspacePath: string,
-  configPath?: string
+  configPath?: string,
+  logLevel?: string
 ): Promise<ISummarizer | undefined> {
   try {
     const resolvedConfigPath = configPath || path.join(workspacePath, 'autodev-config.json');
@@ -581,7 +587,7 @@ async function createSummarizerForOutline(
       },
       loggerOptions: {
         name: 'Outline',
-        level: 'error',
+        level: (logLevel || 'error') as 'debug' | 'info' | 'warn' | 'error',
         timestamps: true,
         colors: true
       },

@@ -61,7 +61,8 @@ async function handleOutline(pattern: string, options: CommandOptions): Promise<
           workspace,
           pathUtils: deps.pathUtils,
           logger: deps.logger,
-          skipIgnoreCheck: !resolved.isGlob
+          skipIgnoreCheck: !resolved.isGlob,
+          logLevel: options.logLevel
         });
 
         console.log(result);
