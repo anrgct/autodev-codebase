@@ -4,6 +4,14 @@ import { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
 
+interface FileSession {
+  session: LlamaChatSession
+  sequence: LlamaContextSequence
+  sqIdx: number
+  /** Snapshot of chat history containing only the system message, used to trim after each batch. */
+  systemOnlyHistory: import("@realtimex/node-llama-cpp").ChatHistoryItem[]
+}
+
 export class LlamaCppSummarizer implements ISummarizer {
   private readonly model: LlamaModel
   private readonly defaultLanguage: 'English' | 'Chinese'
@@ -15,6 +23,12 @@ export class LlamaCppSummarizer implements ISummarizer {
   private _sequencePool: LlamaContextSequence[] = []
   private _seqIdx: number = 0
   private _contextPoolPromise: Promise<void> | null = null
+
+  // Per-file session (shared across batches for KV cache reuse)
+  private _fileSession: FileSession | null = null
+  private _fileSessionKey: string = ''
+  // Serialize batch processing for the same file (batches share one sequence)
+  private _batchChain: Promise<void> = Promise.resolve()
 
   constructor(
     model: LlamaModel,
@@ -29,8 +43,8 @@ export class LlamaCppSummarizer implements ISummarizer {
     this.temperature = temperature
     this.logger = logger
     this._concurrency = concurrency
-    // 池化: slot 数 = 并发数. 之前 ×2 是为兑底 _reclaimUnusedSequenceId 的
-    // fire-and-forget race, 现在池化方案完全避开了 race, 不再需要冗余 slot.
+    // Pool: one sequence per concurrent file.
+    // Within a file, batches are serialized on the same sequence for KV cache reuse.
     this._sequences = sequences ?? concurrency
   }
 
@@ -48,10 +62,11 @@ export class LlamaCppSummarizer implements ISummarizer {
         sequences: this._sequences,
       })
       this._contexts = [ctx]
-      // Pooling: 一次性从 context 拿 _sequences 个 sequence, 永久持有
-      // 避免 _reclaimUnusedSequenceId 的 fire-and-forget race
-      // (见 docs/plans/260608-no-sequences-left-root-cause.md)
-      // clearHistory() 负责在每次 call 前重置 KV cache, 不再调 native dispose
+      // Pooling: grab all _sequences sequences from context once, hold permanently.
+      // Avoids _reclaimUnusedSequenceId fire-and-forget race
+      // (see docs/plans/260608-no-sequences-left-root-cause.md).
+      // clearHistory() called once per file (on session creation), not per batch.
+      // KV cache is preserved across batches via session reuse + setChatHistory trim.
       for (let i = 0; i < this._sequences; i++) {
         this._sequencePool.push(ctx.getSequence())
       }
@@ -191,17 +206,41 @@ export class LlamaCppSummarizer implements ISummarizer {
     return null
   }
 
-  private buildPrompt(request: SummarizerBatchRequest): string {
-    const { blocks, language, document, filePath } = request
+  /**
+   * Build system prompt: stable prefix shared across all batches of the same file.
+   * Includes instructions, file path, and shared document context.
+   * Placed in the system prompt so it survives context shifts and enables KV cache reuse.
+   */
+  private buildSystemPrompt(request: SummarizerBatchRequest): string {
+    const { document, filePath, language } = request
 
-    let prompt = `You are given ${blocks.length} individual code snippet(s). Generate ONE semantic description for EACH snippet below:\n\n`
+    let prompt = `You are a code summarization assistant. Generate concise semantic descriptions for code snippets.\n`
+    prompt += `- Focus on logic, implementation details, business role\n`
+    prompt += `- **Start directly with verbs**, NO prefixes like "Function X" or "Class Y"\n`
+    prompt += `- For core implementations, include keywords like "implements", "logic"\n`
 
     if (filePath) {
-      prompt += `[File]: ${filePath}\n\n`
+      prompt += `\n[File]: ${filePath}\n`
     }
     if (document) {
-      prompt += `[Shared Context]:\n\`\`\`\n${document}\n\`\`\`\n\n`
+      prompt += `\n[Shared Context]:\n\`\`\`\n${document}\n\`\`\`\n`
     }
+
+    if (language === 'Chinese') {
+      prompt += `\nIMPORTANT: Respond in **Chinese (中文)**. Each description must be 30-80 Chinese characters.\n`
+    }
+
+    return prompt
+  }
+
+  /**
+   * Build user prompt: variable content that changes per batch.
+   * Contains only the snippets and output format for this specific batch.
+   */
+  private buildUserPrompt(request: SummarizerBatchRequest): string {
+    const { blocks, language, document } = request
+
+    let prompt = `Generate ONE semantic description for EACH of the ${blocks.length} snippet(s) below:\n\n`
 
     blocks.forEach((block, index) => {
       prompt += `### Snippet ${index + 1}\n\n`
@@ -215,16 +254,6 @@ export class LlamaCppSummarizer implements ISummarizer {
       }
     })
 
-    prompt += `Requirements:\n`
-    prompt += `- Generate semantic description for each snippet\n`
-    prompt += `- Focus on logic, implementation details, business role\n`
-    prompt += `- **Start directly with verbs**, NO prefixes like "Function X" or "Class Y"\n`
-    prompt += `- For core implementations, include keywords like "implements", "logic"\n\n`
-
-    if (language === 'Chinese') {
-      prompt += `IMPORTANT: Respond in **Chinese (中文)**. Each description must be 30-80 Chinese characters.\n\n`
-    }
-
     const placeholder = language === 'Chinese' ? '[描述]' : '[DESCRIPTION]'
 
     prompt += `Output format:\n`
@@ -232,45 +261,98 @@ export class LlamaCppSummarizer implements ISummarizer {
       prompt += `{"index":${i},"summary":"${placeholder}"}\n`
     }
     if (blocks.length === 1) {
-      prompt += `\nReplace ${placeholder} with the actual description. `
-      prompt += `Output ONLY this one line, nothing else.\n`
+      prompt += `\nReplace ${placeholder} with the actual description. Output ONLY this one line.\n`
     } else {
-      prompt += `\nReplace each ${placeholder} with the actual description. `
-      prompt += `Output exactly ${blocks.length} lines. Do NOT add any text before or after.\n`
+      prompt += `\nReplace each ${placeholder} with the actual description. Output exactly ${blocks.length} lines. Do NOT add any text before or after.\n`
     }
 
     return prompt
   }
 
   async summarizeBatch(request: SummarizerBatchRequest): Promise<SummarizerBatchResult> {
-    const prompt = this.buildPrompt(request)
+    // Serialize batch processing: all batches of the same file share one sequence
+    // for KV cache reuse. Concurrent calls are queued via _batchChain.
+    let resolveResult!: (result: SummarizerBatchResult) => void
+    let rejectResult!: (error: unknown) => void
+    const resultPromise = new Promise<SummarizerBatchResult>((resolve, reject) => {
+      resolveResult = resolve
+      rejectResult = reject
+    })
+
+    this._batchChain = this._batchChain.then(async () => {
+      try {
+        const result = await this._summarizeBatchInternal(request)
+        resolveResult(result)
+      } catch (error) {
+        rejectResult(error)
+      }
+    })
+
+    return resultPromise
+  }
+
+  private async _summarizeBatchInternal(request: SummarizerBatchRequest): Promise<SummarizerBatchResult> {
     this.logger?.debug(`Summarizing ${request.blocks.length} blocks for ${request.filePath || 'unknown file'}`)
 
     await this._ensureContexts()
 
-    // 池化分配: 轮询从池中借一个 sequence, 不调 dispose
-    // (避免 _reclaimUnusedSequenceId 的 fire-and-forget race)
-    const sequence = this._sequencePool[this._seqIdx++ % this._sequencePool.length]
+    const fileKey = request.filePath || '__default__'
 
-    // clearHistory 重置 KV cache, 用 withLock(锁) 串行化访问同一个 context
-    await sequence.clearHistory()
+    // Create or reuse file session (one session per file for KV cache prefix reuse)
+    if (!this._fileSession || this._fileSessionKey !== fileKey) {
+      // New file: allocate a sequence from the pool
+      const sqIdx = this._seqIdx++ % this._sequencePool.length
+      const sequence = this._sequencePool[sqIdx]
 
-    const chatWrapper = new QwenChatWrapper({
-      variation: "3.5",
-      thoughts: "discourage",
-    })
-    const session = new LlamaChatSession({ contextSequence: sequence, chatWrapper })
+      // Clear KV cache for a fresh start (only once per file)
+      await sequence.clearHistory()
 
-    const response = await session.prompt(prompt, {
+      const systemPrompt = this.buildSystemPrompt(request)
+      const chatWrapper = new QwenChatWrapper({
+        variation: "3.5",
+        thoughts: "discourage",
+      })
+      const session = new LlamaChatSession({
+        contextSequence: sequence,
+        chatWrapper,
+        systemPrompt,
+      })
+      // Snapshot the initial chat history (system message only) for trimming after each batch.
+      // Uses getChatHistory() to ensure the text format matches what generateInitialChatHistory produces.
+      const systemOnlyHistory = session.getChatHistory()
+
+      this._fileSession = { session, sequence, sqIdx, systemOnlyHistory }
+      this._fileSessionKey = fileKey
+      this.logger?.debug(`[LlamaCppSummarizer] Created file session for "${fileKey}" on seq#${sqIdx}`)
+    }
+
+    const { session } = this._fileSession
+    const userPrompt = this.buildUserPrompt(request)
+
+    const response = await session.prompt(userPrompt, {
       temperature: this.temperature,
       maxTokens: 4096,
     })
 
+    // After successful batch: trim chat history to system-only.
+    // This prevents history accumulation while preserving KV cache.
+    // adaptStateToTokens (called internally by alignCurrentSequenceStateWithCurrentTokens)
+    // will erase mismatched tail and reuse the system prompt prefix on the next batch.
+    session.setChatHistory(this._fileSession.systemOnlyHistory)
+
     const responseText = response.trim()
+
+    // Normalize smart quotes to ASCII quotes.
+    // Chinese-language models (e.g. MiniCPM-V) occasionally output Chinese-style
+    // quotation marks (\u201c \u201d) instead of ASCII double quotes when the
+    // summary content is in Chinese. These break JSON parsing.
+    const normalizedText = responseText
+      .replace(/[\u201c\u201d]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'")
 
     // Parse JSONL format: each line is {"index": N, "summary": "..."}
     // JSONL is more robust than a single JSON array because each line is independent
-    let jsonl = responseText
+    let jsonl = normalizedText
 
     // Strip markdown code block fences if present
     const codeBlockMatch = jsonl.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
@@ -311,12 +393,13 @@ export class LlamaCppSummarizer implements ISummarizer {
 
     if (summariesMap.size === 0) {
       // Print full raw output for debugging
-      this.logger?.warn(`[RAW] ${responseText}`)
+      this.logger?.warn(`[RAW OUTPUT] ${responseText}`)
+      this.logger?.debug(`[DEBUG FULL INPUT] ${userPrompt}`)
 
       // Fallback: try parsing the entire response as a single JSON object
       // (handles cases where model ignores JSONL instruction and outputs old format)
       try {
-        const parsedFallback = JSON.parse(responseText)
+        const parsedFallback = JSON.parse(normalizedText)
         if (parsedFallback && typeof parsedFallback === 'object') {
           let fallbackSummaries: string[] = []
           if (typeof parsedFallback.summaries === 'string') {
@@ -370,15 +453,19 @@ export class LlamaCppSummarizer implements ISummarizer {
   async validateConfiguration(): Promise<{ valid: boolean; error?: string }> {
     try {
       await this._ensureContexts()
-      // 池化: 复用 _sequencePool[0] 验证, 不再 getSequence + dispose (避免 race)
+      // Pooled: reuse _sequencePool[0] for validation, no getSequence+dispose (avoids race)
       const sequence = this._sequencePool[0]
       await sequence.clearHistory()
       const chatWrapper = new QwenChatWrapper({
         variation: "3.5",
         thoughts: "discourage",
       })
-      const session = new LlamaChatSession({ contextSequence: sequence, chatWrapper })
-      await session.prompt("test", {
+      const session = new LlamaChatSession({
+        contextSequence: sequence,
+        chatWrapper,
+        systemPrompt: "You are a helpful assistant.",
+      })
+      await session.prompt("Say 'ok'", {
         temperature: this.temperature,
         maxTokens: 10,
       })
@@ -392,8 +479,8 @@ export class LlamaCppSummarizer implements ISummarizer {
   }
 
   async dispose(): Promise<void> {
-    // 先 dispose 池中所有 sequence, 释放 sequence slot
-    // (LlamaContextSequence.dispose 同步返回 void)
+    // Dispose pooled sequences, releasing sequence slots
+    // (LlamaContextSequence.dispose returns void synchronously)
     for (const seq of this._sequencePool) {
       try { seq.dispose() } catch {}
     }
@@ -405,6 +492,11 @@ export class LlamaCppSummarizer implements ISummarizer {
     }
     this._contexts = []
     this._contextPoolPromise = null
+
+    // Clear file session state
+    this._fileSession = null
+    this._fileSessionKey = ''
+    this._batchChain = Promise.resolve()
   }
 
   get summarizerInfo(): SummarizerInfo {
