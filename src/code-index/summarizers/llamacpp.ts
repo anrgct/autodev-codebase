@@ -1,5 +1,5 @@
 import { ISummarizer, SummarizerRequest, SummarizerResult, SummarizerInfo, SummarizerBatchRequest, SummarizerBatchResult } from "../interfaces"
-import { LlamaModel, LlamaChatSession, QwenChatWrapper, LlamaContext, LlamaContextSequence } from "@realtimex/node-llama-cpp"
+import { LlamaModel, LlamaChatSession, LlamaContext, LlamaContextSequence, resolveChatWrapper, ChatWrapper } from "@realtimex/node-llama-cpp"
 import { Logger } from "../../utils/logger"
 
 type LoggerLike = Pick<Logger, 'debug' | 'info' | 'warn' | 'error'>
@@ -19,6 +19,7 @@ export class LlamaCppSummarizer implements ISummarizer {
   private readonly logger?: LoggerLike
   private readonly _concurrency: number
   private readonly _sequences: number
+  private _chatWrapper: ChatWrapper | null = null
   private _contexts: LlamaContext[] = []
   private _sequencePool: LlamaContextSequence[] = []
   private _seqIdx: number = 0
@@ -46,6 +47,32 @@ export class LlamaCppSummarizer implements ISummarizer {
     // Pool: one sequence per concurrent file.
     // Within a file, batches are serialized on the same sequence for KV cache reuse.
     this._sequences = sequences ?? concurrency
+  }
+
+  /**
+   * Resolve (or return cached) ChatWrapper instance based on model and configured type.
+   * Uses resolveChatWrapper for auto-detection or explicit type forcing.
+   */
+  private _resolveChatWrapper(): ChatWrapper {
+    if (!this._chatWrapper) {
+      // Model name → wrapper type override for auto mode
+      // Some models (e.g. MiniCPM) use ChatML Jinja template but work better with Qwen wrapper
+      let effectiveType: string | undefined
+      const filename = this.model.filename?.toLowerCase() || ''
+      if (filename.includes('minicpm')) {
+        effectiveType = 'qwen'
+        this.logger?.debug(`[LlamaCppSummarizer] Model "${filename}" matched pattern, forcing chat wrapper: qwen`)
+      }
+
+      this._chatWrapper = resolveChatWrapper(this.model, {
+        type: effectiveType as any,
+        customWrapperSettings: {
+          qwen: { variation: "3.5", thoughts: "discourage" },
+        }
+      })
+      this.logger?.info(`[LlamaCppSummarizer] Using chat wrapper: ${(this._chatWrapper as any).wrapperName ?? this._chatWrapper.constructor.name}`)
+    }
+    return this._chatWrapper
   }
 
   private async _ensureContexts(): Promise<typeof this._contexts> {
@@ -205,6 +232,51 @@ export class LlamaCppSummarizer implements ISummarizer {
     if (foundComplete) return result
     return null
   }
+  /**
+   * Last-resort extraction: walk raw responseText char by char to find "summary":"..." values.
+   * Handles unescaped double quotes inside the summary string by examining
+   * what follows each closing quote candidate (, } or end-of-text).
+   */
+  private _extractSummaryFromRaw(text: string): string[] {
+    const results: string[] = []
+    const searchStart = '"summary":"'
+    let pos = 0
+    while (pos < text.length) {
+      const startIdx = text.indexOf(searchStart, pos)
+      if (startIdx < 0) break
+
+      const valueStart = startIdx + searchStart.length
+      let i = valueStart
+      let escapeNext = false
+
+      while (i < text.length) {
+        if (escapeNext) {
+          escapeNext = false
+          i++
+          continue
+        }
+        if (text[i] === '\\') {
+          escapeNext = true
+          i++
+          continue
+        }
+        if (text[i] === '"') {
+          const after = text.slice(i + 1).trim()
+          if (after === '' || after.startsWith(',') || after.startsWith('}')) {
+            const summary = text.slice(valueStart, i)
+            results.push(summary)
+            pos = i + 1
+            break
+          }
+        }
+        i++
+      }
+      if (i >= text.length) break
+    }
+    return results
+  }
+
+
 
   /**
    * Build system prompt: stable prefix shared across all batches of the same file.
@@ -308,13 +380,9 @@ export class LlamaCppSummarizer implements ISummarizer {
       await sequence.clearHistory()
 
       const systemPrompt = this.buildSystemPrompt(request)
-      const chatWrapper = new QwenChatWrapper({
-        variation: "3.5",
-        thoughts: "discourage",
-      })
       const session = new LlamaChatSession({
         contextSequence: sequence,
-        chatWrapper,
+        chatWrapper: this._resolveChatWrapper(),
         systemPrompt,
       })
       // Snapshot the initial chat history (system message only) for trimming after each batch.
@@ -354,11 +422,10 @@ export class LlamaCppSummarizer implements ISummarizer {
     // JSONL is more robust than a single JSON array because each line is independent
     let jsonl = normalizedText
 
-    // Strip markdown code block fences if present
-    const codeBlockMatch = jsonl.match(/```(?:json)?\s*\n([\s\S]*?)\n```/)
-    if (codeBlockMatch) {
-      jsonl = codeBlockMatch[1].trim()
-    }
+    // Strip markdown code block fences (with or without closing fence, with or without trailing newline)
+    const openCodeFence = /^```(?:\w+)?\s*/
+    const closeCodeFence = /\n```\s*$/
+    jsonl = jsonl.replace(openCodeFence, '').replace(closeCodeFence, '').trim()
 
     // Also handle inline backtick wrapping
     jsonl = jsonl.replace(/^`+|`+$/g, '').trim()
@@ -369,6 +436,15 @@ export class LlamaCppSummarizer implements ISummarizer {
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed) continue
+
+      // Before JSON.parse: try char-by-char extraction (handles unescaped quotes inside summary)
+      const rawExtracted = this._extractSummaryFromRaw(trimmed)
+      if (rawExtracted.length > 0) {
+        for (const summary of rawExtracted) {
+          summariesMap.set(summariesMap.size + 1, summary.trim())
+        }
+        continue
+      }
 
       let parsed: any
       try {
@@ -394,37 +470,20 @@ export class LlamaCppSummarizer implements ISummarizer {
     if (summariesMap.size === 0) {
       // Print full raw output for debugging
       this.logger?.warn(`[RAW OUTPUT] ${responseText}`)
-      this.logger?.debug(`[DEBUG FULL INPUT] ${userPrompt}`)
+      this.logger?.debug(`[DEBUG FULL INPUT] ${userPrompt.slice(0, 200)}... (${userPrompt.length} chars)`)
 
-      // Fallback: try parsing the entire response as a single JSON object
-      // (handles cases where model ignores JSONL instruction and outputs old format)
-      try {
-        const parsedFallback = JSON.parse(normalizedText)
-        if (parsedFallback && typeof parsedFallback === 'object') {
-          let fallbackSummaries: string[] = []
-          if (typeof parsedFallback.summaries === 'string') {
-            fallbackSummaries = [parsedFallback.summaries]
-          } else if (Array.isArray(parsedFallback.summaries)) {
-            fallbackSummaries = parsedFallback.summaries.map((s: any) =>
-              typeof s === 'string' ? s : (s.summary || '')
-            )
-          } else if (typeof parsedFallback.summary === 'string') {
-            fallbackSummaries = [parsedFallback.summary]
-          }
-
-          if (fallbackSummaries.length > 0) {
-            const summaries = fallbackSummaries.slice(0, request.blocks.length).map((text) => ({
-              summary: text.trim(),
-              language: request.language,
-            }))
-            while (summaries.length < request.blocks.length) {
-              summaries.push({ summary: '', language: request.language })
-            }
-            return { summaries }
-          }
+      // Last-resort: manually extract "summary":"..." from raw responseText
+      // Handles unescaped quotes inside summary by walking char by char
+      const extracted = this._extractSummaryFromRaw(responseText)
+      if (extracted.length > 0) {
+        const summaries = extracted.slice(0, request.blocks.length).map((text) => ({
+          summary: text.trim(),
+          language: request.language,
+        }))
+        while (summaries.length < request.blocks.length) {
+          summaries.push({ summary: '', language: request.language })
         }
-      } catch {
-        // Fallback also failed, will throw below
+        return { summaries }
       }
 
       throw new Error(
@@ -456,13 +515,9 @@ export class LlamaCppSummarizer implements ISummarizer {
       // Pooled: reuse _sequencePool[0] for validation, no getSequence+dispose (avoids race)
       const sequence = this._sequencePool[0]
       await sequence.clearHistory()
-      const chatWrapper = new QwenChatWrapper({
-        variation: "3.5",
-        thoughts: "discourage",
-      })
       const session = new LlamaChatSession({
         contextSequence: sequence,
-        chatWrapper,
+        chatWrapper: this._resolveChatWrapper(),
         systemPrompt: "You are a helpful assistant.",
       })
       await session.prompt("Say 'ok'", {
