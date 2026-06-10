@@ -87,10 +87,14 @@ export class CodeIndexSearchService {
         throw new Error("Failed to generate embedding for query.")
       }
 
-      // Query 嵌入完成后立即释放 embedder 的 GPU 显存，
-      // 让 reranker/highlighter 有更多空间。
-      // embedder 是惰性加载的，后续如需重新嵌入会自动重载。
-      await this.embedder.dispose?.().catch(() => {})
+      // Query 嵌入完成后，如果启用了 reranker/highlighter，
+      // 则释放 embedder 的 GPU 显存给它们用。
+      // 如果没有 reranker/highlighter，保留 embedder 避免重复加载。
+      const needsGpuForRerank = this.reranker != null
+      const needsGpuForHighlight = this.highlighter != null && this.configManager.highlighterConfig?.enabled
+      if (needsGpuForRerank || needsGpuForHighlight) {
+        await this.embedder.dispose?.().catch(() => {})
+      }
 
       // Perform search - 防止调用方传入未验证的参数
       const finalLimit = validateLimit(filter?.limit ?? configMaxResults)

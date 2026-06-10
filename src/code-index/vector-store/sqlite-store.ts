@@ -1051,7 +1051,13 @@ function reciprocalRankFusion(
  * Note: `-` is the NOT prefix operator in FTS5, so any bareword
  * containing a hyphen must be quoted to prevent FTS5 from misparsing.
  */
-const FTS5_RESERVED = /["*():^\-+]/
+/**
+ * Regex matching tokens that are safe as FTS5 barewords: only ASCII
+ * alphanumeric characters and underscores. Any token containing
+ * punctuation symbols (`.`, `?`, `'`, `#`, `@`, `/`, `>`, `,`, etc.)
+ * must be quoted to prevent FTS5 syntax errors.
+ */
+const FTS5_BAREWORD_SAFE = /^[a-zA-Z0-9_]+$/
 
 /**
  * Turn the user-supplied search string into an FTS5 query that mirrors
@@ -1094,10 +1100,12 @@ export function buildFtsBm25Query(rawQuery: string): string {
   const parts: string[] = [...phrases]
   for (const tok of stripped.split(/\s+/)) {
     if (!tok) continue
-    if (FTS5_RESERVED.test(tok)) {
-      parts.push(`"${tok.replace(/"/g, '""')}"`)
-    } else {
+    // Quote any token that contains non-bareword characters
+    // (punctuation, operators, special symbols, etc.)
+    if (FTS5_BAREWORD_SAFE.test(tok)) {
       parts.push(tok)
+    } else {
+      parts.push(`"${tok.replace(/"/g, '""')}"`)
     }
   }
 
