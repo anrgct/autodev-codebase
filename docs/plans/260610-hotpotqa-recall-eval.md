@@ -2,7 +2,7 @@
 
 ## 主题/需求
 
-用 autodev-codebase 的检索能力评测 HotpotQA 数据集的 Recall@K，使用基础配置（无 reranker、无 highlighter），与 HippoRAG 的检索指标对齐。
+用 autodev-codebase 的检索能力评测多数据集 Recall@K，使用基础配置（无 reranker、无 highlighter），与 HippoRAG 的检索指标对齐。
 
 配置基线：
 - `embedderProvider: "llamacpp"` + Jina v5 nano GGUF
@@ -17,16 +17,41 @@
 | 文件 | 说明 |
 |------|------|
 | `scripts/hotpotqa-eval.ts` | 评测主脚本，用 Library API 索引 + 检索 + 算 Recall |
-| `scripts/prepare-corpus.py` | 将 HippoRAG 格式的 HotpotQA 语料转成 .md 文件 |
+| `scripts/prepare-corpus.py` | 将 HippoRAG 格式的语料转成 .md 文件 |
 | `src/code-index/search-service.ts` | 搜索服务，含 embedder dispose 逻辑 |
 | `src/code-index/vector-store/sqlite-store.ts` | SQLite 向量存储，含 `buildFtsBm25Query` 混合搜索 |
 | `src/code-index/manager.ts` | CodeIndexManager 单例管理和初始化 |
 
-### HotpotQA 数据
+### 数据格式
 
-- 语料：9811 篇文档，位于 `/Users/anrgct/workspace/HippoRAG/reproduce/dataset/hotpotqa_corpus.json`
-- Query：1000 条，位于 `/Users/anrgct/workspace/HippoRAG/reproduce/dataset/hotpotqa.json`
-- 每条 query 有 `supporting_facts` 和 `context` 标注 gold 文档
+#### HotpotQA / 2WikiMultihopQA
+
+格式一致，位于 HippoRAG `reproduce/dataset/` 目录：
+
+- 语料：`hotpotqa_corpus.json` / `2wikimultihopqa_corpus.json`，格式 `[{title, text, idx}]`
+- Query：`hotpotqa.json` / `2wikimultihopqa.json`，格式 `[{_id, question, answer, supporting_facts: [[title, sent_idx]], context: [[title, [sentences]]]}]`
+
+#### Musique
+
+- 语料：`musique_corpus.json`，格式 `[{title, text}]`（无 `idx` 字段）
+- Query：`musique.json`，格式 `[{id, question, answer, paragraphs: [{title, paragraph_text, is_supporting}]}]`（使用 `paragraphs[].is_supporting` 替代 `supporting_facts`）
+
+#### 数据集统计
+
+| 数据集 | 语料文档数 | 平均 gold/query | 最大 gold/query | Query 数 |
+|--------|-----------|----------------|----------------|---------|
+| HotpotQA | 9,811 | 2.00 | 2 | 1,000 |
+| 2WikiMultihopQA | 6,119 | 2.47 | 4 | 1,000 |
+| Musique | 11,656 | 2.60 | 4 | 1,000 |
+
+#### 格式差异处理
+
+脚本 `scripts/hotpotqa-eval.ts` 自动检测 query 格式：
+- 如果含 `paragraphs` 字段 → Musique 格式，从 `is_supporting` 提取 gold 文档
+- 如果含 `supporting_facts` 字段 → HotpotQA/2WikiMultihopQA 格式，从 `supporting_facts` + `context` 提取
+- `_id` / `id` 字段自动兼容
+
+脚本 `scripts/prepare-corpus.py` 修复了 `idx` 字段可选，兼容 Musique corpus 无 `idx` 的情况。
 
 ## 运行现象
 
@@ -78,6 +103,7 @@ INFO  [Eval] LlamaCPP model loaded, context size: 8192 tokens
 3. **有条件 dispose**：只在有 reranker 或 highlighter 时才释放 embedder，基础配置下持久保留。
 4. **状态恢复**：单条 query 失败后 catch 异常并恢复 state="Indexed"，继续处理后续 query。
 5. **`.md` 文件不加 `#` 标题**：利用 `CodeParser.parseMarkdownContent` 在无 header 时把整个文件当单一 section 处理的特性，每个文档作为一个索引块。
+6. **自动检测 query 格式**：支持 HotpotQA / 2WikiMultihopQA / Musique 三种数据集，无需手动切换脚本。
 
 ## 实施计划
 
@@ -87,8 +113,12 @@ INFO  [Eval] LlamaCPP model loaded, context size: 8192 tokens
 - [x] 修复 FTS5 特殊字符崩溃
 - [x] 修复 embedder 每 query 重载问题
 - [x] 修复单 query 失败后全局锁死
-- [x] 首次全量评测（1000 query 全部通过）
+- [x] HotpotQA 首次全量评测（1000 query 全部通过）
 - [x] 修正配置显示（llamacpp GGUF 文件名、llamacpp-llm GGUF 文件名）
+- [x] Musique 格式兼容 + 评测
+- [x] 2WikiMultihopQA 评测
+- [x] `prepare-corpus.py` 兼容无 `idx` 字段的 corpus 格式
+- [x] 更新文档汇总三数据集对比结果
 
 ## 实施记录
 
@@ -105,6 +135,11 @@ INFO  [Eval] LlamaCPP model loaded, context size: 8192 tokens
 - 单个 query 失败后 state="Error" 导致后续全部失败 → 添加 catch + state 恢复逻辑
 - 第一次完整跑完：1000/1000 成功，0 失败，Recall@1=41.10%
 - 配置显示 `unknown` → 修复 `await getConfig()`
+- 扩展 `scripts/hotpotqa-eval.ts` 支持 Musique 格式（auto-detect `paragraphs` 字段）
+  - 新增 `MusiqueQuery` 接口、`getQueryId()`、`extractGoldTitles()` 自动分支
+- 修复 `scripts/prepare-corpus.py` 中 `idx` 字段为可选，兼容 Musique corpus（无 `idx`）
+- Musique 评测完成：R@1=26.95%（1000 queries, 0 失败）
+- 2WikiMultihopQA 评测完成：R@1=39.05%（1000 queries, 0 失败）
 
 ## 修订记录
 
@@ -115,6 +150,12 @@ INFO  [Eval] LlamaCPP model loaded, context size: 8192 tokens
 **问题：** 每次 search 都重载 embedder 模型，性能极差
 **修复：** `src/code-index/search-service.ts` 只在有 reranker 或 highlighter 时 `embedder.dispose()`
 
+**问题：** Musique corpus 无 `idx` 字段导致 `prepare-corpus.py` 崩溃
+**修复：** `scripts/prepare-corpus.py` 将 `doc["idx"]` 改为 `doc.get("idx")`
+
+**问题：** HotpotQA eval 脚本不支持 Musique 格式（`paragraphs` vs `supporting_facts`）
+**修复：** `scripts/hotpotqa-eval.ts` 自动检测 `paragraphs` 字段并切换提取逻辑
+
 ## 总结
 
 ### 最终结果
@@ -122,28 +163,59 @@ INFO  [Eval] LlamaCPP model loaded, context size: 8192 tokens
 ```
 配置: llamacpp / v5-nano-retrieval-Q8_0-pooling-LAST
 Pooling: model-builtin, 混合搜索: true
-Query 数: 1000
-
-Recall@1    = 41.10%
-Recall@2    = 62.75%
-Recall@5    = 83.75%
-Recall@10   = 91.10%
-Recall@20   = 93.85%
-Recall@50   = 95.95% (此后停滞)
+Query 数: 1000 (各数据集)
 ```
+
+| Recall@K | **HotpotQA** | **2WikiMultihopQA** | **Musique** |
+|:---------|:-----------|:-------------------|:----------|
+| 1        | **41.10%** | **39.05%** | **26.95%** |
+| 2        | **62.75%** | **57.35%** | **38.97%** |
+| 5        | **83.75%** | **66.88%** | **54.12%** |
+| 10       | **91.10%** | **70.78%** | **63.81%** |
+| 20       | **93.85%** | **73.38%** | **73.38%** |
+| 50       | **95.95%** | **77.60%** | **83.64%** |
+| 100+     | —          | 77.60% (停滞)    | 83.64% (停滞) |
+
+#### 额外观察
+
+- 2WikiMultihopQA 有 **461/1000** query 在 top-200 内无法召回全部 gold 文档
+- Musique 和 2WikiMultihopQA 的 R@50 后几乎停滞，说明约 16-22% 的 gold 文档完全不在 top-200 检索结果中
+- HotpotQA 在 R@50 即接近饱和（95.95%），是三个数据集中检索难度最低的
 
 ### 使用命令
 
 ```bash
-# 1. 数据准备：将 HotpotQA 语料转为 .md 文件
+# 1. 数据准备
 python scripts/prepare-corpus.py \
     --corpus /path/to/hipporag/reproduce/dataset/hotpotqa_corpus.json \
     --out /tmp/hotpotqa-corpus
 
-# 2. 运行评测（索引 + 检索 + 算 Recall）
+python scripts/prepare-corpus.py \
+    --corpus /path/to/hipporag/reproduce/dataset/musique_corpus.json \
+    --out /tmp/musique-corpus
+
+python scripts/prepare-corpus.py \
+    --corpus /path/to/hipporag/reproduce/dataset/2wikimultihopqa_corpus.json \
+    --out /tmp/2wikimultihopqa-corpus
+
+# 2. 运行评测（自动检测数据集格式）
 npx tsx scripts/hotpotqa-eval.ts \
     --corpus-dir /tmp/hotpotqa-corpus \
     --queries /path/to/hipporag/reproduce/dataset/hotpotqa.json \
+    --config autodev-config.json \
+    --k-list 1,2,5,10,20,50,100,150,200 \
+    --log-level info
+
+npx tsx scripts/hotpotqa-eval.ts \
+    --corpus-dir /tmp/musique-corpus \
+    --queries /path/to/hipporag/reproduce/dataset/musique.json \
+    --config autodev-config.json \
+    --k-list 1,2,5,10,20,50,100,150,200 \
+    --log-level info
+
+npx tsx scripts/hotpotqa-eval.ts \
+    --corpus-dir /tmp/2wikimultihopqa-corpus \
+    --queries /path/to/hipporag/reproduce/dataset/2wikimultihopqa.json \
     --config autodev-config.json \
     --k-list 1,2,5,10,20,50,100,150,200 \
     --log-level info
@@ -154,4 +226,5 @@ npx tsx scripts/hotpotqa-eval.ts \
 1. **autodev-codebase 可作为通用检索系统的评估工具**：只需将语料转成 `.md` 文件即可索引和检索，不需要任何代码解析能力。
 2. **混合搜索的 BM25 (FTS5) 对标点敏感**：需要 quote 所有非字母数字 token。
 3. **embedder dispose 策略需要感知组件状态**：无 reranker/highlighter 时应保留 embedder。
-4. **基础配置 Recall@10=91.10% 对 HotpotQA 是合理的 baseline**，后续加 reranker 应有进一步提升空间。
+4. **不同数据集的检索难度差异显著**：基础配置下 HotpotQA（R@10=91.10%）远易于 Musique（R@10=63.81%）和 2WikiMultihopQA（R@10=70.78%）。
+5. **评测脚本一次编写、多数据集通用**：通过自动检测 query 格式，`hotpotqa-eval.ts` 可以无需修改地跑 HotpotQA、2WikiMultihopQA、Musique 三种数据集。

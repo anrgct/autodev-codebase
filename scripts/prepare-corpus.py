@@ -55,7 +55,7 @@ def main():
     for doc in corpus:
         title = doc["title"]
         text = doc["text"]
-        idx = doc["idx"]
+        _idx = doc.get("idx")  # optional, unused but kept for compatibility
 
         safe_name = sanitize_filename(title)
         filename = f"{safe_name}.md"

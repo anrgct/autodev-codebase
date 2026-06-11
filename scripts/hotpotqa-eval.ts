@@ -52,6 +52,22 @@ interface HotpotQAQuery {
   context: [string, string[]][]         // [title, sentences]
 }
 
+interface MusiqueQuery {
+  id: string
+  answer: string
+  question: string
+  paragraphs: {
+    idx: number
+    title: string
+    paragraph_text: string
+    is_supporting: boolean
+  }[]
+  answer_aliases: string[]
+  answerable: boolean
+}
+
+type Query = HotpotQAQuery | MusiqueQuery
+
 interface RecallResult {
   queryId: string
   question: string
@@ -117,19 +133,41 @@ function filePathToTitle(filePath: string, titleMap: Map<string, string>): strin
   return basename
 }
 
-/** 从 HotpotQA json 中提取 gold 文档标题列表 */
-function extractGoldTitles(query: HotpotQAQuery): string[] {
+/** 从 query 中提取 gold 文档标题列表，支持 HotpotQA 和 Musique 两种格式 */
+function extractGoldTitles(query: Query): string[] {
   const titles = new Set<string>()
-  for (const [title] of query.supporting_facts) {
-    titles.add(title)
-  }
-  // 有些 query 的 supporting_facts 可能不完整，用 context 补全
-  for (const [title] of query.context) {
-    if (query.supporting_facts.some(([t]) => t === title)) {
+
+  if ("supporting_facts" in query) {
+    // HotpotQA 格式
+    const hq = query as HotpotQAQuery
+    for (const [title] of hq.supporting_facts) {
       titles.add(title)
     }
+    // 有些 query 的 supporting_facts 可能不完整，用 context 补全
+    for (const [title] of hq.context) {
+      if (hq.supporting_facts.some(([t]) => t === title)) {
+        titles.add(title)
+      }
+    }
+  } else {
+    // Musique 格式
+    const mq = query as MusiqueQuery
+    for (const p of mq.paragraphs) {
+      if (p.is_supporting) {
+        titles.add(p.title)
+      }
+    }
   }
+
   return Array.from(titles)
+}
+
+/** 获取 query 的唯一 ID，支持两种格式 */
+function getQueryId(query: Query): string {
+  if ("_id" in query) {
+    return (query as HotpotQAQuery)._id
+  }
+  return (query as MusiqueQuery).id
 }
 
 /** Recherche des K à évaluer */
@@ -146,7 +184,7 @@ const DEFAULT_K_LIST = [1, 2, 5, 10, 20, 50, 100, 150, 200]
  */
 async function evaluateQuery(
   manager: CodeIndexManager,
-  query: HotpotQAQuery,
+  query: Query,
   titleMap: Map<string, string>,
   kList: number[],
 ): Promise<RecallResult> {
@@ -185,7 +223,7 @@ async function evaluateQuery(
   }
 
   return {
-    queryId: query._id,
+    queryId: getQueryId(query),
     question: query.question,
     goldTitles,
     recalls,
@@ -226,7 +264,15 @@ async function main() {
   log.info(`已加载 ${titleMap.size} 个文档映射`)
 
   // 加载 queries
-  const queries: HotpotQAQuery[] = JSON.parse(fs.readFileSync(queriesPath, "utf-8"))
+  const rawQueries: any[] = JSON.parse(fs.readFileSync(queriesPath, "utf-8"))
+  // 自动检测格式
+  const isMusique = "paragraphs" in (rawQueries[0] || {})
+  if (isMusique) {
+    log.info(`检测到 Musique 格式 (${rawQueries.length} queries)`)
+  } else {
+    log.info(`检测到 HotpotQA 格式 (${rawQueries.length} queries)`)
+  }
+  const queries: Query[] = rawQueries
   log.info(`已加载 ${queries.length} 个 query`)
 
   // 创建 CodeIndexManager
@@ -342,8 +388,10 @@ async function main() {
     pooled,
   }
 
+  const datasetName = "paragraphs" in (rawQueries[0] || {}) ? "Musique" : "HotpotQA"
+
   console.log("\n" + "=".repeat(60))
-  console.log("  HotpotQA Recall@K 评测结果")
+  console.log(`  ${datasetName} Recall@K 评测结果`)
   console.log("=".repeat(60))
   console.log(`  配置: ${finalResults.config.embedder} / ${finalResults.config.model}`)
   console.log(`  Pooling: ${finalResults.config.poolingMode}`)
@@ -356,7 +404,7 @@ async function main() {
   console.log("-".repeat(60))
 
   // 保存详细结果
-  const outPath = `hotpotqa-recall-${Date.now()}.json`
+  const outPath = `${datasetName.toLowerCase()}-recall-${Date.now()}.json`
   fs.writeFileSync(outPath, JSON.stringify(finalResults, null, 2), "utf-8")
   console.log(`\n详细结果已保存: ${outPath}`)
 
