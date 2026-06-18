@@ -2,7 +2,7 @@
  * Defines profiles for different embedding models, including their dimensions.
  */
 
-export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway" | "llamacpp" | "llamacpp-llm"
+export type EmbedderProvider = "openai" | "ollama" | "openai-compatible" | "jina" | "gemini" | "mistral" | "openrouter" | "vercel-ai-gateway" | "llamacpp" | "llamacpp-llm" | "llm2vec"
 
 export interface EmbeddingModelProfile {
   dimension: number
@@ -73,6 +73,11 @@ export const EMBEDDING_MODEL_PROFILES: EmbeddingModelProfiles = {
   "llamacpp-llm": {
     // Dimensions auto-detected at runtime; these entries serve as known-model overrides.
     // MiniCPM-V-4.6: hidden_dim = 3584 (0.6B) or varies per variant
+  },
+  "llm2vec": {
+    "qwen3-06b-llm2vec-unified-q8_0-mlp": { dimension: 1024 },
+    "qwen3-06b-llm2vec-unified-bf16-mlp": { dimension: 1024 },
+    "qwen3-06b-llm2vec-unified-f16-mlp": { dimension: 1024 },
   },
 }
 
@@ -150,6 +155,14 @@ export function getDefaultModelId(provider: EmbedderProvider): string {
         return defaultLlamaCppModel
       }
       return "unknown-default"
+    }
+    case "llm2vec": {
+      const llm2vecModels = EMBEDDING_MODEL_PROFILES.llm2vec
+      const defaultLlm2vecModel = llm2vecModels && Object.keys(llm2vecModels)[0]
+      if (defaultLlm2vecModel) {
+        return defaultLlm2vecModel
+      }
+      return "qwen3-06b-llm2vec-unified-q8_0-mlp"
     }
     default:
       // Fallback for unknown providers

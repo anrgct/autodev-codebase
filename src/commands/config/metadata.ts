@@ -43,7 +43,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   // Embedder - General
   embedderProvider: {
     type: 'enum',
-    enumValues: ['openai', 'ollama', 'openai-compatible', 'jina', 'gemini', 'mistral', 'vercel-ai-gateway', 'openrouter', 'llamacpp', 'llamacpp-llm'] as const,
+    enumValues: ['openai', 'ollama', 'openai-compatible', 'jina', 'gemini', 'mistral', 'vercel-ai-gateway', 'openrouter', 'llamacpp', 'llamacpp-llm', 'llm2vec'] as const,
     description: 'Embedding provider to use'
   },
   embedderModelId: { type: 'string', description: 'Model identifier for embeddings' },
@@ -88,6 +88,10 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 
   // Embedder - LlamaCPP LLM
   embedderGgufLlmPath: { type: 'string', description: 'Path to LLM GGUF model file for LLM-based embeddings (llamacpp-llm provider)' },
+
+  // Embedder - LLM2Vec
+  embedderGgufLlm2vecPath: { type: 'string', description: 'Path to LLM2Vec GGUF model file (llm2vec provider, e.g. qwen3-06b-llm2vec-unified-q8_0-mlp.gguf)' },
+
   embedderConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent embedding requests for llamacpp-llm embedder' },
   embedderPoolingMode: {
     type: 'enum',

@@ -11,6 +11,7 @@ export type EmbedderProvider =
   | "openrouter"
   | "llamacpp"
   | "llamacpp-llm"
+  | "llm2vec"
 
 /**
  * Ollama embedder configuration
@@ -95,6 +96,15 @@ export interface OpenRouterEmbedderConfig {
 }
 
 /**
+ * LLM2Vec embedder configuration
+ */
+export interface Llm2VecEmbedderConfig {
+  provider: "llm2vec"
+  modelPath: string
+  dimension: number
+}
+
+/**
  * Union type for all embedder configurations
  */
 export type EmbedderConfig =
@@ -106,6 +116,7 @@ export type EmbedderConfig =
   | MistralEmbedderConfig
   | VercelAiGatewayEmbedderConfig
   | OpenRouterEmbedderConfig
+  | Llm2VecEmbedderConfig
 
 /**
  * Configuration state for the code indexing feature
@@ -156,6 +167,9 @@ export interface CodeIndexConfig {
 
   // Embedder - LlamaCPP LLM（通用 LLM 作为 embedder）
   embedderGgufLlmPath?: string
+
+  // Embedder - LLM2Vec 特定参数
+  embedderGgufLlm2vecPath?: string
   embedderConcurrency?: number
   embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
   embedderPoolingLayer?: "last" | number | string
@@ -287,6 +301,7 @@ export type PreviousConfigSnapshot = {
   embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
+  embedderGgufLlm2vecPath?: string
   embedderConcurrency?: number
   embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
   embedderPoolingLayer?: "last" | number | string
@@ -401,6 +416,7 @@ export interface ConfigSnapshot {
   embedderGgufPath?: string
   embedderLlamaCppGpuLayers?: number
   embedderGgufLlmPath?: string
+  embedderGgufLlm2vecPath?: string
   embedderConcurrency?: number
   embedderPoolingMode?: "late-chunking" | "last-token" | "mean" | "qr-weighted"
   embedderPoolingLayer?: "last" | number | string

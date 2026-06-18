@@ -7,6 +7,8 @@ import {
   LLM_EMBEDDER_PREFILL_TEMPLATE,
   JINA_QUERY_PREFIX,
   F2LLM_PREFILL_TEMPLATE,
+  LLM2VEC_QUERY_PREFIX,
+  LLM2VEC_DOCUMENT_PREFIX,
 } from "./instruction-prefix"
 import { IEmbedder } from "../interfaces"
 
@@ -95,6 +97,35 @@ describe("resolveQueryPrefix", () => {
     it('does NOT apply F2LLM prefix for non-F2LLM models', () => {
       const result = resolveQueryPrefix("find auth", "llamacpp-llm", "MiniCPM-V-4_6-Q8_0.gguf", true)
       expect(result).toBe(LLM_EMBEDDER_PREFILL_TEMPLATE + "find auth")
+    })
+  })
+
+  // ── llm2vec（LLM2Vec-Gen，非对称指令，对齐原版 demo_quickstart.py） ──
+  describe("llm2vec provider (LLM2Vec-Gen asymmetric instruction)", () => {
+    it("applies asymmetric query instruction (Generate a passage...)", () => {
+      const result = resolveQueryPrefix("user authentication", "llm2vec", "qwen3-06b-llm2vec-unified-q8_0-mlp")
+      expect(result).toBe(LLM2VEC_QUERY_PREFIX + "user authentication")
+      // 原版 demo_quickstart.py demo_retrieval 的 q_instruction
+      expect(result).toBe("Generate a passage that best answers this question: user authentication")
+    })
+
+    it("always applies prefix regardless of enableLlmPrefix (model is instruction-tuned)", () => {
+      // enableLlmPrefix 是 llamacpp-llm 的开关，对 llm2vec 不生效
+      const result = resolveQueryPrefix("auth", "llm2vec", undefined, false)
+      expect(result).toBe(LLM2VEC_QUERY_PREFIX + "auth")
+    })
+
+    it("prevents duplicate prefill", () => {
+      const prefilled = LLM2VEC_QUERY_PREFIX + "existing"
+      const result = resolveQueryPrefix(prefilled, "llm2vec", "qwen3-06b-llm2vec-unified-q8_0-mlp")
+      expect(result).toBe(prefilled)
+    })
+
+    it("does NOT use the demo_llamacpp 'Query:'/'Document:' labels (those are the wrong source)", () => {
+      const result = resolveQueryPrefix("x", "llm2vec", undefined)
+      expect(result).not.toContain("Query:")
+      expect(result).not.toContain("a web search query")
+      expect(result).not.toContain("Instruct:")
     })
   })
 
@@ -260,6 +291,31 @@ describe("resolveDocumentPrefix", () => {
         "jina-embeddings-v5-nano-retrieval.gguf",
       )
       expect(resolveDocumentPrefix(embedder)).toBeUndefined()
+    })
+  })
+
+  describe("llm2vec provider", () => {
+    it("always returns asymmetric document instruction (Summarize the following passage)", () => {
+      const embedder = createMockEmbedder("llm2vec")
+      const result = resolveDocumentPrefix(embedder)
+      expect(result).toBe(LLM2VEC_DOCUMENT_PREFIX)
+      // 原版 demo_quickstart.py demo_retrieval 的 d_instruction
+      expect(result).toBe("Summarize the following passage: ")
+    })
+
+    it("returns document instruction regardless of enableLlmPrefix (not gated by it)", () => {
+      const embedder = createMockEmbedder("llm2vec", undefined, false)
+      expect(resolveDocumentPrefix(embedder)).toBe(LLM2VEC_DOCUMENT_PREFIX)
+    })
+
+    it("query and document use DIFFERENT instructions (Generate... vs Summarize...)", () => {
+      // 原版非对称：query 要「生成答案」，document 要「总结」，措辞不同，无 label 后缀
+      expect(LLM2VEC_QUERY_PREFIX).toBe("Generate a passage that best answers this question: ")
+      expect(LLM2VEC_DOCUMENT_PREFIX).toBe("Summarize the following passage: ")
+      expect(LLM2VEC_QUERY_PREFIX).not.toBe(LLM2VEC_DOCUMENT_PREFIX)
+      // 都没有 "Query:"/"Document:" label（那是 demo_llamacpp 第二版的写法）
+      expect(LLM2VEC_QUERY_PREFIX).not.toContain("Query:")
+      expect(LLM2VEC_DOCUMENT_PREFIX).not.toContain("Document:")
     })
   })
 

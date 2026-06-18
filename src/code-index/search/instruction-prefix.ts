@@ -20,6 +20,22 @@ export const JINA_QUERY_PREFIX = "Query: "
 export const F2LLM_PREFILL_TEMPLATE = "Instruct: find relevant passages\nQuery: "
 
 /**
+ * LLM2Vec-Gen-Qwen3 检索前缀模板（对齐原版 demo_quickstart.py 的 demo_retrieval）。
+ *
+ * 原版（llm2vec-gen/scripts/demo_quickstart.py:172-204）是非对称指令：
+ *   q_instruction = "Generate a passage that best answers this question: "
+ *   d_instruction = "Summarize the following passage: "
+ *   q_reps = model.encode([q_instruction + q ...])
+ *   d_reps = model.encode([d_instruction + d ...])
+ * 注意两点：
+ *   1) query/document 指令措辞不同（生成式口吻），且**都没有 "Query:"/"Document:" label**——
+ *      那是 demo_llamacpp.py 第二版的写法，不是原版。
+ *   2) instruction 在 encode 内部拼接在文本前面，后面没有换行/分隔符，直接跟原文。
+ */
+export const LLM2VEC_QUERY_PREFIX = "Generate a passage that best answers this question: "
+export const LLM2VEC_DOCUMENT_PREFIX = "Summarize the following passage: "
+
+/**
  * MiniCPM ChatML 聊天模板格式。
  * 将文本包装为完整 instruct 对话格式，利用模型的 instruct-tuned 语义空间。
  * 适用于 llamacpp-llm embedder，由 embedderUseChatTemplate 配置控制。
@@ -82,7 +98,17 @@ export function resolveQueryPrefix(
     return query
   }
 
-  // ── 2. llamacpp-llm（通用 LLM embedder） ────────────
+  // ── 1b. llm2vec（LLM2Vec-Gen，非对称前缀，始终应用） ──
+  // 模型按指令训练，查询端必须以 "…Query: " 结尾（demo_llamacpp.py INSTRUCT_QUERY）。
+  // 与 enableLlmPrefix 无关：该开关只控 llamacpp-llm。
+  if (provider === "llm2vec") {
+    if (query.startsWith(LLM2VEC_QUERY_PREFIX)) return query
+    const result = LLM2VEC_QUERY_PREFIX + query
+    log.debug(`[Prefix] resolveQueryPrefix(llm2vec): "${result.slice(0, 120)}..."`)
+    return result
+  }
+
+  // ── 2. llamacpp-llm（通用 LLM embedder） ───────────
   if (provider === "llamacpp-llm") {
     if (!enableLlmPrefix) {
       log.debug(`[Prefix] resolveQueryPrefix(llamacpp-llm): skipped (enableLlmPrefix=false)`)
@@ -142,6 +168,13 @@ export function resolveQueryPrefix(
 export function resolveDocumentPrefix(embedder: IEmbedder): string | undefined {
   const log = _logger()
   const provider = embedder.embedderInfo.name
+
+  // llm2vec：非对称 Document 前缀（与 demo_llamacpp.py INSTRUCT_DOC 一致）。
+  // 始终返回 "…Document: "，不受 enableLlmPrefix 控制（模型按指令训练）。
+  if (provider === "llm2vec") {
+    log.debug(`[Prefix] resolveDocumentPrefix(llm2vec): "…Document: "`)
+    return LLM2VEC_DOCUMENT_PREFIX
+  }
 
   // document 端前缀仅对 llamacpp / llamacpp-llm 的 jina 模型有意义
   if (provider !== "llamacpp" && provider !== "llamacpp-llm") {

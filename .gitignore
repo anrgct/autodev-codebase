@@ -74,3 +74,12 @@ command-history.sh
 .rooignore
 .worktrees
 experiment-results/
+.reasonix
+
+# Eval artifacts
+musique-recall-*.json
+
+# Symlinked submodules
+llama.cpp
+llm2vec-gen
+node-llama-cpp-therealtimex

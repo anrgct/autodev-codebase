@@ -92,6 +92,7 @@ export const EMBEDDER_BATCH_SIZES: { [key: string]: number } = {
     "vercel-ai-gateway": 60,
     "openrouter": 60,
     "ollama": 20, // Smaller batch size for Ollama to prevent timeouts with large local models
+    "llm2vec": 1, // LLM2Vec: per-sample processing (tokenize+MLP), batch=1
 }
 
 /**

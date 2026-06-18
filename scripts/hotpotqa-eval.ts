@@ -37,7 +37,7 @@ import { registerProjectToCacheMap } from "../src/commands/shared"
 // 包装函数，保持与 commands/shared.ts 一致的接口
 function getLogger() { return getGlobalLogger() }
 function initGlobalLogger(level: LogLevel) {
-  setGlobalLogger(new Logger({ name: "Eval", level, timestamps: false, colors: false }))
+  setGlobalLogger(new Logger({ name: "Eval", level, timestamps: true, colors: false }))
 }
 
 // ============================================================================
@@ -282,7 +282,7 @@ async function main() {
   const deps = createNodeDependencies({
     workspacePath: corpusDir,
     configOptions: { configPath },
-    loggerOptions: { name: "Eval", level: logLevel, timestamps: false, colors: false },
+    loggerOptions: { name: "Eval", level: logLevel, timestamps: true, colors: false },
   })
   await deps.configProvider.loadConfig()
 
@@ -298,6 +298,7 @@ async function main() {
   if (initStatus.systemStatus !== "Indexed") {
     // 需要索引
     log.info("开始索引...")
+    const tIdx0 = performance.now()
     // 先订阅 progress 事件，再启动索引，避免竞态
     await new Promise<void>((resolve, reject) => {
       let settled = false
@@ -306,7 +307,8 @@ async function main() {
         if (data.systemStatus === "Indexed") {
           settled = true
           unsubscribe()
-          log.info("索引完成")
+          const dur = ((performance.now() - tIdx0) / 1000).toFixed(1)
+          log.info(`索引完成 (${dur}s)`)
           resolve()
         } else if (data.systemStatus === "Error") {
           settled = true
@@ -325,6 +327,7 @@ async function main() {
   }
 
   // 执行所有 query 的检索
+  const tSearch0 = performance.now()
   log.info("开始检索评测...")
   const perQuery: RecallResult[] = []
   let failedQueries = 0
@@ -351,6 +354,8 @@ async function main() {
   if (failedQueries > 0) {
     log.warn(`${failedQueries} 个 query 检索失败，将被跳过`)
   }
+  const searchDur = ((performance.now() - tSearch0) / 1000).toFixed(1)
+  log.info(`检索完成 (${searchDur}s, ${queries.length - failedQueries}/${queries.length} queries)`)
 
   // Pooling: 对所有 query 取平均
   const pooled: Record<number, number> = {}
@@ -368,6 +373,9 @@ async function main() {
     actualModel = ggufFile.replace(/\.gguf$/, "")
   } else if (rawConfig?.embedderProvider === "llamacpp-llm" && rawConfig?.embedderGgufLlmPath) {
     const ggufFile = rawConfig.embedderGgufLlmPath.split("/").pop() || ""
+    actualModel = ggufFile.replace(/\.gguf$/, "")
+  } else if (rawConfig?.embedderProvider === "llm2vec" && rawConfig?.embedderGgufLlm2vecPath) {
+    const ggufFile = rawConfig.embedderGgufLlm2vecPath.split("/").pop() || ""
     actualModel = ggufFile.replace(/\.gguf$/, "")
   }
   // poolingMode 仅对 llamacpp-llm 生效，llamacpp 使用内置 embedding 模型（GGUF 自带 pool）

@@ -97,6 +97,7 @@ export type EmbedderProvider =
   | "openrouter"
   | "llamacpp"
   | "llamacpp-llm"
+  | "llm2vec"
 
 export interface IndexProgressUpdate {
   systemStatus: IndexingState

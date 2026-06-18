@@ -206,6 +206,9 @@ export class CodeIndexConfigManager {
     } else if (embedderProvider === "llamacpp-llm") {
       const modelPath = this.config.embedderGgufLlmPath
       return !!(modelPath && vectorStoreOk)
+    } else if (embedderProvider === "llm2vec") {
+      const modelPath = this.config.embedderGgufLlm2vecPath
+      return !!(modelPath && vectorStoreOk)
     }
     return false
   }
@@ -532,6 +535,9 @@ export class CodeIndexConfigManager {
     }
     if (this.config?.embedderProvider === "llamacpp-llm") {
       return this.config?.embedderGgufLlmPath ?? this.config?.embedderModelId
+    }
+    if (this.config?.embedderProvider === "llm2vec") {
+      return this.config?.embedderGgufLlm2vecPath ?? this.config?.embedderModelId
     }
     return this.config?.embedderModelId
   }

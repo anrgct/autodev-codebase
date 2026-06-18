@@ -65,6 +65,7 @@ export type AvailableEmbedders =
   | "openrouter"
   | "llamacpp"
   | "llamacpp-llm"
+  | "llm2vec"
 
 export interface EmbedderInfo {
   name: AvailableEmbedders

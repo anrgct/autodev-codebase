@@ -8,6 +8,7 @@ import { OpenRouterEmbedder } from "./embedders/openrouter"
 import { JinaEmbedder } from "./embedders/jina-embedder"
 import { LlamaCppEmbedder } from "./embedders/llamacpp"
 import { LlamaCppLlmEmbedder } from "./embedders/llamacpp-llm"
+import { LlamaCppLlm2VecEmbedder } from "./embedders/llamacpp-llm2vec"
 import { OllamaLLMReranker } from "./rerankers/ollama"
 import { OpenAICompatibleReranker } from "./rerankers/openai-compatible"
 import { LlamaCppReranker } from "./rerankers/llamacpp-rerank"
@@ -171,6 +172,16 @@ export class CodeIndexServiceFactory {
         config.embedderUseChatTemplate,
         config.embedderLateChunkingContextSize ?? 0,
       )
+    } else if (provider === "llm2vec") {
+      if (!config.embedderGgufLlm2vecPath) {
+        throw new Error("LLM2Vec GGUF model path missing for llm2vec embedder creation")
+      }
+      return new LlamaCppLlm2VecEmbedder(
+        config.embedderGgufLlm2vecPath,
+        config.embedderLlamaCppGpuLayers,
+        this.logger,
+        config.embedderLlmInstructionPrefix,
+      )
     }
 
     throw new Error(
@@ -278,13 +289,15 @@ export class CodeIndexServiceFactory {
 
     const provider = config.embedderProvider as EmbedderProvider
 
-    // For llamacpp/llamacpp-llm, derive modelId from GGUF path (it's the source of truth)
+    // For llamacpp/llamacpp-llm/llm2vec, derive modelId from GGUF path (it's the source of truth)
     // This avoids global config leaking embedderModelId from a different provider
     const modelId = provider === "llamacpp" && config.embedderGgufPath
       ? (this._deriveModelIdFromGgufPath(config.embedderGgufPath) ?? getDefaultModelId(provider))
       : provider === "llamacpp-llm" && config.embedderGgufLlmPath
         ? (this._deriveModelIdFromGgufPath(config.embedderGgufLlmPath) ?? getDefaultModelId(provider))
-        : (config.embedderModelId ?? getDefaultModelId(provider))
+        : provider === "llm2vec" && config.embedderGgufLlm2vecPath
+          ? (this._deriveModelIdFromGgufPath(config.embedderGgufLlm2vecPath) ?? getDefaultModelId(provider))
+          : (config.embedderModelId ?? getDefaultModelId(provider))
 
     // Layer 1: Profile (zero overhead, from EMBEDDING_MODEL_PROFILES)
     let vectorSize = getModelDimension(provider, modelId)
@@ -484,7 +497,7 @@ export class CodeIndexServiceFactory {
     // createQueryEmbedder() 对非 llamacpp-llm 会再调一次 createEmbedder() 新建实例，
     // 对于本地模型是纯浪费（即使模型很小）。API 类 provider（ollama/openai 等）没有
     // 本地资源消耗，想一视同仁复用也行，语义上它们本就是同一个接口。
-    const localProviders = ["llamacpp", "llamacpp-llm"]
+    const localProviders = ["llamacpp", "llamacpp-llm", "llm2vec"]
     const queryEmbedder = localProviders.includes(provider) ? embedder : this.createQueryEmbedder()
     const parser = codeParser
     const scanner = this.createDirectoryScanner(embedder, vectorStore, parser, fileSystem, workspace, pathUtils)
