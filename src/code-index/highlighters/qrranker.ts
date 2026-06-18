@@ -1058,6 +1058,11 @@ export class QRRankerHighlighter implements IHighlighter {
 
     const decodeTime = Date.now() - decodeStart;
 
+    // Close the async generator to release the underlying sequence.
+    // Without this, the sequence stays "in use" and subsequent batches
+    // fail with "No sequences left" (context pool exhaustion).
+    await gen.return(undefined);
+
     // Log the full generated text (推理输出)
     const fullText = model.detokenize(generatedTokens);
     this.logger?.info(

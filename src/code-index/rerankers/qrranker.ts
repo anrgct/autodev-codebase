@@ -455,6 +455,11 @@ export class QRRankerReranker implements IReranker {
 
     const decodeTime = Date.now() - decodeStart;
 
+    // Close the async generator to release the underlying sequence.
+    // Without this, the sequence stays "in use" and subsequent batches
+    // fail with "No sequences left" (context pool exhaustion).
+    await gen.return(undefined);
+
     // Log the full generated text (推理输出)
     const fullText = model.detokenize(generatedTokens);
     this.logger?.info(
@@ -624,6 +629,15 @@ export class QRRankerReranker implements IReranker {
       await sequence.evaluateWithoutGeneratingNewTokens(tokens);
       perKvScores = this._extractPerKvScoresFromKq(context, queryStart, queryEnd);
     }
+
+    // Reset the sequence so the pooled context can be reused for the next batch.
+    // Without this, the KV cache fills up and subsequent batches fail with
+    // "No sequences left" (context pool exhaustion).
+    await sequence.clearHistory();
+    // dispose() releases the sequence slot back to the context pool.
+    // getSequence() allocates a NEW sequence each call, so we must free it
+    // after each batch or the pool exhausts (sequences: 1 per context).
+    sequence.dispose();
 
     this.logger?.debug(
       `[QRRanker] Batch done: ${tokens.length} tokens, ${batch.length} docs, ` +
