@@ -162,3 +162,110 @@ export function stripNeedsProMarker(text: string): string {
  * Alias of `stripNeedsProMarker` — both handle PRO and FLASH markers.
  */
 export const stripNeedsFlashMarker = stripNeedsProMarker
+
+// ---------------------------------------------------------------------------
+// Incremental prefix detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Decision returned by `detectMarkerPrefix` for incremental content
+ * accumulation during the streaming peek loop.
+ *
+ *  - `no-marker`     — the first line can no longer match any marker; the
+ *                      peek loop should flush its content buffer and switch
+ *                      to pure passthrough.
+ *  - `matched-pro`   — a complete `<<<NEEDS_PRO[...]>>>` marker has arrived;
+ *                      the peek loop should cancel the stream and escalate.
+ *  - `matched-flash` — a complete `<<<NEEDS_FLASH[...]>>>` marker has arrived;
+ *                      the peek loop should cancel the stream and downgrade.
+ *  - `need-more`     — the first line is still ambiguous (could still be a
+ *                      marker prefix); keep buffering.
+ */
+export type MarkerPrefixDecision = 'no-marker' | 'matched-pro' | 'matched-flash' | 'need-more'
+
+/** Common lead shared by both marker kinds. */
+const MARKER_COMMON_LEAD = '<<<NEEDS_'
+const MARKER_PRO_LEAD = '<<<NEEDS_PRO'
+const MARKER_FLASH_LEAD = '<<<NEEDS_FLASH'
+
+/**
+ * Given the SSE content accumulated so far, decide whether we can already
+ * rule the marker in (`matched-*`), rule it out (`no-marker`), or need to
+ * wait for more bytes (`need-more`).
+ *
+ * The contract guarantees the marker — when present — is the very first
+ * non-blank line of the assistant `content`. `reasoning_content` (think
+ * blocks) is not inspected here; the peek loop forwards those bytes directly
+ * and only feeds `content` deltas into this function.
+ */
+export function detectMarkerPrefix(text: string): MarkerPrefixDecision {
+  if (!text) return 'need-more'
+
+  // Skip leading blank lines (the contract tolerates a stray `\n` first).
+  let cursor = 0
+  while (cursor < text.length && (text[cursor] === '\n' || text[cursor] === '\r')) {
+    cursor++
+  }
+  if (cursor >= text.length) return 'need-more' // only newlines so far
+
+  const rest = text.slice(cursor)
+  // First non-newline char must be `<` for any marker to be possible.
+  // (Leading space/tab would also fail this test, per the contract.)
+  if (rest[0] !== '<') return 'no-marker'
+
+  const nlIdx = rest.indexOf('\n')
+  const firstLine = nlIdx === -1 ? rest : rest.slice(0, nlIdx)
+  const firstLineComplete = nlIdx !== -1
+
+  // Full marker detection (covers both bare and `: reason` forms).
+  const proHit = detectMarker(firstLine, 'pro', NEEDS_PRO_MARKER)
+  if (proHit.matched) return 'matched-pro'
+  const flashHit = detectMarker(firstLine, 'flash', NEEDS_FLASH_MARKER)
+  if (flashHit.matched) return 'matched-flash'
+
+  // Complete first line that didn't match → definitively no marker.
+  if (firstLineComplete) return 'no-marker'
+
+  // First line is still partial — could it still grow into a marker?
+  if (isPossibleMarkerPrefix(firstLine)) return 'need-more'
+  return 'no-marker'
+}
+
+/**
+ * Whether a partial first line could still grow into a valid marker prefix.
+ * Marker grammar: `<<<NEEDS_(PRO|FLASH)(>>>|: reason>>>)`.
+ */
+function isPossibleMarkerPrefix(s: string): boolean {
+  // Phase 1: shorter than the PRO/FLASH fork point.
+  if (s.length < MARKER_PRO_LEAD.length) {
+    // Must be a prefix of either lead (or the common lead).
+    return MARKER_PRO_LEAD.startsWith(s) || MARKER_FLASH_LEAD.startsWith(s) || MARKER_COMMON_LEAD.startsWith(s)
+  }
+
+  // Phase 2: past the fork point — direction must be unambiguous.
+  let lead: string
+  if (s.startsWith(MARKER_PRO_LEAD)) lead = MARKER_PRO_LEAD
+  else if (s.startsWith(MARKER_FLASH_LEAD)) lead = MARKER_FLASH_LEAD
+  else return false // e.g. `<<<NEEDS_PROXY...` — not a marker
+
+  const tail = s.slice(lead.length)
+  if (tail === '') return true
+  // Partial or complete `>>>` terminator (the complete case is normally
+  // caught by detectMarker above; treat it as need-more defensively).
+  if (tail === '>' || tail === '>>' || tail === '>>>') return true
+  // `: reason>>>` form — reason is any run of non-`>` chars followed by `>>>`.
+  if (tail.startsWith(':')) {
+    const afterColon = tail.slice(1)
+    for (let i = 0; i < afterColon.length; i++) {
+      const ch = afterColon[i]
+      if (ch === '\n') return false // shouldn't happen (firstLine has no \n)
+      if (ch === '>') {
+        // Once we see `>`, the remainder must be exactly `>`, `>>`, or `>>>`.
+        const tail2 = afterColon.slice(i)
+        return tail2 === '>' || tail2 === '>>' || tail2 === '>>>'
+      }
+    }
+    return true // reason still accumulating, no `>` yet
+  }
+  return false
+}

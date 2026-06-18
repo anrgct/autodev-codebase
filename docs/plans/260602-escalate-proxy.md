@@ -304,8 +304,70 @@ Dispatcher 中的集成点：
 - **v1 (2026-06-02)**: 首次实现并测试通过。
 - **v2 (2026-06-02)**: 新增 `<<<NEEDS_FLASH>>>` 降级支持，pro 模型可自由决定降级到 flash。
 - **v3 (2026-06-02)**: 新增 Sticky Pro —— 消息前缀指纹匹配的对话级状态保留。
+- **v4 (2026-06-18)**: 流式路径重构 —— reasoning_content 实时透传 + 前缀增量检测 + tier 切换分隔标记。彻底解决推理模型长 think block 导致客户端 TTFB 飙升的问题。
 
-### v3 变更详情 (2026-06-02)
+### v4 变更详情 (2026-06-18)
+
+#### 动机
+
+v3 的流式 peek 实现把**所有上游字节**（含 `reasoning_content` / think block）都缓冲到 `peekBytes`，直到累积满 256 chars 的 `delta.content` 才调用 `detectEscalationMarker()` 判定。对于推理模型（DeepSeek-R1、o1 等），模型会先输出几十秒的 `reasoning_content` 再输出第一个 `content` token，期间代理持续缓冲但客户端收不到任何字节，TTFB = think_duration + content_buffering_duration，5–30s+ 的无响应等待体验接近超时。
+
+#### 核心设计
+
+**reasoning_content 实时透传 + content 前缀增量检测**：
+
+```
+flash stream → peek 循环:
+  delta.reasoning_content → 立即 controller.enqueue() (客户端实时看到 think)
+  delta.content → 累积到 sseContentBuf + detectMarkerPrefix()
+    ├─ no-marker (第一个 content char 不是 `<`) → flush content, 切纯透传
+    ├─ matched-pro → cancel flash, 发分隔标记, 调 pro
+    └─ need-more → 继续累积
+```
+
+- **`detectMarkerPrefix(text)`**：新增的前缀增量检测器。返回 `no-marker` / `matched-pro` / `matched-flash` / `need-more`。对非 `<` 开头的 content 在**第一个 chunk** 就判定 `no-marker`，立即结束 peek（>99% 的请求几乎零延迟）。
+- **`buildTierSwitchEvent(from, to, reason)`**：升级/降级时构造一个合成 SSE 事件，把分隔标记注入到 `delta.reasoning_content`。客户端在 think 区域看到 `--- [proxy: switched flash → pro (reason)] ---`，清晰知道发生了 tier 切换。
+- **`SseLineBuffer`**：新增的增量 SSE 行解析器，跨 chunk 正确处理行边界，保留字节保真度，支持 leftover flush。
+- **`peekTierStream(controller, reader, expectedDirection)`**：抽出的通用 peek 方法，flash 和 pro 复用。返回 `{outcome:'done'}` 或 `{outcome:'switched', reason?}`。
+
+#### 设计权衡：流式路径移除 `X-Escalated-*` 头
+
+HTTP 响应头必须在 body 之前发送。但 reasoning 实时透传要求 dispatch 立即返回 stream（不等 peek 完成才能开始发 body）。两者矛盾，取舍如下：
+
+| 路径 | `X-Escalated-*` 头 | 升级信号 |
+|------|-------------------|---------|
+| 非流式 | ✅ 保留 | 头 + body |
+| 流式 | ❌ 移除 | body 中的分隔标记（`reasoning_content`）|
+
+客户端通过 body 中注入到 `reasoning_content` 的 `--- [proxy: switched ...] ---` 感知 tier 切换，不再依赖响应头。
+
+#### 修改文件
+
+- `src/escalate/sse-buffer.ts` — 🆕 新增，`SseLineBuffer` 增量 SSE 行解析器
+- `src/escalate/detector.ts` — 新增 `detectMarkerPrefix()` + `MarkerPrefixDecision` 类型 + `isPossibleMarkerPrefix()` 内部辅助
+- `src/escalate/dispatcher.ts` — 重写流式路径：
+  - 新增 `peekTierStream()`（通用 peek，flash/pro 复用）
+  - 新增 `buildTierSwitchEvent()` / `buildProxyErrorEvent()` / `concatBytes()` / `pumpReaderToController()`
+  - `dispatchStream()` 重构为「立即返回 stream + 边读边发」模式
+  - `dispatchDirectProStream()` 同步重构（sticky pro 路径）
+  - 删除旧的 `checkProStreamForDowngrade()`、`extractSseDelta()`、`PEEK_MAX_CHARS`
+- `src/escalate/__tests__/sse-buffer.spec.ts` — 🆕 12 测试
+- `src/escalate/__tests__/detector.spec.ts` — 新增 `detectMarkerPrefix` 38 测试
+- `src/escalate/__tests__/dispatcher.spec.ts` — 重写流式测试（6 测试），验证 reasoning 透传、分隔标记、无 X-Escalated 头
+
+#### 测试结果
+
+- 类型检查通过（`tsc --noEmit`）
+- 123/123 escalate 测试通过（含 12 新增 sse-buffer + 38 新增 detector prefix + 6 重写流式）
+
+#### 性能影响
+
+| 场景 | v3 TTFB | v4 TTFB |
+|------|---------|---------|
+| 简单任务（无 think，直接 content） | ~50ms (缓冲首 chunk) | ~0ms (第一个 content char 非 `<` 立即透传) |
+| 复杂任务（长 think 后升级） | think_duration + 256 chars 缓冲 | 0ms (think 实时透传) + 第一个 content chunk 判定 |
+| 复杂任务（长 think 后不升级） | think_duration + 256 chars 缓冲 | 0ms (think 实时透传) + 第一个 content chunk 判定 |
+
 
 #### 新增功能
 
@@ -399,13 +461,11 @@ Dispatcher 中的集成点：
 - 仅支持 OpenAI 兼容协议（`/v1/chat/completions`）
 - 升级重试只做 1 次（flash → pro），不做多次级联
 - 消息前缀指纹是 best-effort，两个对话恰好有相同 system + 第一条 user 消息时可能误匹配（概率极低）
-- **推理模型长 think block 导致客户端 TTFB 飙升**：`extractSseDelta()` 只提取 `delta.content`，忽略 `delta.reasoning_content`（think block）。在流式 peek 阶段，代理会持续读取所有 think 内容的 SSE 事件并缓冲原始字节到 `peekBytes`，但 `sseContentBuf` 始终为 0。只有等模型开始输出 `delta.content` 后，缓冲区才开始累积。在此期间客户端收不到任何数据，TTFB = think_duration + content_buffering_duration。对于 think block 很长的推理模型（5-30s+），用户体验接近超时。Sticky Pro 可缓解此问题——仅第一次请求需要等 think block，后续直接走 pro 跳过 flash。
-- **"等满 256 再检测" 的非最优设计**：当前实现是在累积满 `PEEK_MAX_CHARS=256` chars 的 `delta.content` 后，再统一调用 `detectEscalationMarker()` 做检测。这意味着即使第一个 content chunk 就是 `<<<NEEDS_PRO>>>`（18 chars），代理仍会继续读取后续内容直到 256 chars 才开始做决定，浪费了 ~238 chars 的读取时间。优化方向：在每次 SSE 行的 content 累积后做增量检测，检测到完整 marker 就提前退出 peek 循环。对最常见的无升级路径（>99%）无影响；对升级路径可节省数百毫秒到数秒。
+- **流式路径无 `X-Escalated-*` 响应头**（v4 起）：为了让 `reasoning_content` 实时透传（避免长 think block 期间客户端无响应等待），流式响应的升级判定发生在响应头发送之后。客户端通过 body 中注入到 `reasoning_content` 的分隔标记（`--- [proxy: switched flash → pro] ---`）感知 tier 切换。非流式路径仍保留完整的 `X-Escalated-To / From / Path / Reason` 头。
 
 ### 后续优化方向
 
 - 支持 `X-Failure-Count` header 接收客户端上报的失败计数
 - 支持多 provider（OpenAI、Anthropic 等）的 CONTRACT 注入
 - 支持 `X-Escalated-From / X-Escalated-To` 审计日志
-- **推理模型长 think block 优化**：引入 `PEEK_TIMEOUT_MS` 超时机制——如果 peek 阶段超过 N 秒（如 5s）还没看到 `delta.content`，放弃升级检测直接透传原始流，避免客户端长时间无数据。代价是长 think 的复杂任务可能无法正确升级。
-- **增量检测提前退出**：在每次 SSE 行处理后做增量 marker 检测，一旦发现完整 `<<<NEEDS_PRO>>>` 或 `<<<NEEDS_FLASH>>>` 标记就提前结束 peek 阶段，无需等满 256 chars。
+- **PEEK 超时兑底**：为 peek 阶段加 `PEEK_TIMEOUT_MS`，超时后直接透传。目前如果模型输出超长的 `need-more` 前缀（如 `<<<NEEDS_PRO: ` 后跟超长 reason），会在 `PEEK_MAX_CONTENT_CHARS=1024` 才兑底。超时机制能在极端情况下更快释放。

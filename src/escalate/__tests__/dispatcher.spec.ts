@@ -167,8 +167,42 @@ describe('EscalateDispatcher', () => {
       })
     }
 
-    it('passes through a streaming response when no marker is in the first chunk', async () => {
+    /** Fully drain a ReadableStream to a string. */
+    async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+      const reader = stream.getReader()
+      const dec = new TextDecoder()
+      let acc = ''
+      for (let i = 0; i < 200; i++) {
+        const { value, done } = await reader.read()
+        if (done) break
+        acc += dec.decode(value, { stream: true })
+      }
+      return acc
+    }
+
+    /** Parse concatenated SSE text into {content, reasoning} strings. */
+    function parseSse(sseText: string): { content: string; reasoning: string } {
+      let content = ''
+      let reasoning = ''
+      for (const line of sseText.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (!payload || payload === '[DONE]') continue
+        try {
+          const parsed = JSON.parse(payload)
+          const delta = parsed?.choices?.[0]?.delta
+          if (typeof delta?.content === 'string') content += delta.content
+          if (typeof delta?.reasoning_content === 'string') reasoning += delta.reasoning_content
+        } catch { /* ignore */ }
+      }
+      return { content, reasoning }
+    }
+
+    it('forwards reasoning_content immediately and passes content through when no marker', async () => {
       const stream = mkSseStream([
+        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+        'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
         'data: [DONE]\n\n',
@@ -179,33 +213,24 @@ describe('EscalateDispatcher', () => {
       const out = await d.dispatch({ messages: [], stream: true }, true, {})
 
       expect(out.isStream).toBe(true)
-      expect(out.finalModel).toBe('flash')
-      expect(out.reason).toBe('passthrough')
-      expect(out.headers['x-escalated-to']).toBe('flash')
+      // Streaming responses no longer carry X-Escalated-* headers.
+      expect(out.headers['x-escalated-to']).toBeUndefined()
 
-      // Drain the resulting stream and reconstruct the text.
-      const reader = (out.body as ReadableStream<Uint8Array>).getReader()
-      const dec = new TextDecoder()
-      let acc = ''
-      for (let i = 0; i < 5; i++) {
-        const { value, done } = await reader.read()
-        if (done) break
-        acc += dec.decode(value, { stream: true })
-      }
-      expect(acc).toContain('Hello')
-      expect(acc).toContain(' world')
-      expect(acc).toContain('[DONE]')
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, reasoning } = parseSse(acc)
+      expect(reasoning).toBe('thinking...')
+      expect(content).toBe('Hello world')
+      // No escalation → only one upstream call.
+      expect(captured).toHaveLength(1)
     })
 
-    it('escalates to pro when the marker appears in the first stream chunk', async () => {
-      // Per the contract, the model emits ONLY the marker (no other content)
-      // on the first line. The call is then aborted on the proxy side.
+    it('escalates to pro and injects a separator into the reasoning stream', async () => {
       const flashStream = mkSseStream([
+        'data: {"choices":[{"delta":{"reasoning_content":"flash thinking"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"<<<NEEDS_PRO>>>"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":""}}]}\n\n',
-        'data: [DONE]\n\n',
       ])
       const proStream = mkSseStream([
+        'data: {"choices":[{"delta":{"reasoning_content":"pro thinking"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"PRO ANSWER"}}]}\n\n',
         'data: [DONE]\n\n',
       ])
@@ -216,24 +241,25 @@ describe('EscalateDispatcher', () => {
       const out = await d.dispatch({ messages: [], stream: true }, true, {})
 
       expect(out.isStream).toBe(true)
-      expect(out.finalModel).toBe('pro')
-      expect(out.reason).toBe('self-report')
-      expect(out.headers['x-escalated-to']).toBe('pro')
-      expect(out.headers['x-escalation-reason']).toBe('self-report')
+      expect(out.headers['x-escalated-to']).toBeUndefined()
 
-      const reader = (out.body as ReadableStream<Uint8Array>).getReader()
-      const dec = new TextDecoder()
-      let acc = ''
-      for (let i = 0; i < 5; i++) {
-        const { value, done } = await reader.read()
-        if (done) break
-        acc += dec.decode(value, { stream: true })
-      }
-      expect(acc).toContain('PRO ANSWER')
-      expect(acc).not.toContain('<<<NEEDS_PRO>>>')
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, reasoning } = parseSse(acc)
+      // Flash reasoning forwarded to the client.
+      expect(reasoning).toContain('flash thinking')
+      // Separator injected between the two tiers.
+      expect(reasoning).toContain('now on pro')
+      expect(reasoning).toContain('was flash')
+      // Pro reasoning forwarded.
+      expect(reasoning).toContain('pro thinking')
+      // Pro answer (the marker is dropped, not forwarded as content).
+      expect(content).toBe('PRO ANSWER')
+      expect(content).not.toContain('<<<NEEDS_PRO>>>')
+      // Two upstream calls: flash then pro.
+      expect(captured).toHaveLength(2)
     })
 
-    it('passes the reason through for streaming self-reports', async () => {
+    it('carries the marker reason into the separator text', async () => {
       const flashStream = mkSseStream([
         'data: {"choices":[{"delta":{"content":"<<<NEEDS_PRO: needs deep analysis>>>"}}]}\n\n',
       ])
@@ -244,18 +270,19 @@ describe('EscalateDispatcher', () => {
       const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
       const out = await d.dispatch({ messages: [], stream: true }, true, {})
 
-      expect(out.headers['x-escalation-reason']).toBe('needs deep analysis')
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { reasoning } = parseSse(acc)
+      // The separator carries the upgrade reason.
+      expect(reasoning).toContain('needs deep analysis')
     })
 
-    it('downgrades to flash when the pro stream emits <<<NEEDS_FLASH>>>', async () => {
-      // Flash escalates, then pro downgrades — final response comes from flash.
+    it('downgrades pro → flash with a second separator and no marker leak', async () => {
       const flashStream = mkSseStream([
         'data: {"choices":[{"delta":{"content":"<<<NEEDS_PRO>>>"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":""}}]}\n\n',
       ])
       const proStream = mkSseStream([
+        'data: {"choices":[{"delta":{"reasoning_content":"pro thinking"}}]}\n\n',
         'data: {"choices":[{"delta":{"content":"<<<NEEDS_FLASH>>>"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":""}}]}\n\n',
       ])
       const flashRetryStream = mkSseStream([
         'data: {"choices":[{"delta":{"content":"FLASH REUSED"}}]}\n\n',
@@ -269,26 +296,51 @@ describe('EscalateDispatcher', () => {
       const out = await d.dispatch({ messages: [], stream: true }, true, {})
 
       expect(out.isStream).toBe(true)
-      expect(out.finalModel).toBe('flash')
-      expect(out.reason).toBe('downgrade')
-      expect(out.path).toEqual(['flash', 'pro', 'flash'])
-      expect(out.headers['x-escalated-to']).toBe('flash')
-      expect(out.headers['x-escalated-from']).toBe('pro')
-      expect(out.headers['x-escalation-path']).toBe('flash->pro->flash')
-      expect(out.headers['x-escalation-reason']).toBe('downgrade')
 
-      // The final body should yield FLASH REUSED, not any pro text.
-      const reader = (out.body as ReadableStream<Uint8Array>).getReader()
-      const dec = new TextDecoder()
-      let acc = ''
-      for (let i = 0; i < 6; i++) {
-        const { value, done } = await reader.read()
-        if (done) break
-        acc += dec.decode(value, { stream: true })
-      }
-      expect(acc).toContain('FLASH REUSED')
-      expect(acc).not.toContain('<<<NEEDS_PRO>>>')
-      expect(acc).not.toContain('<<<NEEDS_FLASH>>>')
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, reasoning } = parseSse(acc)
+      // Both separators present.
+      expect(reasoning).toContain('now on pro')
+      expect(reasoning).toContain('now on flash')
+      // Pro reasoning forwarded in between.
+      expect(reasoning).toContain('pro thinking')
+      // Final content from flash retry.
+      expect(content).toBe('FLASH REUSED')
+      // No markers leak into content.
+      expect(content).not.toContain('<<<NEEDS_PRO>>>')
+      expect(content).not.toContain('<<<NEEDS_FLASH>>>')
+      // Three calls: flash → pro → flash retry.
+      expect(captured).toHaveLength(3)
+    })
+
+    it('does not hang on non-marker content starting with < (e.g. <html>)', async () => {
+      // detectMarkerPrefix must rule this out on the very first chunk.
+      const stream = mkSseStream([
+        'data: {"choices":[{"delta":{"content":"<html>hello</html>"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [], stream: true }, true, {})
+
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content } = parseSse(acc)
+      expect(content).toBe('<html>hello</html>')
+      expect(captured).toHaveLength(1)
+    })
+
+    it('passes through upstream errors as non-stream bodies with the flash header', async () => {
+      queueResponse('upstream 500', { status: 500 })
+
+      const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [], stream: true }, true, {})
+
+      expect(out.status).toBe(500)
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('error')
+      expect(out.isStream).toBe(false)
+      expect(out.headers['x-escalated-to']).toBe('flash')
     })
   })
 

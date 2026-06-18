@@ -19,8 +19,8 @@ describe('escalationContract()', () => {
     expect(out).toContain('`<<<NEEDS_PRO: <one-sentence reason>>>>`')
     // The flash contract must explicitly call out that NEEDS_FLASH is a no-op.
     expect(out).toMatch(/`<<<NEEDS_FLASH>>>.*NO-OP/i)
-    // First-line constraint is mandatory.
-    expect(out).toMatch(/FIRST line/i)
+    // Entire-response constraint is mandatory.
+    expect(out).toMatch(/ENTIRE response/i)
   })
 
   it('returns the downgrade contract for the pro model', () => {
@@ -31,8 +31,8 @@ describe('escalationContract()', () => {
     // The pro contract must mention both forms of the downgrade marker.
     expect(out).toContain('`<<<NEEDS_FLASH>>>`')
     expect(out).toContain('`<<<NEEDS_FLASH: <one-sentence reason>>>>`')
-    // First-line constraint is mandatory for the downgrade marker too.
-    expect(out).toMatch(/FIRST line/i)
+    // Entire-response constraint is mandatory for the downgrade marker too.
+    expect(out).toMatch(/ENTIRE response/i)
     // The pro contract must explicitly call out that NEEDS_PRO is a no-op.
     expect(out).toMatch(/`<<<NEEDS_PRO>>>`.*no-op/i)
     // The short form must NOT include the full flash-side escalation ladder.

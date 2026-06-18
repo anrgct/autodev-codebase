@@ -6,6 +6,7 @@ import {
   detectNeedsPro,
   detectNeedsFlash,
   detectEscalationMarker,
+  detectMarkerPrefix,
   stripNeedsProMarker,
   NEEDS_PRO_MARKER,
   NEEDS_FLASH_MARKER,
@@ -162,5 +163,106 @@ describe('stripNeedsProMarker()', () => {
   })
   it('returns the input unchanged for empty strings', () => {
     expect(stripNeedsProMarker('')).toBe('')
+  })
+})
+
+describe('detectMarkerPrefix() — incremental prefix detection', () => {
+  it('returns need-more for empty input', () => {
+    expect(detectMarkerPrefix('')).toBe('need-more')
+  })
+
+  it('returns need-more for only-newline input', () => {
+    expect(detectMarkerPrefix('\n\n')).toBe('need-more')
+  })
+
+  describe('short prefixes (before the PRO/FLASH fork)', () => {
+    it.each([
+      '<',
+      '<<',
+      '<<<',
+      '<<<N',
+      '<<<NE',
+      '<<<NEE',
+      '<<<NEED',
+      '<<<NEEDS',
+      '<<<NEEDS_',
+      '<<<NEEDS_P',
+      '<<<NEEDS_PR',
+      '<<<NEEDS_F',
+      '<<<NEEDS_FL',
+    ])('returns need-more for %s', (prefix) => {
+      expect(detectMarkerPrefix(prefix)).toBe('need-more')
+    })
+  })
+
+  describe('definitive no-marker (first char is not <)', () => {
+    it.each([
+      'Hello',
+      'hello world',
+      'The answer is...',
+      ' plain text',
+      '\ttabbed',
+    ])('returns no-marker for %s', (text) => {
+      expect(detectMarkerPrefix(text)).toBe('no-marker')
+    })
+
+    it('returns no-marker for HTML-like content starting with <', () => {
+      // <html> starts with < but is not a marker prefix — must bail out fast.
+      expect(detectMarkerPrefix('<html>hello</html>')).toBe('no-marker')
+    })
+
+    it('returns no-marker for <<<NEEDS_PROXY (past PRO lead but wrong shape)', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_PROXY')).toBe('no-marker')
+    })
+  })
+
+  describe('complete markers', () => {
+    it('detects bare <<<NEEDS_PRO>>>', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_PRO>>>')).toBe('matched-pro')
+    })
+    it('detects <<<NEEDS_PRO: reason>>>', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_PRO: cross-file refactor>>>')).toBe('matched-pro')
+    })
+    it('detects bare <<<NEEDS_FLASH>>>', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_FLASH>>>')).toBe('matched-flash')
+    })
+    it('detects <<<NEEDS_FLASH: reason>>>', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_FLASH: trivial>>>')).toBe('matched-flash')
+    })
+    it('detects a marker preceded by a stray newline', () => {
+      expect(detectMarkerPrefix('\n<<<NEEDS_PRO>>>')).toBe('matched-pro')
+    })
+  })
+
+  describe('partial : reason forms', () => {
+    it('returns need-more for a partial reason', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_PRO: partial reason')).toBe('need-more')
+    })
+    it('returns need-more for <<<NEEDS_PRO:>>>', () => {
+      // Empty reason is malformed; detectMarker would reject it, but the
+      // prefix check treats the closing >>> as still-arriving.
+      // Actually '<<<NEEDS_PRO:>>>' has detectMarker reject (empty reason),
+      // and isPossibleMarkerPrefix sees tail=':>>>' which is ':' + '>>>'
+      // → the loop hits '>' immediately, tail2='>>>' → need-more.
+      expect(detectMarkerPrefix('<<<NEEDS_PRO:>>>')).toBe('need-more')
+    })
+  })
+
+  describe('partial >>> terminators', () => {
+    it('returns need-more for <<<NEEDS_PRO>', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_PRO>')).toBe('need-more')
+    })
+    it('returns need-more for <<<NEEDS_PRO>>', () => {
+      expect(detectMarkerPrefix('<<<NEEDS_PRO>>')).toBe('need-more')
+    })
+  })
+
+  describe('complete first line without marker', () => {
+    it('returns no-marker when the first line ends with a newline and is not a marker', () => {
+      expect(detectMarkerPrefix('Hello\n<<<NEEDS_PRO>>>')).toBe('no-marker')
+    })
+    it('returns no-marker when marker appears on the second line', () => {
+      expect(detectMarkerPrefix('some text\n<<<NEEDS_PRO>>>')).toBe('no-marker')
+    })
   })
 })
