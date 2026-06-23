@@ -301,6 +301,8 @@ Dispatcher 中的集成点：
 
 ## 修订记录
 
+- **v5 (2026-06-23)**: 修复 `peekTierStream` SSE 行丢失 bug —— 当多个 SSE 事件打包在同一 TCP chunk 中且首个 content 触发 `no-marker` 时，同一 chunk 中后续行被 `break` 跳过导致数据丢失。新增 `flushRemainingLines()` 在切换到 passthrough 前 flush 剩余行。
+
 - **v1 (2026-06-02)**: 首次实现并测试通过。
 - **v2 (2026-06-02)**: 新增 `<<<NEEDS_FLASH>>>` 降级支持，pro 模型可自由决定降级到 flash。
 - **v3 (2026-06-02)**: 新增 Sticky Pro —— 消息前缀指纹匹配的对话级状态保留。

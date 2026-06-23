@@ -29,7 +29,7 @@
 import { fetch, Pool, type Dispatcher } from 'undici'
 import { injectContract, type ChatCompletionRequestBody, type ChatCompletionMessage } from './contract'
 import { detectEscalationMarker, detectMarkerPrefix, stripNeedsProMarker } from './detector'
-import { SseLineBuffer } from './sse-buffer'
+import { SseLineBuffer, type SseLine } from './sse-buffer'
 import type { DispatchResult, EscalateConfig } from './types'
 import { StickyStore } from './sticky'
 
@@ -273,6 +273,21 @@ async function pumpReaderToController(
     const { value, done } = await reader.read()
     if (done) return
     if (value) controller.enqueue(value)
+  }
+}
+
+/**
+ * Flush remaining lines from `lines[startIdx]` onward into the controller.
+ * Used when peekTierStream switches to passthrough mode mid-chunk to ensure
+ * no SSE events from the current TCP chunk are dropped.
+ */
+function flushRemainingLines(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  lines: SseLine[],
+  startIdx: number
+): void {
+  for (let i = startIdx; i < lines.length; i++) {
+    try { controller.enqueue(lines[i].bytes) } catch { /* noop */ }
   }
 }
 
@@ -860,7 +875,9 @@ export class EscalateDispatcher {
 
       const { lines, leftover } = sseBuf.feed(value)
 
-      for (const line of lines) {
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li]
+
         // Non-`data:` lines (blank lines, comments, event: lines) — forward.
         if (!line.isData) {
           controller.enqueue(line.bytes)
@@ -904,11 +921,13 @@ export class EscalateDispatcher {
             return { outcome: 'switched', reason: det.reason }
           }
           if (decision === 'no-marker') {
-            // Definitively no marker — flush the content buffer and switch to
-            // pure passthrough for the rest of this stream.
+            // Definitively no marker — flush the content buffer, switch to
+            // pure passthrough for the rest of this stream, and flush any
+            // remaining lines in this chunk that came after the content line.
             controller.enqueue(contentPeekBytes!)
             contentPeekBytes = null
             mode = 'passthrough'
+            flushRemainingLines(controller, lines, li + 1)
             if (leftover !== null) controller.enqueue(leftover)
             break // exit lines loop; outer loop continues in passthrough mode
           }
@@ -919,6 +938,7 @@ export class EscalateDispatcher {
             controller.enqueue(contentPeekBytes!)
             contentPeekBytes = null
             mode = 'passthrough'
+            flushRemainingLines(controller, lines, li + 1)
             if (leftover !== null) controller.enqueue(leftover)
             break
           }

@@ -313,6 +313,40 @@ describe('EscalateDispatcher', () => {
       expect(captured).toHaveLength(3)
     })
 
+    it('forwards all events when multiple SSE events arrive in a single chunk (no-marker flush line loss bug)', async () => {
+      // Regression test: when multiple SSE events are packed into one TCP chunk
+      // and the first content line triggers `no-marker`, peekTierStream must
+      // not lose the remaining lines in that chunk.
+      const chunk1 = [
+        // reasoning + first content + more content + tool_calls + DONE — all in one chunk
+        'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":" world"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"content":"!"}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"test","arguments":""}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ok\""}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}]}\n\n' +
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n' +
+        'data: [DONE]\n\n',
+      ]
+      const stream = mkSseStream(chunk1)
+      queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [], stream: true }, true, {})
+
+      expect(out.isStream).toBe(true)
+
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, reasoning } = parseSse(acc)
+      expect(reasoning).toBe('thinking...')
+      // All content tokens must survive, even those after the first no-marker.
+      expect(content).toBe('Hello world!')
+      // No escalation → only one upstream call.
+      expect(captured).toHaveLength(1)
+    })
+
     it('does not hang on non-marker content starting with < (e.g. <html>)', async () => {
       // detectMarkerPrefix must rule this out on the very first chunk.
       const stream = mkSseStream([
