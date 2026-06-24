@@ -124,7 +124,7 @@ describe('EscalateDispatcher', () => {
       const flashBodySent = JSON.parse(captured[0].init.body!)
       expect(flashBodySent.model).toBe(FLASH)
       const sys = flashBodySent.messages.find((m: { role: string }) => m.role === 'system')
-      expect(sys.content).toContain('Cost-aware tier switching instruction')
+      expect(sys.content).toContain('Tier escalation instruction')
     })
 
     it('passes the marker reason through to the pro retry header', async () => {
@@ -440,7 +440,7 @@ describe('EscalateDispatcher', () => {
       expect(sentBody.model).toBe(FLASH)
       const sys = sentBody.messages.find((m: { role: string }) => m.role === 'system')
       expect(sys.content).toContain('You are helpful.')
-      expect(sys.content).toContain('Cost-aware tier switching instruction')
+      expect(sys.content).toContain('Tier escalation instruction')
     })
 
     it('injects the pro-side contract on the pro retry (teaches downgrade)', async () => {

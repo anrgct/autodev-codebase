@@ -303,10 +303,77 @@ Dispatcher 中的集成点：
 
 - **v5 (2026-06-23)**: 修复 `peekTierStream` SSE 行丢失 bug —— 当多个 SSE 事件打包在同一 TCP chunk 中且首个 content 触发 `no-marker` 时，同一 chunk 中后续行被 `break` 跳过导致数据丢失。新增 `flushRemainingLines()` 在切换到 passthrough 前 flush 剩余行。
 
+- **v6 (2026-06-24)**: ESCALATION_CONTRACT 优化 —— flash contract 全面重写，从「保守升级」转为「主动升级」策略。新增 5 类触发场景（模糊需求、多选项决策、工具调用失败、卡住、复杂推理），移除「先尝试再升级」和「3+ 失败自动升级」错误表述。
+
 - **v1 (2026-06-02)**: 首次实现并测试通过。
 - **v2 (2026-06-02)**: 新增 `<<<NEEDS_FLASH>>>` 降级支持，pro 模型可自由决定降级到 flash。
 - **v3 (2026-06-02)**: 新增 Sticky Pro —— 消息前缀指纹匹配的对话级状态保留。
 - **v4 (2026-06-18)**: 流式路径重构 —— reasoning_content 实时透传 + 前缀增量检测 + tier 切换分隔标记。彻底解决推理模型长 think block 导致客户端 TTFB 飙升的问题。
+
+
+### v6 变更详情 (2026-06-24)
+
+#### 动机
+
+实际使用中发现 flash 模型几乎从不主动调用 pro 模式。分析原有 flash contract 发现两个核心问题：
+
+1. **语气过于保守** —— 「Use this sparingly」、「If in doubt, attempt the task here first」等一系列措辞在潜意识层面抑制 escalation。
+2. **场景过于狭窄** —— 仅列举「跨文件复杂重构」、「并发安全不变性」等架构级场景，覆盖不到日常编码中的高频升级需求（模糊需求、多选项、工具调用失败）。
+3. **错误描述** —— 提到「3+ 次 repair 失败自动升级」，但 proxy 层面并没有这个机制，且会误导模型觉得「可以等自动升级」从而不主动调用 `<<<NEEDS_PRO>>>`。
+
+#### 核心改动
+
+**对比：**
+
+| 维度 | 旧版 | 新版 |
+|------|------|------|
+| 标题 | `Cost-aware tier switching instruction` (成本导向) | `Tier escalation instruction` (升级导向) |
+| 触发场景 | 仅「复杂推理」一类 | 5 类：模糊需求、多选项决策、工具调用失败、卡住、复杂推理 |
+| 示例 | `cross-file refactor across 6 modules` (偏架构) | 贴近编码助手日常：grep 空结果、edit 失败、ambiguous 需求、多方案选型 |
+| 升级策略 | `when in doubt, attempt the task here first` | `Escalate EARLY, not as a last resort. If you feel uncertain → escalate` |
+| 降级 marker | `<<<NEEDS_FLASH>>> — downgrade request (NO-OP for you)` | `<<<NEEDS_FLASH>>> — NOT ACTIVE for you` |
+| 失败兜底 | `auto-escalates after 3+ repair errors` (不存在该机制) | 已移除 |
+
+**关键措辞变化：**
+
+旧版典型用语：
+```
+Do NOT emit any other content in the same response when you request escalation. Use this
+sparingly: normal tasks stay on this tier. Request escalation ONLY when you would otherwise
+produce a guess or a visibly-mediocre answer. If in doubt, attempt the task here first; the
+system also escalates automatically if you hit 3+ repair errors.
+```
+
+新版典型用语：
+```
+### Escalate EARLY, not as a last resort:
+- If you feel uncertain at ANY point → escalate.
+- If the request seems ambiguous → escalate.
+- If a tool returns something unexpected → escalate after 1 retry, not 3+.
+- If you're about to guess → escalate instead.
+- Normal tasks stay here — but when in doubt, escalate. It's better to escalate
+  unnecessarily than to produce a wrong or mediocre answer.
+```
+
+#### 新增 5 类触发场景
+
+1. **AMBIGUOUS / UNCLEAR requirements** —— 用户需求模糊、多义、未指定。如用户说「make this better」不说明具体方向。
+2. **MULTIPLE OPTIONS / decision needed** —— 需要从多个方案中选择，涉及非平凡 trade-off（架构、API 设计、数据模型等）。
+3. **TOOL CALL FAILURE** —— grep 空结果、edit 失败、build 报奇怪错误，模型不确定原因。
+4. **STUCK / spinning** —— 同一子问题 2+ 次尝试无进展，推理陷入循环。
+5. **COMPLEX reasoning** —— 保留原版的跨文件重构、并发安全性校验等。
+
+#### 修改文件
+
+- `src/escalate/contract.ts` — 重写 flash contract 文本
+- `src/escalate/__tests__/contract.spec.ts` — 更新 assertion 期望
+- `src/escalate/__tests__/dispatcher.spec.ts` — 更新 assertion 期望
+- `src/escalate/__tests__/e2e.spec.ts` — 更新 assertion 期望
+
+#### 测试结果
+
+- 124/124 escalate 测试全部通过（6 文件）
+- 类型检查通过
 
 ### v4 变更详情 (2026-06-18)
 

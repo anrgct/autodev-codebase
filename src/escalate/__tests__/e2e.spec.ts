@@ -166,7 +166,7 @@ describe('escalate proxy e2e', () => {
     const flashBody = JSON.parse(captured.flash[0].body)
     expect(flashBody.model).toBe(FLASH_MODEL)
     const sys = flashBody.messages.find((m: { role: string }) => m.role === 'system')
-    expect(sys.content).toContain('Cost-aware tier switching instruction')
+    expect(sys.content).toContain('Tier escalation instruction')
     // Authorization was forwarded.
     expect(captured.flash[0].authorization).toBe(`Bearer ${MOCK_TOKEN}`)
 
