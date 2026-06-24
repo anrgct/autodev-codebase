@@ -82,7 +82,10 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
   const stickyProTtlMsRaw = fullConfig.escalateStickyProTtlMs
   const stickyProTtlMs = typeof stickyProTtlMsRaw === 'number' && stickyProTtlMsRaw >= 0 ? stickyProTtlMsRaw : 300000
 
+  const escalationMode = (fullConfig.escalateMode ?? 'self-report') as 'self-report' | 'advisor'
+
   return {
+    mode: escalationMode,
     apiBase,
     apiKey: apiKey ? String(apiKey) : undefined,
     flashModel,
@@ -103,6 +106,7 @@ function printStartupBanner(cfg: EscalateConfig, port: number): void {
   console.log(bar)
   console.log(`  Listening on : http://${cfg.host}:${port}`)
   console.log(`  Upstream API : ${cfg.apiBase}`)
+  console.log(`  Mode         : ${cfg.mode}  (${cfg.mode === 'self-report' ? 'model self-reports <<<NEEDS_PRO>>>' : 'virtual escalate_advisor tool'})`)
   console.log(`  Flash model  : ${cfg.flashModel}  (first attempt)`)
   console.log(`  Pro model    : ${cfg.proModel}    (<<<NEEDS_PRO>>> escalation)`)
   console.log(`  API key      : ${cfg.apiKey ? '(configured)' : '(forwarded from client)'}`)

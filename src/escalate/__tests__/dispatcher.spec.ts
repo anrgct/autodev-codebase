@@ -22,6 +22,7 @@ const PRO = 'deepseek-v4-pro'
 
 function makeConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
   return {
+    mode: 'self-report',
     apiBase: 'https://api.example.com/v1',
     apiKey: undefined,
     flashModel: FLASH,

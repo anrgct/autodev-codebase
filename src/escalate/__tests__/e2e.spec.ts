@@ -100,6 +100,7 @@ afterAll(async () => {
 
 function makeConfig(): EscalateConfig {
   return {
+    mode: 'self-report',
     apiBase: `http://127.0.0.1:${upstreamPort}/v1`,
     apiKey: MOCK_TOKEN,
     flashModel: FLASH_MODEL,

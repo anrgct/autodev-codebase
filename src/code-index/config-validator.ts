@@ -578,6 +578,17 @@ export class ConfigValidator {
     }
 
     // Validate escalate proxy port range
+    if (config.escalateMode !== undefined &&
+        config.escalateMode !== 'self-report' &&
+        config.escalateMode !== 'advisor') {
+      issues.push({
+        path: 'escalateMode',
+        code: 'invalid_value',
+        message: `escalateMode must be "self-report" or "advisor", got: ${config.escalateMode}`
+      })
+    }
+
+    // Validate escalate proxy port range
     if (config.escalatePort !== undefined &&
         (config.escalatePort < 1 || config.escalatePort > 65535 || !Number.isInteger(config.escalatePort))) {
       issues.push({

@@ -196,6 +196,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   highlighterConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent highlight requests (llamacpp-llm provider)' },
 
   // Escalate proxy
+  escalateMode: { type: 'enum', enumValues: ['self-report', 'advisor'] as const, description: 'Escalation mode: "self-report" (inject contract, model emits <<<NEEDS_PRO>>> marker) or "advisor" (virtual escalate_advisor tool)' },
   escalateApiBase: { type: 'string', description: 'API base URL for the upstream LLM (default: https://api.deepseek.com/v1)' },
   escalateApiKey: { type: 'string', description: 'API key for upstream LLM (optional — if not set, client Authorization header is forwarded)' },
   escalateFlashModel: { type: 'string', description: 'Flash (cheap) model ID used for first attempt (default: deepseek-v4-flash)' },

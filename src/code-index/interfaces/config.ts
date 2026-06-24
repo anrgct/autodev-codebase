@@ -123,6 +123,7 @@ export type EmbedderConfig =
  */
 export interface CodeIndexConfig {
   isEnabled: boolean
+  // Escalation mode: 'self-report' (marker contract) | 'advisor' (virtual tool)
   // Embedder - 通用参数
   embedderProvider: EmbedderProvider
   embedderModelId?: string
@@ -253,7 +254,8 @@ export interface CodeIndexConfig {
   highlighterThreshold?: number
   highlighterConcurrency?: number
 
-  // Escalate proxy (auto flash → pro escalation on <<<NEEDS_PRO>>> marker)
+  // Escalate proxy (auto flash → pro escalation)
+  escalateMode?: 'self-report' | 'advisor'
   escalateApiBase?: string
   escalateApiKey?: string
   escalateFlashModel?: string

@@ -12,6 +12,8 @@
  * Built by merging the three-layer config (default → global → project → CLI overrides).
  */
 export interface EscalateConfig {
+  /** Escalation mode: how the proxy decides to switch tiers. */
+  mode: EscalationMode
   /** Upstream OpenAI-compatible API base URL (no trailing slash). */
   apiBase: string
   /**
@@ -45,6 +47,17 @@ export interface EscalateConfig {
  *  - `error`       — upstream returned a non-2xx status
  */
 export type EscalationReason = 'self-report' | 'downgrade' | 'passthrough' | 'non-stream' | 'error'
+
+/**
+ * Escalation mode.
+ *
+ * - `self-report` (default): inject the ESCALATION_CONTRACT into the system
+ *   prompt; the flash model self-reports `<<<NEEDS_PRO>>>` when it decides
+ *   the task needs the stronger tier.
+ * - `advisor`: forthcoming — exposes a virtual `escalate_advisor` tool that
+ *   lets the model call the pro model explicitly.
+ */
+export type EscalationMode = 'self-report' | 'advisor'
 
 /**
  * Result of dispatching a single chat-completion request.
