@@ -1,9 +1,11 @@
 #include <thread>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include "common/common.h"
 #include "llama-vocab.h"
 #include "llama.h"
+#include "gguf.h"
 
 #include "addonGlobals.h"
 #include "AddonModel.h"
@@ -812,25 +814,275 @@ Napi::Value AddonContext::AddToBatch(const Napi::CallbackInfo& info) {
         }
     }
 
-    return resLogitIndexes;
+    	return resLogitIndexes;
+    }
+    Napi::Value AddonContext::InitBatchEmbd(const Napi::CallbackInfo& info) {
+    	if (disposed) {
+    		Napi::Error::New(info.Env(), "Context is disposed").ThrowAsJavaScriptException();
+    		return info.Env().Undefined();
+    	}
+
+    	if (has_batch) {
+    		llama_batch_free(batch);
+    	}
+
+    	int32_t n_tokens = info[0].As<Napi::Number>().Int32Value();
+    	int32_t n_embd = llama_model_n_embd(model->model);
+
+    	batch = llama_batch_init(n_tokens, n_embd, 1);
+    	has_batch = true;
+    	batch_n_tokens = n_tokens;
+
+    	uint64_t newBatchMemorySize = calculateBatchMemorySize(n_tokens, n_embd, context_params.n_batch);
+    	if (newBatchMemorySize > batchMemorySize) {
+    		adjustNapiExternalMemoryAdd(Env(), newBatchMemorySize - batchMemorySize);
+    		batchMemorySize = newBatchMemorySize;
+    	} else if (newBatchMemorySize < batchMemorySize) {
+    		adjustNapiExternalMemorySubtract(Env(), batchMemorySize - newBatchMemorySize);
+    		batchMemorySize = newBatchMemorySize;
+    	}
+
+    	return info.Env().Undefined();
+    }
+    Napi::Value AddonContext::AddToBatchEmbd(const Napi::CallbackInfo& info) {
+    	if (!has_batch) {
+    		Napi::Error::New(info.Env(), "No batch is initialized").ThrowAsJavaScriptException();
+    		return info.Env().Undefined();
+    	}
+
+    	int32_t sequenceId = info[0].As<Napi::Number>().Int32Value();
+    	int32_t firstPos = info[1].As<Napi::Number>().Int32Value();
+    	Napi::Float32Array embdFlat = info[2].As<Napi::Float32Array>();
+    	int32_t nTokens = info[3].As<Napi::Number>().Int32Value();
+    	Napi::Uint32Array tokenLogitIndexes = info[4].As<Napi::Uint32Array>();
+
+    	if (collectKqSoftMax && batch.n_tokens == 0) {
+    		kqCurrentBatchTokenStart = firstPos;
+    	}
+
+    	int32_t n_embd = llama_model_n_embd(model->model);
+    	size_t totalFloats = (size_t)nTokens * n_embd;
+    	GGML_ASSERT(embdFlat.ElementLength() >= totalFloats);
+    	GGML_ASSERT(batch.n_tokens + nTokens <= batch_n_tokens);
+
+    	auto tokenLogitIndexesLength = tokenLogitIndexes.ElementLength();
+    	Napi::Uint32Array resLogitIndexes = Napi::Uint32Array::New(info.Env(), tokenLogitIndexesLength);
+
+    	size_t l = 0;
+	for (int32_t i = 0; i < nTokens; i++) {
+		// Copy embedding row from flat input to batch.embd
+		size_t dstOffset = (size_t)(batch.n_tokens + i) * n_embd;
+		size_t srcOffset = (size_t)i * n_embd;
+		for (int32_t j = 0; j < n_embd; j++) {
+			batch.embd[dstOffset + j] = embdFlat[srcOffset + j];
+		}
+
+		// Set position
+		batch.pos[batch.n_tokens + i] = firstPos + i;
+
+		// Set sequence ID (allocates 1-element array, llama_batch_free will free it)
+		batch.seq_id[batch.n_tokens + i] = (llama_seq_id *)malloc(sizeof(llama_seq_id));
+		batch.seq_id[batch.n_tokens + i][0] = sequenceId;
+		batch.n_seq_id[batch.n_tokens + i] = 1;
+
+		// Set logits flag
+		bool wantLogit = false;
+		if (l < tokenLogitIndexesLength && tokenLogitIndexes[l] == i) {
+			wantLogit = true;
+			resLogitIndexes[l] = batch.n_tokens + i;
+			l++;
+		}
+		batch.logits[batch.n_tokens + i] = wantLogit;
+	}
+
+    	batch.n_tokens += nTokens;
+
+    	return resLogitIndexes;
+    }
+    Napi::Value AddonContext::GetTokenEmbeddings(const Napi::CallbackInfo& info) {
+	if (disposed) {
+		Napi::Error::New(info.Env(), "Context is disposed").ThrowAsJavaScriptException();
+		return info.Env().Undefined();
+	}
+
+	Napi::Uint32Array tokenIds = info[0].As<Napi::Uint32Array>();
+	uint32_t nTokens = tokenIds.ElementLength();
+	int32_t n_embd = llama_model_n_embd(model->model);
+
+	if (nTokens == 0) {
+		return Napi::Float32Array::New(info.Env(), 0);
+	}
+
+	// Use gguf API for reliable file offset (avoids manual header parsing bugs)
+	gguf_init_params ggufParams = { true, nullptr };
+	gguf_context * gctx = gguf_init_from_file(model->modelPath.c_str(), ggufParams);
+	if (!gctx) {
+		Napi::Error::New(info.Env(), "Failed to parse GGUF file").ThrowAsJavaScriptException();
+		return info.Env().Undefined();
+	}
+
+	int tensorIdx = gguf_find_tensor(gctx, "token_embd.weight");
+	if (tensorIdx < 0) {
+		gguf_free(gctx);
+		Napi::Error::New(info.Env(), "token_embd.weight not found").ThrowAsJavaScriptException();
+		return info.Env().Undefined();
+	}
+
+	// Reliable offsets from gguf API
+	size_t dataOffset = gguf_get_data_offset(gctx);
+	uint64_t foundOffset = gguf_get_tensor_offset(gctx, tensorIdx);
+	uint32_t foundType = gguf_get_tensor_type(gctx, tensorIdx);
+
+	// Manually parse tensor info for dimensions (gguf API doesn't expose ne[])
+	// Re-open the file and seek past KV section to tensor info
+	FILE * fp = fopen(model->modelPath.c_str(), "rb");
+	if (!fp) { gguf_free(gctx); Napi::Error::New(info.Env(), "Failed to open GGUF").ThrowAsJavaScriptException(); return info.Env().Undefined(); }
+
+	auto ru32 = [&]()->uint32_t{uint8_t b[4];fread(b,1,4,fp);return(uint32_t)b[0]|((uint32_t)b[1]<<8)|((uint32_t)b[2]<<16)|((uint32_t)b[3]<<24);};
+	auto ru64 = [&]()->uint64_t{uint8_t b[8];fread(b,1,8,fp);return(uint64_t)b[0]|((uint64_t)b[1]<<8)|((uint64_t)b[2]<<16)|((uint64_t)b[3]<<24)|((uint64_t)b[4]<<32)|((uint64_t)b[5]<<40)|((uint64_t)b[6]<<48)|((uint64_t)b[7]<<56);};
+
+	fseek(fp, 0, SEEK_SET);
+	ru32(); ru32(); // magic, version
+	uint64_t nTensors = ru64();
+	uint64_t nKv = ru64();
+
+	// Skip KV pairs (use extended sizes array for types up to 12)
+	for (uint64_t i = 0; i < nKv; i++) {
+		uint64_t kl = ru64(); fseek(fp, (long)kl, SEEK_CUR);
+		uint32_t vt = ru32();
+		if (vt == 9) {
+			uint32_t et = ru32(); uint64_t ne = ru64();
+			int esizes[] = {1,1,2,2,4,4,4,1,0,0,8,8,8}; // types 0-12
+			int es = (et <= 12) ? esizes[et] : 4;
+			if (et == 8) { for (uint64_t j = 0; j < ne; j++) { uint64_t sl = ru64(); fseek(fp, (long)sl, SEEK_CUR); } }
+			else { fseek(fp, (long)(ne * es), SEEK_CUR); }
+		} else if (vt == 8) {
+			uint64_t sl = ru64(); fseek(fp, (long)sl, SEEK_CUR);
+		} else {
+			int vsizes[] = {1,1,2,2,4,4,4,1,0,0,8,8,8};
+			int vs = (vt <= 12) ? vsizes[vt] : 4;
+			fseek(fp, (long)vs, SEEK_CUR);
+		}
+	}
+
+	// Scan tensor infos to find token_embd.weight dimensions
+	int64_t foundNEmbd = 0, foundVocabSize = 0;
+	for (uint64_t i = 0; i < nTensors; i++) {
+		uint64_t nl = ru64();
+		std::vector<char> nb(nl + 1);
+		fread(nb.data(), 1, (size_t)nl, fp); nb[nl] = '\0';
+		uint32_t nd = ru32();
+		std::vector<uint64_t> dims(nd);
+		for (uint32_t j = 0; j < nd; j++) dims[j] = ru64();
+		ru32(); ru64(); // type, offset (already have from gguf API)
+		if (strcmp(nb.data(), "token_embd.weight") == 0) {
+			foundNEmbd = (int64_t)dims[0];
+			foundVocabSize = (int64_t)dims[1];
+			break;
+		}
+	}
+
+	gguf_free(gctx);
+
+	if (foundNEmbd == 0) {
+		fclose(fp);
+		Napi::Error::New(info.Env(), "token_embd.weight dimensions not found").ThrowAsJavaScriptException();
+		return info.Env().Undefined();
+	}
+
+	// Determine row size based on tensor type
+	size_t rowSizeBytes = 0;
+	bool isF16 = false, isBF16 = false, isQ8_0 = false;
+	const uint32_t QK8_0 = 32;
+
+	switch (foundType) {
+		case 0: // F32
+			rowSizeBytes = (size_t)foundNEmbd * 4; break;
+		case 1: // F16
+			rowSizeBytes = (size_t)foundNEmbd * 2; isF16 = true; break;
+		case 30: // BF16
+			rowSizeBytes = (size_t)foundNEmbd * 2; isBF16 = true; break;
+		case 8: // Q8_0
+			rowSizeBytes = (size_t)(((foundNEmbd + 31) / 32) * 34); isQ8_0 = true; break;
+		default:
+			fclose(fp);
+			Napi::Error::New(info.Env(), std::string("Unsupported token_embd.weight type (") + std::to_string(foundType) + ")").ThrowAsJavaScriptException();
+			return info.Env().Undefined();
+	}
+
+	Napi::Float32Array result = Napi::Float32Array::New(info.Env(), nTokens * n_embd);
+
+	// FP16 half → float
+	auto fp16ToF32 = [](uint16_t h) -> float {
+		int s = (h & 0x8000) ? -1 : 1, e = (h >> 10) & 0x1f, m = h & 0x3ff;
+		if (e == 0) return (float)s * powf(2.0f, -14.0f) * ((float)m / 1024.0f);
+		if (e == 31) return m == 0 ? (float)s * INFINITY : NAN;
+		return (float)s * powf(2.0f, (float)(e - 15)) * (1.0f + (float)m / 1024.0f);
+	};
+
+	// BF16 → float
+	auto bf16ToF32 = [](uint16_t v) -> float {
+		uint32_t b = ((uint32_t)v) << 16; float f; memcpy(&f, &b, sizeof(f)); return f;
+	};
+
+	std::vector<uint8_t> rowBuf(rowSizeBytes);
+	for (uint32_t i = 0; i < nTokens; i++) {
+		uint32_t tid = tokenIds[i];
+		if ((int64_t)tid >= foundVocabSize) {
+			for (int32_t j = 0; j < n_embd; j++) result[i * n_embd + j] = 0.0f;
+			continue;
+		}
+
+		long fileOff = (long)dataOffset + (long)foundOffset + (long)((size_t)tid * rowSizeBytes);
+		fseek(fp, fileOff, SEEK_SET);
+		fread(rowBuf.data(), 1, rowSizeBytes, fp);
+
+		int32_t copyLen = std::min(n_embd, (int32_t)foundNEmbd);
+
+		if (isQ8_0) {
+			int64_t bpr = (foundNEmbd + 31) / 32;
+			for (int64_t blk = 0; blk < bpr; blk++) {
+				size_t bo = (size_t)blk * 34;
+				uint16_t sp = *(uint16_t*)(rowBuf.data() + bo);
+				float scale = fp16ToF32(sp);  // try fp16 first; fall back to bf16 if NaN
+				if (std::isnan(scale) || std::isinf(scale)) scale = bf16ToF32(sp);
+				int8_t * qp = (int8_t*)(rowBuf.data() + bo + 2);
+				int32_t bs = (int32_t)blk * 32;
+				for (int32_t j = 0; j < 32 && (bs + j) < copyLen; j++)
+					result[i * n_embd + bs + j] = (float)qp[j] * scale;
+			}
+		} else if (isF16) {
+			uint16_t * p = (uint16_t*)rowBuf.data();
+			for (int32_t j = 0; j < copyLen; j++) result[i * n_embd + j] = fp16ToF32(p[j]);
+		} else if (isBF16) {
+			uint16_t * p = (uint16_t*)rowBuf.data();
+			for (int32_t j = 0; j < copyLen; j++) result[i * n_embd + j] = bf16ToF32(p[j]);
+		} else {
+			float * p = (float*)rowBuf.data();
+			for (int32_t j = 0; j < copyLen; j++) result[i * n_embd + j] = p[j];
+		}
+		for (int32_t j = copyLen; j < n_embd; j++) result[i * n_embd + j] = 0.0f;
+	}
+
+	fclose(fp);
+	return result;
 }
+
 Napi::Value AddonContext::DisposeSequence(const Napi::CallbackInfo& info) {
-    if (disposed) {
-        Napi::Error::New(info.Env(), "Context is disposed").ThrowAsJavaScriptException();
-        return info.Env().Undefined();
-    }
+	if (disposed) {
+		Napi::Error::New(info.Env(), "Context is disposed").ThrowAsJavaScriptException();
+		return info.Env().Undefined();
+	}
 
-    int32_t sequenceId = info[0].As<Napi::Number>().Int32Value();
-
-    bool result = llama_memory_seq_rm(llama_get_memory(ctx), sequenceId, -1, -1);
-
-    if (!result) {
-        Napi::Error::New(info.Env(), "Failed to dispose sequence").ThrowAsJavaScriptException();
-        return info.Env().Undefined();
-    }
-
-    return info.Env().Undefined();
+	int32_t sequenceId = info[0].As<Napi::Number>().Int32Value();
+	bool ok = llama_memory_seq_rm(llama_get_memory(ctx), sequenceId, -1, -1);
+	if (!ok) {
+		Napi::Error::New(info.Env(), "Failed to dispose sequence").ThrowAsJavaScriptException();
+		return info.Env().Undefined();
+	}
+	return info.Env().Undefined();
 }
+
 Napi::Value AddonContext::RemoveTokenCellsFromSequence(const Napi::CallbackInfo& info) {
     if (disposed) {
         Napi::Error::New(info.Env(), "Context is disposed").ThrowAsJavaScriptException();
@@ -895,6 +1147,26 @@ Napi::Value AddonContext::SampleToken(const Napi::CallbackInfo& info) {
     AddonContextSampleTokenWorker* worker = new AddonContextSampleTokenWorker(info, this);
     worker->Queue();
     return worker->GetPromise();
+}
+
+// Debug: dump raw logits at batch token index i. Returns Float32Array of n_vocab logits.
+Napi::Value AddonContext::GetLogitsRow(const Napi::CallbackInfo& info) {
+    if (disposed) {
+        Napi::Error::New(info.Env(), "Context is disposed").ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    int32_t batchTokenIndex = info[0].As<Napi::Number>().Int32Value();
+    const int n_vocab = llama_vocab_n_tokens(model->vocab);
+    const auto * logits = llama_get_logits_ith(ctx, batchTokenIndex);
+    if (logits == nullptr) {
+        Napi::Error::New(info.Env(), "llama_get_logits_ith returned null").ThrowAsJavaScriptException();
+        return info.Env().Undefined();
+    }
+    Napi::Float32Array result = Napi::Float32Array::New(info.Env(), n_vocab);
+    for (int i = 0; i < n_vocab; i++) {
+        result[i] = logits[i];
+    }
+    return result;
 }
 
 Napi::Value AddonContext::GetEmbedding(const Napi::CallbackInfo& info) {
@@ -1286,15 +1558,19 @@ void AddonContext::init(Napi::Object exports) {
             {
                 InstanceMethod("init", &AddonContext::Init),
                 InstanceMethod("getContextSize", &AddonContext::GetContextSize),
-                InstanceMethod("initBatch", &AddonContext::InitBatch),
-                InstanceMethod("addToBatch", &AddonContext::AddToBatch),
-                InstanceMethod("disposeSequence", &AddonContext::DisposeSequence),
+     			InstanceMethod("initBatch", &AddonContext::InitBatch),
+     			InstanceMethod("initBatchEmbd", &AddonContext::InitBatchEmbd),
+     			InstanceMethod("addToBatch", &AddonContext::AddToBatch),
+     			InstanceMethod("addToBatchEmbd", &AddonContext::AddToBatchEmbd),
+     			InstanceMethod("getTokenEmbeddings", &AddonContext::GetTokenEmbeddings),
+     			InstanceMethod("disposeSequence", &AddonContext::DisposeSequence),
                 InstanceMethod("removeTokenCellsFromSequence", &AddonContext::RemoveTokenCellsFromSequence),
                 InstanceMethod("shiftSequenceTokenCells", &AddonContext::ShiftSequenceTokenCells),
                 InstanceMethod("getSequenceKvCacheMinPosition", &AddonContext::GetSequenceKvCacheMinPosition),
                 InstanceMethod("getSequenceKvCacheMaxPosition", &AddonContext::GetSequenceKvCacheMaxPosition),
                 InstanceMethod("decodeBatch", &AddonContext::DecodeBatch),
                 InstanceMethod("sampleToken", &AddonContext::SampleToken),
+                InstanceMethod("getLogitsRow", &AddonContext::GetLogitsRow),
                 InstanceMethod("getEmbedding", &AddonContext::GetEmbedding),
                 InstanceMethod("clearAccumulatedEmbeddings", &AddonContext::ClearAccumulatedEmbeddings),
                 InstanceMethod("getStateSize", &AddonContext::GetStateSize),

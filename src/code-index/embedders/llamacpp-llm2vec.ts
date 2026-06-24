@@ -241,9 +241,9 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
       this._rW = llm2vecGen.reconstruction_mlp.weight as number[]
       this._rb = llm2vecGen.reconstruction_mlp.bias as number[]
 
-      const DIM = 1024
-      if (this._aW.length !== DIM * DIM || this._ab.length !== DIM) {
-        throw new Error(`Unexpected alignment_mlp shape`)
+	      const DIM = this._ab.length  // derive from bias (DIM-dim vector)
+	      if (this._aW.length !== DIM * DIM) {
+	        throw new Error(`Unexpected alignment_mlp weight shape: ${this._aW.length} vs ${DIM}×${DIM}=${DIM*DIM}`)
       }
       if (this._rW.length !== DIM * DIM || this._rb.length !== DIM) {
         throw new Error(`Unexpected reconstruction_mlp shape`)
@@ -467,6 +467,183 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
     })
     return result
   }
+	// -- mixed injection generation (recon + prompt -> KV cache -> greedy continuation) ----------
+
+	/**
+	 * recon soft prompt + text prompt mixed injection -> decoder decode -> greedy continuation.
+	 *
+	 * Flow:
+	 *   1. query -> encode -> last10 hidden -> reconstruction_mlp -> recon[10, n_embd]
+	 *   2. prompt -> tokenize -> getTokenEmbeddings -> promptEmbd[T, n_embd]
+	 *   3. [recon*10 + promptEmbd*T] -> mixed embd
+	 *   4. initBatchEmbd + addToBatchEmbd -> decode (build KV cache, last position outputs logits)
+	 *   5. greedy sampling continuation (switch to token path), until EOS / maxTokens
+	 *
+	 * @param queryText  original query text (without instruction prefix, question tokens added automatically)
+	 * @param prompt     mixed injection text prompt (e.g. "Query: find relevant clues"), gives decoder direction
+	 * @param maxTokens  max continuation tokens
+	 * @returns generated text
+	 */
+	async generateWithPrompt(
+	    queryText: string,
+	    prompt: string,
+	    maxTokens: number = 30,
+	): Promise<string> {
+	    await this._ensureModel()
+	    await this._ensureGenContext()
+
+	    const ctx = (this._genContext as any)._ctx
+	    const model = this._model!
+	    const rW = this._rW!
+	    const rb = this._rb!
+	    const dim = this._nEmbd
+
+	    // -- 1. compute recon soft prompt [10, dim] --
+	    const prefixedQuery = queryText + QUESTION_TOKENS_STR
+	    const queryTokens = model.tokenize(prefixedQuery, true)
+	    const perTokenEmbs = await this._embeddingContext!.getEmbeddingsForTokens(queryTokens)
+	    const nQt = perTokenEmbs.length
+	    const last10 = perTokenEmbs.slice(nQt - 10)
+	    const recon = last10.map(h => this._applyLinear(h, rW, rb, dim))
+
+	    // -- 2. prompt -> tokenize -> token_embd lookup --
+	    const promptIds = model.tokenize(prompt, true)
+	    if (promptIds.length === 0) {
+	      throw new Error("Prompt tokenization returned empty")
+	    }
+	    const promptTokenIds = Uint32Array.from(promptIds.map(t => Number(t)))
+	    const promptEmbdFlat: Float32Array = ctx.getTokenEmbeddings(promptTokenIds)
+	    const K = recon.length   // 10
+	    const T = promptIds.length
+
+	    // -- 3. build mixed embd [K+T, dim] --
+	    const mixedFlat = new Float32Array((K + T) * dim)
+	    for (let i = 0; i < K; i++) {
+	      mixedFlat.set(recon[i], i * dim)
+	    }
+	    mixedFlat.set(promptEmbdFlat, K * dim)
+
+	    // -- 4. KV cache 用 addon 层 disposeSequence 清（clearHistory 是高层 sequence 方法，
+	    //    与 embd 注入路径的 addon 直接操作不兼容）--
+	    ctx.disposeSequence(0)
+
+	    // -- 5. Step 0: embd injection decode, build KV cache (last position outputs logits) --
+	    ctx.initBatchEmbd(K + T)
+	    ctx.addToBatchEmbd(
+	      /*seqId*/ 0,
+	      /*firstPos*/ 0,
+	      mixedFlat,
+	      K + T,
+	      Uint32Array.from([K + T - 1]), // only last position gets logits
+	    )
+	    await ctx.decodeBatch()
+
+	    // -- 6. create greedy sampler --
+	    const bindingsAddonSampler = (model as any)._llama._bindings.AddonSampler
+	    const addonModel = (model as any)._model
+	    const addonSampler = new bindingsAddonSampler(addonModel)
+	    addonSampler.applyConfig({})  // configure greedy (applyConfig with no temperature → greedySampler)
+
+	    // -- 7. Step 1+: greedy continuation (switch to token path) --
+	    const EOS = model.tokenEos?.() ?? (model as any).tokens?.eos ?? 151645
+	    const generated: number[] = []
+	    let curPos = K + T
+
+	    // get first token from step0 last position logit -> argmax
+	    // NOTE: sampleToken 3rd arg must be omitted (passing boolean false makes it return [tokenId, probs] array instead of number)
+	    let curToken: number = await ctx.sampleToken(K + T - 1, addonSampler)
+
+	    for (let step = 0; step < maxTokens; step++) {
+	      if (curToken === EOS || curToken < 0) break
+	      generated.push(curToken)
+
+	      ctx.initBatch(1)
+	      ctx.addToBatch(
+	        /*seqId*/ 0,
+	        curPos,
+	        Uint32Array.from([curToken]),
+	        Uint32Array.from([0]), // output logits for this token
+	      )
+	      await ctx.decodeBatch()
+	      curToken = await ctx.sampleToken(0, addonSampler)
+	      curPos++
+	    }
+
+	    addonSampler.dispose()
+
+	    // -- 8. detokenize --
+	    const text = model.detokenize(generated as any, false)
+	    this.logger?.debug(`[generateWithPrompt] recon=${K} prompt="${prompt}" tokens=${generated.length} text="${text.slice(0, 200)}"`)
+	    return text
+	}
+
+	/**
+	 * Pure free-running (recon only, no prompt): [recon*10] -> KV cache -> greedy continuation.
+	 * Comparison baseline only. Pure recon injection is known to collapse.
+	 */
+	async generateFreeRunning(
+	    queryText: string,
+	    maxTokens: number = 30,
+	): Promise<string> {
+	    await this._ensureModel()
+	    await this._ensureGenContext()
+
+	    const ctx = (this._genContext as any)._ctx
+	    const model = this._model!
+	    const rW = this._rW!
+	    const rb = this._rb!
+	    const dim = this._nEmbd
+
+	    // 1. Compute recon [10, dim]
+	    const prefixedQuery = queryText + QUESTION_TOKENS_STR
+	    const queryTokens = model.tokenize(prefixedQuery, true)
+	    const perTokenEmbs = await this._embeddingContext!.getEmbeddingsForTokens(queryTokens)
+	    const nQt = perTokenEmbs.length
+	    const last10 = perTokenEmbs.slice(nQt - 10)
+	    const recon = last10.map(h => this._applyLinear(h, rW, rb, dim))
+
+	    // 2. Build flat embd
+	    const K = recon.length
+	    const mixedFlat = new Float32Array(K * dim)
+	    for (let i = 0; i < K; i++) {
+	      mixedFlat.set(recon[i], i * dim)
+	    }
+
+	    // 3. KV cache 用 addon 层 disposeSequence 清
+	    ctx.disposeSequence(0)
+
+	    // 4. Step 0: embd decode
+	    ctx.initBatchEmbd(K)
+	    ctx.addToBatchEmbd(0, 0, mixedFlat, K, Uint32Array.from([K - 1]))
+	    await ctx.decodeBatch()
+
+	    // 5. Greedy sampler
+	    const bindingsAddonSampler = (model as any)._llama._bindings.AddonSampler
+	    const addonSampler = new bindingsAddonSampler((model as any)._model)
+	    addonSampler.applyConfig({})  // configure greedy
+
+	    // 6. Greedy generation
+	    const EOS = model.tokenEos?.() ?? (model as any).tokens?.eos ?? 151645
+	    const generated: number[] = []
+	    let curPos = K
+	    let curToken: number = await ctx.sampleToken(K - 1, addonSampler)
+
+	    for (let step = 0; step < maxTokens; step++) {
+	      if (curToken === EOS || curToken < 0) break
+	      generated.push(curToken)
+	      ctx.initBatch(1)
+	      ctx.addToBatch(0, curPos, Uint32Array.from([curToken]), Uint32Array.from([0]))
+	      await ctx.decodeBatch()
+	      curToken = await ctx.sampleToken(0, addonSampler)
+	      curPos++
+	    }
+
+	    addonSampler.dispose()
+	    const text = model.detokenize(generated as any, false)
+	    this.logger?.debug(`[generateFreeRunning] tokens=${generated.length} text="${text.slice(0, 200)}"`)
+	    return text
+	}
+
   /** 在 token embeddings 子集中找最近 neighbor（余弦相似度 = dot after L2 norm） */
   private _findNearestTokens(vec: number[], k: number): Array<{ token: string; id: number; score: number; native: boolean }> {
     const embs = this._tokenEmbs!
