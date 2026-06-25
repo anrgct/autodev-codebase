@@ -78,6 +78,9 @@ experiment-results/
 
 # Eval artifacts
 musique-recall-*.json
+# Eval data slices: ignore full json (large / derived from dataset),
+# only commit id lists (*.ids.txt) as license-safe reproducibility pointers
+/data/*.json
 
 # Symlinked submodules
 llama.cpp

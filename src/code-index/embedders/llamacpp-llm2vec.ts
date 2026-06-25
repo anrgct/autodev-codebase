@@ -389,6 +389,93 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
     }
   }
 
+  /**
+   * recon 历史拼接 forward：生成下一跳的推理状态 recon（用户公式的核心实现）。
+   *
+   * [recon×10@1] + ... + [recon×10@n-1] + [query] + [新answer] + [prompt]
+   *   → embd 注入 forward → 取最后 10 位置 hidden state → recon_mlp → [recon×10@n]
+   *
+   * 与 encodeForSearch(文本融合) 的区别：这里拼接的是 recon **向量链**（推理记忆），
+   * 不是 passage 正文。forward 让 transformer attention 主动融合历史推理 + query + 
+   * 新线索，避免正文拼接的噪声稀释。新 recon 同时作为下一跳历史与检索向量。
+   *
+   * @param reconHistory  历史 recon 列表，每个 [10, dim]（推理记忆链，首跳传 []）
+   * @param queryText     原始 query
+   * @param newAnswerText 本跳新出现的检索结果文本（去重后；首跳传 ""）
+   * @param prompt        推理引导提示（如 "找出材料中新出现的相关线索"）
+   * @returns newRecon[10, dim]（加入历史链）+ embedding（检索向量）
+   */
+  async reconForward(
+    reconHistory: number[][][],
+    queryText: string,
+    newAnswerText: string,
+    prompt: string,
+  ): Promise<{ newRecon: number[][]; embedding: number[] }> {
+    await this._ensureModel()
+    if (!this._model || !this._rW || !this._rb || !this._aW || !this._ab || !this._embeddingContext) {
+      throw new Error("[LlamaCppLlm2VecEmbedder] Model not initialized")
+    }
+    const model = this._model
+    const embCtx = this._embeddingContext
+    // embedding context 的 addon context：支持 embd 注入 + getEmbedding 取 hidden state
+    const ctx = (embCtx as any)._llamaContext._ctx
+    const dim = this._nEmbd
+    const rW = this._rW, rb = this._rb, aW = this._aW, ab = this._ab
+
+    // 1. tokenize + token embd 查表
+    const queryIds = Array.from(model.tokenize(queryText, true))
+    const answerIds = newAnswerText ? Array.from(model.tokenize(newAnswerText, true)) : []
+    const promptIds = prompt ? Array.from(model.tokenize(prompt, true)) : []
+    // question tokens：recon_mlp 为 question token 位置的 hidden state 训练，必须末尾拼上
+    const questionIds = Array.from(model.tokenize(QUESTION_TOKENS_STR, true))
+    const queryEmbd: Float32Array = ctx.getTokenEmbeddings(Uint32Array.from(queryIds))
+    const answerEmbd: Float32Array = answerIds.length ? ctx.getTokenEmbeddings(Uint32Array.from(answerIds)) : new Float32Array(0)
+    const promptEmbd: Float32Array = promptIds.length ? ctx.getTokenEmbeddings(Uint32Array.from(promptIds)) : new Float32Array(0)
+    const questionEmbd: Float32Array = ctx.getTokenEmbeddings(Uint32Array.from(questionIds))
+
+    // 2. 拼 embd: [recon历史链] + [query] + [answer] + [prompt] + [question×N]
+    //    causal attention 下 question tokens 能 attend 到全部前缀（历史+query+answer+prompt）
+    const reconFlatLen = reconHistory.reduce((s, r) => s + r.length, 0)
+    const total = reconFlatLen + queryIds.length + answerIds.length + promptIds.length + questionIds.length
+    if (total === 0) throw new Error("reconForward: empty input")
+    const mixed = new Float32Array(total * dim)
+    let off = 0
+    for (const recon of reconHistory) {
+      for (const vec of recon) { mixed.set(vec, off * dim); off++ }
+    }
+    mixed.set(queryEmbd, off * dim); off += queryIds.length
+    if (answerIds.length) { mixed.set(answerEmbd, off * dim); off += answerIds.length }
+    if (promptIds.length) { mixed.set(promptEmbd, off * dim); off += promptIds.length }
+    mixed.set(questionEmbd, off * dim); off += questionIds.length
+    const questionStart = total - questionIds.length  // question tokens 起始位置（0-based）
+
+    // 3. embd 注入 forward（清累积 buffer + KV cache 后 forward）
+    ctx.clearAccumulatedEmbeddings()
+    ctx.disposeSequence(0)
+    ctx.initBatchEmbd(total)
+    ctx.addToBatchEmbd(0, 0, mixed, total, Uint32Array.from([]))
+    await ctx.decodeBatch()
+
+    // 4. 取 question tokens 位置的 hidden state（getEmbedding 索引 1..total）
+    const lastHidden: number[][] = []
+    for (let i = questionStart + 1; i <= total; i++) {
+      const h = ctx.getEmbedding(i)
+      lastHidden.push(Array.from(h))
+    }
+
+    // 5. 新 recon[10, dim]：逐 token recon_mlp（与 generateWithPrompt 的 recon 计算一致）
+    const newRecon = lastHidden.map(h => this._applyLinear(h, rW, rb, dim))
+
+    // 6. 检索 embedding：mean pool lastHidden → recon → align → l2norm（与 _encode 一致）
+    const pooled = new Array(dim).fill(0)
+    for (const v of lastHidden) for (let j = 0; j < dim; j++) pooled[j] += v[j]
+    for (let j = 0; j < dim; j++) pooled[j] /= lastHidden.length
+    const reconVec = this._applyLinear(pooled, rW, rb, dim)
+    const aligned = this._applyLinear(reconVec, aW, ab, dim)
+
+    return { newRecon, embedding: this._l2Normalize(aligned) }
+  }
+
   // ── Debug: 隐藏状态解释 ────────────────────────────────────────────────
 
   /**
@@ -488,9 +575,13 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
 	    queryText: string,
 	    prompt: string,
 	    maxTokens: number = 30,
+	    options?: { includeQuery?: boolean; context?: string },
 	): Promise<string> {
 	    await this._ensureModel()
 	    await this._ensureGenContext()
+
+	    const includeQuery = options?.includeQuery ?? true  // 默认注入 query（修复：原设计未注入导致 decoder 读不到题目）
+	    const context = options?.context ?? ""  // 累积检索结果：融入 recon 计算，形成递归推理状态
 
 	    const ctx = (this._genContext as any)._ctx
 	    const model = this._model!
@@ -499,14 +590,25 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
 	    const dim = this._nEmbd
 
 	    // -- 1. compute recon soft prompt [10, dim] --
-	    const prefixedQuery = queryText + QUESTION_TOKENS_STR
+	    //    recon 从 query + context 算（融入检索结果 → 多跳递归推理状态）
+	    const reconSource = context ? `${queryText}\n${context}` : queryText
+	    const prefixedQuery = reconSource + QUESTION_TOKENS_STR
 	    const queryTokens = model.tokenize(prefixedQuery, true)
 	    const perTokenEmbs = await this._embeddingContext!.getEmbeddingsForTokens(queryTokens)
 	    const nQt = perTokenEmbs.length
 	    const last10 = perTokenEmbs.slice(nQt - 10)
 	    const recon = last10.map(h => this._applyLinear(h, rW, rb, dim))
 
-	    // -- 2. prompt -> tokenize -> token_embd lookup --
+	    // -- 2. query text -> tokenize -> token_embd lookup (可选注入) --
+	    let queryEmbdFlat: Float32Array | null = null
+	    let Q = 0
+	    if (includeQuery) {
+	      const queryTextIds = model.tokenize(queryText, true)
+	      Q = queryTextIds.length
+	      queryEmbdFlat = ctx.getTokenEmbeddings(Uint32Array.from(queryTextIds.map(t => Number(t))))
+	    }
+
+	    // -- 3. prompt -> tokenize -> token_embd lookup --
 	    const promptIds = model.tokenize(prompt, true)
 	    if (promptIds.length === 0) {
 	      throw new Error("Prompt tokenization returned empty")
@@ -516,42 +618,46 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
 	    const K = recon.length   // 10
 	    const T = promptIds.length
 
-	    // -- 3. build mixed embd [K+T, dim] --
-	    const mixedFlat = new Float32Array((K + T) * dim)
+	    // -- 4. build mixed embd: [recon×K] + [query_embd×Q] + [prompt_embd×T] --
+	    const total = K + Q + T
+	    const mixedFlat = new Float32Array(total * dim)
 	    for (let i = 0; i < K; i++) {
 	      mixedFlat.set(recon[i], i * dim)
 	    }
-	    mixedFlat.set(promptEmbdFlat, K * dim)
+	    if (queryEmbdFlat) {
+	      mixedFlat.set(queryEmbdFlat, K * dim)
+	    }
+	    mixedFlat.set(promptEmbdFlat, (K + Q) * dim)
 
-	    // -- 4. KV cache 用 addon 层 disposeSequence 清（clearHistory 是高层 sequence 方法，
+	    // -- 5. KV cache 用 addon 层 disposeSequence 清（clearHistory 是高层 sequence 方法，
 	    //    与 embd 注入路径的 addon 直接操作不兼容）--
 	    ctx.disposeSequence(0)
 
-	    // -- 5. Step 0: embd injection decode, build KV cache (last position outputs logits) --
-	    ctx.initBatchEmbd(K + T)
+	    // -- 6. Step 0: embd injection decode, build KV cache (last position outputs logits) --
+	    ctx.initBatchEmbd(total)
 	    ctx.addToBatchEmbd(
 	      /*seqId*/ 0,
 	      /*firstPos*/ 0,
 	      mixedFlat,
-	      K + T,
-	      Uint32Array.from([K + T - 1]), // only last position gets logits
+	      total,
+	      Uint32Array.from([total - 1]), // only last position gets logits
 	    )
 	    await ctx.decodeBatch()
 
-	    // -- 6. create greedy sampler --
+	    // -- 7. create greedy sampler --
 	    const bindingsAddonSampler = (model as any)._llama._bindings.AddonSampler
 	    const addonModel = (model as any)._model
 	    const addonSampler = new bindingsAddonSampler(addonModel)
 	    addonSampler.applyConfig({})  // configure greedy (applyConfig with no temperature → greedySampler)
 
-	    // -- 7. Step 1+: greedy continuation (switch to token path) --
-	    const EOS = model.tokenEos?.() ?? (model as any).tokens?.eos ?? 151645
+	    // -- 8. Step 1+: greedy continuation (switch to token path) --
+	    const EOS = (model as any).tokenEos?.() ?? (model as any).tokens?.eos ?? 151645
 	    const generated: number[] = []
-	    let curPos = K + T
+	    let curPos = total
 
 	    // get first token from step0 last position logit -> argmax
 	    // NOTE: sampleToken 3rd arg must be omitted (passing boolean false makes it return [tokenId, probs] array instead of number)
-	    let curToken: number = await ctx.sampleToken(K + T - 1, addonSampler)
+	    let curToken: number = await ctx.sampleToken(total - 1, addonSampler)
 
 	    for (let step = 0; step < maxTokens; step++) {
 	      if (curToken === EOS || curToken < 0) break
@@ -571,9 +677,9 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
 
 	    addonSampler.dispose()
 
-	    // -- 8. detokenize --
+	    // -- 9. detokenize --
 	    const text = model.detokenize(generated as any, false)
-	    this.logger?.debug(`[generateWithPrompt] recon=${K} prompt="${prompt}" tokens=${generated.length} text="${text.slice(0, 200)}"`)
+	    this.logger?.debug(`[generateWithPrompt] recon=${K} query=${Q} prompt="${prompt}" tokens=${generated.length} text="${text.slice(0, 200)}"`)
 	    return text
 	}
 
@@ -623,7 +729,7 @@ export class LlamaCppLlm2VecEmbedder implements IEmbedder {
 	    addonSampler.applyConfig({})  // configure greedy
 
 	    // 6. Greedy generation
-	    const EOS = model.tokenEos?.() ?? (model as any).tokens?.eos ?? 151645
+	    const EOS = (model as any).tokenEos?.() ?? (model as any).tokens?.eos ?? 151645
 	    const generated: number[] = []
 	    let curPos = K
 	    let curToken: number = await ctx.sampleToken(K - 1, addonSampler)

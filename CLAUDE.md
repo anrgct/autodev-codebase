@@ -171,9 +171,11 @@ codebase config --set key=value --global        # 设置全局配置
 
 ## 其他
 - 项目测试运行不需要build，直接npx tsx xxx.ts运行
-- 可以搜索docs/目录了解项目wiki，搜索docs/plans目录了解之前的任务记录
-- 项目配置在autodev-config.json中，可以通过codebase config --get/--set命令进行查看和修改，demo目录有单独的autodev-config.json，需要用codebase config --path=demo来指定，项目根目录的autodev-config.json、~/.autodev-cache/autodev-config.json、demo/autodev-config.json是独立的
+- 项目配置在autodev-config.json中，可以通过codebase config --get/--set命令进行查看和修改，demo目录有单独的autodev-config.json，需要用codebase config --path=demo来指定，项目根目录的autodev-config.json、~/.autodev-cache/autodev-config.json、demo/autodev-config.json是独立的，json里含有注释，单独使用时要用jsonc-parser来读取
 - `--log-level=debug`可以输出调试日志
+
+## 重要
+在不了解项目背景的情况下，搜索docs/目录了解项目wiki，搜索docs/plans目录了解之前的任务记录，获取经验
 
 ## 提交规范
 
