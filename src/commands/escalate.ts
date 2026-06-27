@@ -106,7 +106,7 @@ function printStartupBanner(cfg: EscalateConfig, port: number): void {
   console.log(bar)
   console.log(`  Listening on : http://${cfg.host}:${port}`)
   console.log(`  Upstream API : ${cfg.apiBase}`)
-  console.log(`  Mode         : ${cfg.mode}  (${cfg.mode === 'self-report' ? 'model self-reports <<<NEEDS_PRO>>>' : 'virtual escalate_advisor tool'})`)
+  console.log(`  Mode         : ${cfg.mode}  (${cfg.mode === 'self-report' ? "model self-reports <<<NEEDS_PRO>>> marker" : "virtual 'advisor' tool — flash calls it, proxy routes to pro"})`)
   console.log(`  Flash model  : ${cfg.flashModel}  (first attempt)`)
   console.log(`  Pro model    : ${cfg.proModel}    (<<<NEEDS_PRO>>> escalation)`)
   console.log(`  API key      : ${cfg.apiKey ? '(configured)' : '(forwarded from client)'}`)

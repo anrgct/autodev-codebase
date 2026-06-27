@@ -42,11 +42,15 @@ export interface EscalateConfig {
  *
  *  - `self-report` — flash model emitted `<<<NEEDS_PRO>>>` in its first line
  *  - `downgrade`  — pro model emitted `<<<NEEDS_FLASH>>>` in its first line
+ *  - `advisor`    — flash model called the virtual `advisor` tool; the proxy
+ *                   intercepted the call, queried pro, and returned the result
+ *                   to flash as a `tool` message before delivering flash's
+ *                   final answer. Path will be e.g. `['flash', 'pro', 'flash']`.
  *  - `passthrough` — no escalation was triggered, response was proxied as-is (stream)
  *  - `non-stream`  — non-streaming request, response fully buffered then proxied
  *  - `error`       — upstream returned a non-2xx status
  */
-export type EscalationReason = 'self-report' | 'downgrade' | 'passthrough' | 'non-stream' | 'error'
+export type EscalationReason = 'self-report' | 'downgrade' | 'advisor' | 'passthrough' | 'non-stream' | 'error'
 
 /**
  * Escalation mode.
@@ -54,8 +58,11 @@ export type EscalationReason = 'self-report' | 'downgrade' | 'passthrough' | 'no
  * - `self-report` (default): inject the ESCALATION_CONTRACT into the system
  *   prompt; the flash model self-reports `<<<NEEDS_PRO>>>` when it decides
  *   the task needs the stronger tier.
- * - `advisor`: forthcoming — exposes a virtual `escalate_advisor` tool that
- *   lets the model call the pro model explicitly.
+ * - `advisor`: inject a virtual `advisor` tool definition into the request
+ *   alongside the contract. When the flash model calls `advisor`, the proxy
+ *   intercepts the call, forwards the question to the pro model, and returns
+ *   pro's analysis as a `tool` message so flash can synthesize the final
+ *   answer.
  */
 export type EscalationMode = 'self-report' | 'advisor'
 

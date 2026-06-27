@@ -22,6 +22,13 @@ export interface SseDelta {
   reasoning_content?: string
   role?: string
   tool_calls?: unknown
+  /**
+   * Chat-completion `finish_reason` from the delta. Most providers only emit
+   * this on the final chunk; it's used by the advisor dispatcher to detect
+   * that a tool_call is complete (i.e. the assistant is waiting for the
+   * client to provide tool results).
+   */
+  finish_reason?: string
 }
 
 export interface SseLine {
@@ -126,8 +133,13 @@ function parseDelta(payload: string): SseDelta | undefined {
   if (typeof delta['reasoning_content'] === 'string') out.reasoning_content = delta['reasoning_content']
   if (typeof delta['role'] === 'string') out.role = delta['role']
   if (delta['tool_calls'] !== undefined) out.tool_calls = delta['tool_calls']
+  // `finish_reason` lives on the choice object itself (`choices[0].finish_reason`),
+  // not inside the delta. Providers like DeepSeek emit it on the final chunk of
+  // a tool-call turn so the client can detect "the assistant is now waiting
+  // for tool results". Read it from `c0` (the choice) rather than `delta`.
+  if (typeof c0['finish_reason'] === 'string') out.finish_reason = c0['finish_reason']
 
-  if (!out.content && !out.reasoning_content && !out.role && out.tool_calls === undefined) {
+  if (!out.content && !out.reasoning_content && !out.role && out.tool_calls === undefined && !out.finish_reason) {
     return undefined
   }
   return out

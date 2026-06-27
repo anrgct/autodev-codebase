@@ -27,7 +27,13 @@
  */
 
 import { fetch, Pool, type Dispatcher } from 'undici'
-import { injectContract, type ChatCompletionRequestBody, type ChatCompletionMessage } from './contract'
+import {
+  ADVISOR_TOOL_NAME,
+  injectAdvisorTool,
+  injectContract,
+  type ChatCompletionRequestBody,
+  type ChatCompletionMessage,
+} from './contract'
 import { detectEscalationMarker, detectMarkerPrefix, stripNeedsProMarker } from './detector'
 import { SseLineBuffer, type SseLine } from './sse-buffer'
 import type { DispatchResult, EscalateConfig } from './types'
@@ -166,6 +172,140 @@ function extractMessages(rawBody: unknown): ChatCompletionMessage[] | null {
   if (!Array.isArray(msgs)) return null
   return msgs as ChatCompletionMessage[]
 }
+
+
+/**
+ * Shape of a tool call attached to an assistant message, after delta accumulation.
+ * Matches the OpenAI streaming + non-streaming chat-completion format.
+ */
+interface NormalizedToolCall {
+  id: string
+  type: 'function'
+  function: { name: string; arguments: string }
+}
+
+/**
+ * Find the first `advisor` tool call attached to an assistant message's
+ * `tool_calls` array, returning the normalized shape (or null if no advisor
+ * call is present). Returns null if the message is not an assistant message
+ * or has no tool calls.
+ */
+export function extractAdvisorToolCall(
+  message: ChatCompletionMessage | undefined | null
+): NormalizedToolCall | null {
+  if (!message || message.role !== 'assistant') return null
+  const calls = message.tool_calls
+  if (!Array.isArray(calls)) return null
+  for (const c of calls) {
+    if (!c || typeof c !== 'object') continue
+    if (c.function?.name !== ADVISOR_TOOL_NAME) continue
+    const id = typeof c.id === 'string' && c.id.length > 0
+      ? c.id
+      : `advisor-${Math.random().toString(36).slice(2, 10)}`
+    return {
+      id,
+      type: 'function',
+      function: {
+        name: ADVISOR_TOOL_NAME,
+        arguments: typeof c.function.arguments === 'string' ? c.function.arguments : '',
+      },
+    }
+  }
+  return null
+}
+
+/**
+ * Extract ALL `advisor` tool calls from an assistant message (not just the
+ * first one). Returns an empty array if the message has no advisor tool calls.
+ */
+export function extractAllAdvisorToolCalls(
+  message: ChatCompletionMessage | undefined | null
+): NormalizedToolCall[] {
+  if (!message || message.role !== 'assistant') return []
+  const calls = message.tool_calls
+  if (!Array.isArray(calls)) return []
+  const results: NormalizedToolCall[] = []
+  for (const c of calls) {
+    if (!c || typeof c !== 'object') continue
+    if (c.function?.name !== ADVISOR_TOOL_NAME) continue
+    const id = typeof c.id === 'string' && c.id.length > 0
+      ? c.id
+      : `advisor-${Math.random().toString(36).slice(2, 10)}`
+    results.push({
+      id,
+      type: 'function',
+      function: {
+        name: ADVISOR_TOOL_NAME,
+        arguments: typeof c.function.arguments === 'string' ? c.function.arguments : '',
+      },
+    })
+  }
+  return results
+}
+
+/**
+ * Parse the `question` parameter out of an advisor tool call's JSON arguments.
+ * Returns `undefined` if the arguments are not valid JSON or the field is missing.
+ */
+export function extractAdvisorQuestion(toolCall: NormalizedToolCall): string | undefined {
+  const raw = toolCall.function.arguments
+  if (!raw) return undefined
+  try {
+    const parsed = JSON.parse(raw) as { question?: unknown }
+    if (typeof parsed.question === 'string' && parsed.question.length > 0) {
+      return parsed.question
+    }
+  } catch {
+    // Fall through — treat the raw arguments as the question (model may have
+    // emitted plain text instead of a JSON object).
+  }
+  return raw
+}
+
+/**
+ * Best-effort JSON parse of a chat-completion response body. Returns null
+ * if the body is not valid JSON or doesn't have a `choices[0]` array.
+ */
+function safeParseChatCompletion(body: string): { choices?: Array<{ message?: Record<string, unknown>; finish_reason?: unknown; delta?: Record<string, unknown> }> } | null {
+  if (!body || body[0] !== '{') return null
+  try {
+    const parsed = JSON.parse(body) as { choices?: unknown }
+    if (!parsed || typeof parsed !== 'object') return null
+    if (!Array.isArray(parsed.choices)) return null
+    return parsed as { choices?: Array<{ message?: Record<string, unknown>; finish_reason?: unknown; delta?: Record<string, unknown> }> }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build a synthetic SSE `data:` chunk that marks the start of a pro-as-advisor
+ * consultation. Injected into the client's reasoning_content stream so the
+ * think panel shows a clear visual separator.
+ */
+function buildAdvisorBeginEvent(question?: string): Uint8Array {
+  const label = question
+    ? `[proxy: consulting advisor (pro): ${question}]`
+    : '[proxy: consulting advisor (pro)]'
+  const text = `\n\n--- ${label} ---\n\n`
+  const payload = {
+    choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
+  }
+  return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
+}
+
+/**
+ * Build a synthetic SSE `data:` chunk that marks the end of a pro-as-advisor
+ * consultation and the return to flash.
+ */
+function buildAdvisorEndEvent(): Uint8Array {
+  const text = `\n\n--- [proxy: back to flash with advisor analysis] ---\n\n`
+  const payload = {
+    choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
+  }
+  return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
+}
+
 
 /** Normalize `apiBase` to remove trailing slash. */
 function normalizeBase(apiBase: string): string {
@@ -341,6 +481,74 @@ export class EscalateDispatcher {
     return this.buildFlashBody(rawBody)
   }
 
+  // ----------------------------------------------------------------------
+  // Advisor mode body builders
+  // ----------------------------------------------------------------------
+
+  /**
+   * Build a flash body for advisor mode: append the `advisor` tool definition
+   * and the advisor usage fragment to the request. Used on every flash turn,
+   * including retries, so the model can call `advisor` again if it is still
+   * uncertain after receiving pro's analysis.
+   *
+   * Note: this intentionally does NOT call `injectContract()`. Advisor mode
+   * uses the `advisor` tool exclusively; the `<<<NEEDS_PRO>>>` text marker
+   * is a different escalation strategy (self-report mode) and the advisor
+   * fragment explicitly tells the model the marker is NOT active here.
+   * Injecting both would confuse the model about which escalation channel
+   * to use.
+   */
+  private buildFlashAdvisorBody(
+    rawBody: unknown,
+    messages?: ChatCompletionMessage[]
+  ): ChatCompletionRequestBody {
+    const base = (rawBody ?? {}) as ChatCompletionRequestBody
+    // If `messages` is provided (e.g. carrying a previous `tool_calls` +
+    // `tool` round), override the inbound messages so the assistant message
+    // history is consistent with what flash actually emitted.
+    const bodyWithMessages: ChatCompletionRequestBody = messages
+      ? { ...base, messages }
+      : base
+    // Force the model field to the flash ID. We can't rely on
+    // `injectContract()` here because advisor mode deliberately skips it —
+    // so we set the model ourselves.
+    const withModel: ChatCompletionRequestBody = { ...bodyWithMessages, model: this.config.flashModel }
+    return injectAdvisorTool(withModel)
+  }
+
+  /**
+   * Build a pro body for advisor mode: target the pro model and STRIP ALL
+   * tools. Pro is a passive advisor — it should NOT have access to the
+   * `advisor` tool definition (that's flash's privilege) or any client
+   * tools. Strip `tool_choice` as well (irrelevant without tools).
+   *
+   * Note: this does NOT inject the self-report tier-switch contract. Advisor
+   * mode is independent of the `<<<NEEDS_PRO>>>` / `<<<NEEDS_FLASH>>>`
+   * markers, so we don't pollute pro's system prompt with explanations of
+   * markers it will never use. If the client supplied a `system` message it
+   * carries through untouched.
+   */
+  private buildProAdvisorBody(
+    rawBody: unknown,
+    messages: ChatCompletionMessage[]
+  ): ChatCompletionRequestBody {
+    const base = (rawBody ?? {}) as ChatCompletionRequestBody
+    // Strip ALL tools and tool_choice — pro is a passive advisor.
+    const {
+      tools: _tools,
+      tool_choice: _tc,
+      ...rest
+    } = {
+      ...base,
+      messages,
+      model: this.config.proModel,
+    } as ChatCompletionRequestBody & { tool_choice?: unknown }
+    void _tools
+    void _tc
+    return rest as ChatCompletionRequestBody
+  }
+
+
   /**
    * Make a single upstream call and return the raw Response.
    * Caller is responsible for reading the body and handling errors.
@@ -366,6 +574,102 @@ export class EscalateDispatcher {
     return (await this.fetchImpl(url, init as never)) as unknown as Response
   }
 
+  // ----------------------------------------------------------------------
+  // Advisor history helpers — rewrite tool_calls that arrived without
+  // tool messages in the client's request body. We turn each orphaned
+  // advisor call into a `user` message that says "you previously tried to
+  // ask the advisor this; please answer directly now". This avoids the
+  // deepseek 400 ("An assistant message with 'tool_calls' must be
+  // followed by tool messages") without inventing a fake pro response.
+  // ----------------------------------------------------------------------
+
+  /**
+   * Walk the inbound `messages` and rewrite any assistant message whose
+   * `tool_calls` include an `advisor` call with no matching `role:'tool'`
+   * message after it.
+   *
+   * The orphaned advisor call is replaced with a `user` message that
+   * surfaces the question and asks the model to answer directly:
+   *
+   *   user: [Earlier you attempted to call the advisor tool with the
+   *         following question]: <question text>
+   *         Please proceed with your best answer based on your own analysis.
+   *
+   * Any non-advisor tool_calls on the same assistant message are preserved
+   * (they belong to the client's tool surface, not to our proxy).
+   */
+  private rewriteOrphanedAdvisorCalls(
+    messages: ChatCompletionMessage[]
+  ): ChatCompletionMessage[] {
+    const result: ChatCompletionMessage[] = []
+    for (let i = 0; i < messages.length; i++) {
+      const m = messages[i]
+      // Quick path: not an assistant message with tool_calls.
+      if (m.role !== 'assistant' || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) {
+        result.push(m)
+        continue
+      }
+
+      // Look forward for any matching tool message.
+      const laterToolIds = new Set<string>()
+      for (let j = i + 1; j < messages.length; j++) {
+        const lm = messages[j]
+        if (lm.role === 'tool' && typeof lm.tool_call_id === 'string') {
+          laterToolIds.add(lm.tool_call_id)
+        }
+      }
+
+      const advisorCalls = m.tool_calls.filter(
+        (tc) => tc && typeof tc === 'object' && tc.function?.name === ADVISOR_TOOL_NAME
+      )
+      const nonAdvisorCalls = m.tool_calls.filter(
+        (tc) => !(tc && typeof tc === 'object' && tc.function?.name === ADVISOR_TOOL_NAME)
+      )
+
+      const orphanedAdvisorCalls = advisorCalls.filter(
+        (tc) => typeof tc.id !== 'string' || !laterToolIds.has(tc.id)
+      )
+
+      if (orphanedAdvisorCalls.length === 0) {
+        // Nothing to rewrite — keep the assistant message as-is.
+        result.push(m)
+        continue
+      }
+
+      // Build the user prompt that surfaces each orphaned advisor question.
+      const questions = orphanedAdvisorCalls.map((tc) => {
+        const raw = typeof tc.function?.arguments === 'string' ? tc.function.arguments : '{}'
+        try {
+          const parsed = JSON.parse(raw) as { question?: unknown }
+          return typeof parsed.question === 'string' && parsed.question.length > 0
+            ? parsed.question
+            : raw
+        } catch {
+          return raw
+        }
+      })
+      const plural = questions.length > 1 ? 's' : ''
+      const list = questions.map((q) => `- ${q}`).join('\n')
+      const userPrompt =
+        `[Earlier you attempted to call the advisor tool with the following question${plural}]:\n${list}\n\n` +
+        `Please proceed with your best answer based on your own analysis.`
+
+      result.push({ role: 'user', content: userPrompt })
+
+      // If the assistant message had non-advisor tool_calls, preserve them
+      // on a separate assistant message — they belong to the client.
+      if (nonAdvisorCalls.length > 0) {
+        result.push({
+          role: 'assistant',
+          content: m.content,
+          tool_calls: nonAdvisorCalls,
+        })
+      }
+    }
+    return result
+  }
+
+
   /**
    * Dispatch a chat-completion request, applying flash ↔ pro switching
    * (escalation + downgrade) as needed.
@@ -379,6 +683,16 @@ export class EscalateDispatcher {
     isStream: boolean,
     clientHeaders: Record<string, string | string[] | undefined>
   ): Promise<DispatchResult> {
+    // Advisor mode routes through a different dispatcher (tool-call interception
+    // instead of self-report markers); sticky pro does not apply because flash
+    // is always in control in advisor mode.
+    if (this.config.mode === 'advisor') {
+      if (isStream) {
+        return this.dispatchAdvisorStream(rawBody, clientHeaders)
+      }
+      return this.dispatchAdvisorNonStream(rawBody, clientHeaders)
+    }
+
     // Sticky pro: if this conversation prefix was recently escalated, skip flash.
     if (this.stickyStore) {
       const msgs = extractMessages(rawBody)
@@ -953,6 +1267,508 @@ export class EscalateDispatcher {
       }
       // If mode flipped to 'passthrough' inside the loop, the outer while
       // loop will pick it up on the next iteration.
+    }
+  }
+
+  // ----------------------------------------------------------------------
+  // Advisor mode — tool-call interception
+  // ----------------------------------------------------------------------
+
+  /**
+   * Advisor non-stream dispatcher. Loops: call flash with advisor tool,
+   * check the assistant message for an `advisor` tool call, route the
+   * question to pro (without `tools`), build a `tool` result message,
+   * append it to `messages`, and retry flash. Recursion is bounded only by
+   * the model — practical limit is ~2 advisor calls per turn.
+   */
+  private async dispatchAdvisorNonStream(
+    rawBody: unknown,
+    clientHeaders: Record<string, string | string[] | undefined>
+  ): Promise<DispatchResult> {
+    const initialMessages = extractMessages(rawBody) ?? []
+    // Pre-process: rewrite any advisor tool_calls in the inbound history
+    // that arrived without a corresponding `tool` result message into
+    // synthetic user messages (so the deepseek upstream doesn't 400).
+    let workingMessages: ChatCompletionMessage[] = this.rewriteOrphanedAdvisorCalls(initialMessages)
+    const path: Array<'flash' | 'pro'> = []
+    let sawAdvisorCall = false
+
+    while (true) {
+      path.push('flash')
+
+      const flashBody = this.buildFlashAdvisorBody(rawBody, workingMessages)
+      const flashResp = await this.callUpstream(flashBody, clientHeaders)
+      if (!flashResp.ok) {
+        const errBuf = Buffer.from(await flashResp.arrayBuffer())
+        return {
+          finalModel: 'flash',
+          reason: 'error',
+          path,
+          status: flashResp.status,
+          headers: buildResponseHeaders(flashResp.headers, annotationHeaders({ finalModel: 'flash', path })),
+          body: errBuf,
+          isStream: false,
+        }
+      }
+
+      const flashText = await flashResp.text()
+      const flashParsed = safeParseChatCompletion(flashText)
+      const assistantMsg = flashParsed?.choices?.[0]?.message as ChatCompletionMessage | undefined
+      const finishReason = flashParsed?.choices?.[0]?.finish_reason as string | undefined
+
+      const advisorCall = assistantMsg ? extractAdvisorToolCall(assistantMsg) : null
+      if (!advisorCall || finishReason !== 'tool_calls') {
+        return {
+          finalModel: 'flash',
+          reason: sawAdvisorCall ? 'advisor' : 'non-stream',
+          path,
+          status: flashResp.status,
+          headers: buildResponseHeaders(flashResp.headers, annotationHeaders({ finalModel: 'flash', path })),
+          body: Buffer.from(flashText, 'utf-8'),
+          isStream: false,
+        }
+      }
+
+      // ---- Advisor call detected: route the question to pro. ----
+      // Only handle the FIRST advisor call per flash response. If flash
+      // emitted multiple calls, the remaining ones are processed by the
+      // recursion loop (flash retries with the tool result, and may call
+      // advisor again). This keeps the message history sequential rather
+      // than appearing as parallel tool calls.
+      sawAdvisorCall = true
+      path.push('pro')
+      this.logger.info?.(`[escalate] advisor tool call detected (${advisorCall.function.arguments.length} chars) — consulting pro`)
+
+      const advisorQuestion = extractAdvisorQuestion(advisorCall)
+      this.logger.info?.(`[escalate] advisor question: ${advisorQuestion ?? '(empty)'}`)
+
+      const advisorUserMsg: ChatCompletionMessage | null = advisorQuestion
+        ? { role: 'user', content: `[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] ${advisorQuestion}` }
+        : null
+
+      // Strip tool_calls from the assistant message before sending to pro.
+      const hasContent = assistantMsg &&
+        (typeof assistantMsg.content === 'string' ? assistantMsg.content.length > 0 : assistantMsg.content !== null && assistantMsg.content !== undefined)
+      const assistantForPro: ChatCompletionMessage | null = hasContent
+        ? { role: 'assistant', content: assistantMsg.content }
+        : null
+      const proMessages: ChatCompletionMessage[] = [
+        ...workingMessages,
+        ...(assistantForPro ? [assistantForPro] : []),
+        ...(advisorUserMsg ? [advisorUserMsg] : []),
+      ]
+
+      const proBody = this.buildProAdvisorBody(rawBody, proMessages)
+      const proResp = await this.callUpstream(proBody, clientHeaders)
+      if (!proResp.ok) {
+        const errBuf = Buffer.from(await proResp.arrayBuffer())
+        return {
+          finalModel: 'flash',
+          reason: 'advisor',
+          path,
+          status: proResp.status,
+          headers: buildResponseHeaders(proResp.headers, annotationHeaders({ finalModel: 'flash', path })),
+          body: errBuf,
+          isStream: false,
+        }
+      }
+
+      const proText = await proResp.text()
+      const proParsed = safeParseChatCompletion(proText)
+      const proReasoningRaw = proParsed?.choices?.[0]?.message?.['reasoning_content']
+      const proReasoning = typeof proReasoningRaw === 'string' && proReasoningRaw.length > 0
+        ? proReasoningRaw
+        : null
+      const proContentRaw = proParsed?.choices?.[0]?.message?.['content']
+      const proContent = typeof proContentRaw === 'string'
+        ? proContentRaw
+        : (proContentRaw == null ? '' : JSON.stringify(proContentRaw))
+      const proFullContent = proReasoning
+        ? `${proReasoning}
+
+${proContent}`
+        : proContent
+      this.logger.info?.(`[escalate] pro response (${proFullContent.length} chars): ${proFullContent.slice(0, 200)}${proFullContent.length > 200 ? '...' : ''}`)
+
+      const toolResult: ChatCompletionMessage = {
+        role: 'tool',
+        tool_call_id: advisorCall.id,
+        content: proFullContent,
+      }
+
+      // Append the advisor call + its tool result. Non-advisor tool
+      // calls from the same assistant message are preserved (e.g. if
+      // flash also called read_file in the same turn). The remaining
+      // advisor calls are handled by recursion.
+      // Preserve reasoning_content — DeepSeek requires it to be passed
+      // back to the API in subsequent requests (thinking mode).
+      const flashReasoning = assistantMsg?.['reasoning_content']
+      const allToolCalls = Array.isArray(assistantMsg?.tool_calls) ? assistantMsg!.tool_calls! : []
+      const nonAdvisorCalls = allToolCalls.filter(
+        (tc) => tc?.function?.name !== ADVISOR_TOOL_NAME,
+      )
+      const firstCallOnly: ChatCompletionMessage = {
+        role: 'assistant',
+        content: assistantMsg?.content ?? null,
+        tool_calls: [
+          ...nonAdvisorCalls,
+          {
+            id: advisorCall.id,
+            type: 'function' as const,
+            function: { name: advisorCall.function.name, arguments: advisorCall.function.arguments },
+          },
+        ],
+        ...(typeof flashReasoning === 'string' && flashReasoning.length > 0
+          ? { reasoning_content: flashReasoning }
+          : {}),
+      }
+      workingMessages = [...workingMessages, firstCallOnly, toolResult]
+    }
+  }
+
+  /**
+   * Advisor streaming dispatcher. Loops flash turns, peeking each for an
+   * `advisor` tool call. On detection:
+   *   1. Inject a "consulting advisor" separator into the reasoning stream.
+   *   2. Stream pro's analysis into the reasoning stream (the think panel).
+   *   3. Inject a "back to flash" separator.
+   *   4. Call flash again with the tool result appended, and pump its
+   *      stream to the client.
+   *
+   * If flash never calls advisor, the buffered content is flushed and we
+   * passthrough. Recursion (multiple advisor calls in one turn) is supported.
+   */
+  private async dispatchAdvisorStream(
+    rawBody: unknown,
+    clientHeaders: Record<string, string | string[] | undefined>
+  ): Promise<DispatchResult> {
+    const initialMessages = extractMessages(rawBody) ?? []
+    // Pre-process: rewrite any advisor tool_calls in the inbound history
+    // that arrived without a corresponding `tool` result message into
+    // synthetic user messages.
+    let workingMessages: ChatCompletionMessage[] = this.rewriteOrphanedAdvisorCalls(initialMessages)
+    const path: Array<'flash' | 'pro'> = []
+    const initialStatus = { value: 200 as number }
+    const initialHeaders = { value: {} as Record<string, string> }
+
+    const dispatcher = this
+    const passthrough = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          // Outer loop: each iteration is one flash turn.
+          // eslint-disable-next-line no-constant-condition
+          while (true) {
+            path.push('flash')
+            const flashBody = dispatcher.buildFlashAdvisorBody(rawBody, workingMessages)
+            const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders)
+            if (!flashResp.ok || !flashResp.body) {
+              const errText = flashResp.body ? await flashResp.text().catch(() => '') : ''
+              controller.enqueue(buildProxyErrorEvent(flashResp.status, errText))
+              controller.close()
+              return
+            }
+            initialStatus.value = flashResp.status
+            initialHeaders.value = headersToRecord(flashResp.headers)
+
+            const flashReader = flashResp.body.getReader()
+            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader)
+            if (peekResult.outcome === 'passthrough') {
+              // No advisor call — flash answered directly; flush & close.
+              controller.close()
+              return
+            }
+            if (peekResult.outcome === 'error') {
+              controller.close()
+              return
+            }
+
+            const assistantMsg = peekResult.assistantMsg
+            const advisorCall = extractAdvisorToolCall(assistantMsg)
+            if (!advisorCall) {
+              controller.close()
+              return
+            }
+            path.push('pro')
+            dispatcher.logger.info?.(`[escalate] advisor tool call detected in stream (${advisorCall.function.arguments.length} chars) — consulting pro`)
+
+            const advisorQuestion = extractAdvisorQuestion(advisorCall)
+            dispatcher.logger.info?.(`[escalate] advisor question: ${advisorQuestion ?? '(empty)'}`)
+
+            const advisorUserMsg: ChatCompletionMessage | null = advisorQuestion
+              ? { role: 'user', content: `[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] ${advisorQuestion}` }
+              : null
+
+            // Strip tool_calls from the assistant message before sending to pro.
+            const hasContent2 = typeof assistantMsg.content === 'string'
+              ? assistantMsg.content.length > 0
+              : assistantMsg.content !== null && assistantMsg.content !== undefined
+            const assistantForPro2: ChatCompletionMessage | null = hasContent2
+              ? { role: 'assistant', content: assistantMsg.content }
+              : null
+            const proMessages: ChatCompletionMessage[] = [
+              ...workingMessages,
+              ...(assistantForPro2 ? [assistantForPro2] : []),
+              ...(advisorUserMsg ? [advisorUserMsg] : []),
+            ]
+
+            const proBody = dispatcher.buildProAdvisorBody(rawBody, proMessages)
+            const proResp = await dispatcher.callUpstream(proBody, clientHeaders)
+            if (!proResp.ok || !proResp.body) {
+              const errText = proResp.body ? await proResp.text().catch(() => '') : ''
+              controller.enqueue(buildProxyErrorEvent(proResp.status, errText))
+              controller.close()
+              return
+            }
+
+            controller.enqueue(buildAdvisorBeginEvent(advisorQuestion ?? undefined))
+            const proReader = proResp.body.getReader()
+            const proContent = await dispatcher.streamProAsReasoning(proReader, controller)
+            dispatcher.logger.info?.(`[escalate] pro response (${proContent.length} chars): ${proContent.slice(0, 200)}${proContent.length > 200 ? '...' : ''}`)
+            controller.enqueue(buildAdvisorEndEvent())
+
+            const toolResult: ChatCompletionMessage = {
+              role: 'tool',
+              tool_call_id: advisorCall.id,
+              content: proContent,
+            }
+
+            // Append advisor call + tool result. Preserve non-advisor
+            // tool calls from the same assistant message, and
+            // reasoning_content for DeepSeek thinking mode requirement.
+            const streamReasoning = assistantMsg['reasoning_content']
+            const allTCs = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls : []
+            const nonAdvisorTCs = allTCs.filter(
+              (tc: { function?: { name?: string } }) => tc?.function?.name !== ADVISOR_TOOL_NAME,
+            )
+            const firstCallOnly2: ChatCompletionMessage = {
+              role: 'assistant',
+              content: assistantMsg.content ?? null,
+              tool_calls: [
+                ...nonAdvisorTCs,
+                {
+                  id: advisorCall.id,
+                  type: 'function' as const,
+                  function: { name: advisorCall.function.name, arguments: advisorCall.function.arguments },
+                },
+              ],
+              ...(typeof streamReasoning === 'string' && streamReasoning.length > 0
+                ? { reasoning_content: streamReasoning }
+                : {}),
+            }
+            workingMessages = [...workingMessages, firstCallOnly2, toolResult]
+            // Loop continues — call flash again with the tool result.
+          }
+        } catch (err) {
+          try {
+            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err)))
+          } catch { /* noop */ }
+          try { controller.close() } catch { /* noop */ }
+        }
+      },
+    })
+
+    return {
+      finalModel: 'flash',
+      reason: 'passthrough',
+      path,
+      status: initialStatus.value,
+      headers: buildResponseHeaders(new Headers(initialHeaders.value), {}),
+      body: passthrough,
+      isStream: true,
+    }
+  }
+
+  /**
+   * Peek a flash SSE stream for an `advisor` tool call:
+   *   - Forward `delta.reasoning_content` immediately.
+   *   - Accumulate `delta.tool_calls` across chunks.
+   *   - Track `finish_reason` and decide once both conditions are met
+   *     (advisor tool name seen AND finish_reason === 'tool_calls').
+   *   - On advisor decision: cancel the reader and return the accumulated
+   *     assistant message so the caller can replay it as an assistant
+   *     message in the next pro call.
+   *   - On natural stream end without advisor call: flush buffered content
+   *     to the controller and return 'passthrough'.
+   */
+  private async peekAdvisorStream(
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    reader: ReadableStreamDefaultReader<Uint8Array>
+  ): Promise<
+    | { outcome: 'passthrough' }
+    | { outcome: 'advisor'; assistantMsg: ChatCompletionMessage }
+    | { outcome: 'error' }
+  > {
+    const sseBuf = new SseLineBuffer()
+    // Buffer for data lines with deltas (content, tool_calls, finish_reason).
+    // Flushed on passthrough; discarded when advisor is detected.
+    let passthroughBytes: Uint8Array | null = null
+    let reasoningAcc = ''
+    const toolCalls = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>()
+    let sawAdvisorToolName = false
+    let finishReason: string | null = null
+
+    const flushPassthrough = () => {
+      if (passthroughBytes !== null) {
+        controller.enqueue(passthroughBytes)
+        passthroughBytes = null
+      }
+    }
+
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) {
+        flushPassthrough()
+        return { outcome: 'passthrough' }
+      }
+      if (!value || value.length === 0) continue
+
+      const { lines } = sseBuf.feed(value)
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li]
+
+        if (!line.isData) {
+          controller.enqueue(line.bytes)
+          continue
+        }
+        if (line.done) {
+          controller.enqueue(line.bytes)
+          continue
+        }
+        if (!line.delta) {
+          controller.enqueue(line.bytes)
+          continue
+        }
+
+        const delta = line.delta as {
+          content?: string
+          reasoning_content?: string
+          role?: string
+          tool_calls?: Array<{
+            index?: number
+            id?: string
+            type?: 'function'
+            function?: { name?: string; arguments?: string }
+          }>
+          finish_reason?: unknown
+        }
+
+        let lineBuffered = false
+
+        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+          reasoningAcc += delta.reasoning_content
+          controller.enqueue(line.bytes)
+        }
+
+        if (typeof delta.content === 'string') {
+          passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+          lineBuffered = true
+        }
+
+        if (Array.isArray(delta.tool_calls)) {
+          if (!lineBuffered) passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+          lineBuffered = true
+          for (const tc of delta.tool_calls) {
+            const idx = typeof tc.index === 'number' ? tc.index : 0
+            const existing = toolCalls.get(idx) ?? {
+              id: '',
+              type: 'function' as const,
+              function: { name: '', arguments: '' },
+            }
+            if (typeof tc.id === 'string' && tc.id.length > 0) existing.id = tc.id
+            if (tc.function) {
+              if (typeof tc.function.name === 'string' && tc.function.name.length > 0) {
+                existing.function.name = tc.function.name
+                if (tc.function.name === ADVISOR_TOOL_NAME) sawAdvisorToolName = true
+              }
+              if (typeof tc.function.arguments === 'string') {
+                existing.function.arguments += tc.function.arguments
+              }
+            }
+            toolCalls.set(idx, existing)
+          }
+        }
+
+        if (typeof delta.finish_reason === 'string' && delta.finish_reason.length > 0) {
+          finishReason = delta.finish_reason
+          // The finish_reason line itself may not have been buffered yet
+          // (e.g. delta: {}). Buffer it so it reaches the client on passthrough.
+          if (!lineBuffered) passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+        }
+
+        if (sawAdvisorToolName && finishReason === 'tool_calls') {
+          const assistantMsg: ChatCompletionMessage = {
+            role: 'assistant',
+            content: null,
+            tool_calls: Array.from(toolCalls.values()).map((tc) => ({
+              id: tc.id || undefined,
+              type: 'function',
+              function: { name: tc.function.name, arguments: tc.function.arguments },
+            })),
+            ...(reasoningAcc.length > 0 ? { reasoning_content: reasoningAcc } : {}),
+          }
+          try { await reader.cancel() } catch { /* noop */ }
+          return { outcome: 'advisor', assistantMsg }
+        }
+      }
+    }
+  }
+
+  /**
+   * Stream pro's response into the controller's reasoning_content stream. Pro
+   * is consulted as a passive advisor — we just want its full analysis shown
+   * in the think panel. Both pro's `reasoning_content` AND `content` are
+   * rewritten into the reasoning stream so the user sees pro's reasoning
+   * followed by pro's conclusion, all in the think panel.
+   *
+   * Returns the combined reasoning + content text so the dispatcher can
+   * put the full analysis into the `tool` result message for flash.
+   */
+  private async streamProAsReasoning(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    controller: ReadableStreamDefaultController<Uint8Array>
+  ): Promise<string> {
+    const sseBuf = new SseLineBuffer()
+    let reasoningAcc = ''
+    let contentAcc = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) {
+        // Combine reasoning + content so flash sees pro's full analysis.
+        return reasoningAcc ? `${reasoningAcc}\n\n${contentAcc}` : contentAcc
+      }
+      if (!value || value.length === 0) continue
+      const { lines } = sseBuf.feed(value)
+      for (const line of lines) {
+        if (!line.isData || !line.delta) {
+          controller.enqueue(line.bytes)
+          continue
+        }
+        const delta = line.delta as { content?: string; reasoning_content?: string }
+        // Forward reasoning_content as-is AND accumulate for the tool result.
+        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
+          reasoningAcc += delta.reasoning_content
+          controller.enqueue(line.bytes)
+        }
+        // Rewrite content -> reasoning_content (so it shows in the think panel).
+        if (typeof delta.content === 'string' && delta.content.length > 0) {
+                  contentAcc += delta.content
+                  try {
+                    const original = line.rawLine.startsWith('data:') ? line.rawLine.slice(5).trim() : ''
+                    const parsed = JSON.parse(original) as { choices?: Array<{ delta?: Record<string, unknown> }> }
+                    const c0 = parsed.choices?.[0]
+                    if (c0 && c0.delta) {
+                      const newDelta: Record<string, unknown> = { ...c0.delta, reasoning_content: delta.content }
+                      delete newDelta['content']
+                      const newPayload = JSON.stringify({ choices: [{ ...c0, delta: newDelta }] })
+                      controller.enqueue(Buffer.from(`data: ${newPayload}\n`, 'utf-8'))
+                    } else {
+                      controller.enqueue(line.bytes)
+                    }
+                  } catch {
+                    controller.enqueue(line.bytes)
+                  }
+                }
+      }
     }
   }
 }

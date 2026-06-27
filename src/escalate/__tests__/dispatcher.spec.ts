@@ -516,4 +516,654 @@ describe('EscalateDispatcher', () => {
       expect(captured).toHaveLength(2)
     })
   })
+
+  // --------------------------------------------------------------------
+  // Advisor mode — non-streaming
+  // --------------------------------------------------------------------
+  describe('advisor mode (non-stream)', () => {
+    function makeAdvisorConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
+      return makeConfig({ mode: 'advisor', ...overrides })
+    }
+
+    it('passes through flash response when flash does not call advisor', async () => {
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'flash direct answer' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('non-stream')
+      expect(out.path).toEqual(['flash'])
+      const body = JSON.parse((out.body as Buffer).toString('utf-8'))
+      expect(body.choices[0].message.content).toBe('flash direct answer')
+      expect(captured).toHaveLength(1)
+    })
+
+    it('injects the advisor tool definition on the flash call without modifying system', async () => {
+      // The client's system message is the user's actual agent prompt
+      // (e.g. "You are the Zed coding agent..."). We must NOT pollute it
+      // with proxy internals like the advisor fragment or the self-report
+      // tier contract. Advisor guidance lives entirely in the tool's
+      // description.
+      const clientSystemPrompt = 'You are a coding assistant. Be helpful.'
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'flash direct' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      await d.dispatch({
+        messages: [
+          { role: 'system', content: clientSystemPrompt },
+          { role: 'user', content: 'q' },
+        ],
+      }, false, {})
+
+      const flashBody = JSON.parse(captured[0].init.body!)
+      expect(flashBody.model).toBe(FLASH)
+      const tools = flashBody.tools
+      expect(Array.isArray(tools)).toBe(true)
+      expect(tools.some((t: { function?: { name?: string } }) => t.function?.name === 'advisor')).toBe(true)
+      // System prompt is the client's verbatim — no advisor fragment, no
+      // self-report contract appended.
+      const sys = flashBody.messages.find((m: { role: string }) => m.role === 'system')
+      expect(sys.content).toBe(clientSystemPrompt)
+      expect(sys.content).not.toContain('[autodev-escalate-advisor]')
+      expect(sys.content).not.toContain('Tier escalation instruction')
+      expect(sys.content).not.toContain('<<<NEEDS_PRO>>>')
+      expect(sys.content).not.toContain('<<<NEEDS_FLASH>>>')
+    })
+
+    it('routes advisor tool call to pro and returns pro content as tool result', async () => {
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call_abc',
+              type: 'function',
+              function: { name: 'advisor', arguments: '{"question":"how to refactor X?"}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'PRO ANALYSIS: use strategy Y' }, finish_reason: 'stop' }],
+      }))
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'synthesized final answer' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('advisor')
+      expect(out.path).toEqual(['flash', 'pro', 'flash'])
+      const body = JSON.parse((out.body as Buffer).toString('utf-8'))
+      expect(body.choices[0].message.content).toBe('synthesized final answer')
+      expect(captured).toHaveLength(3)
+
+      const proBody = JSON.parse(captured[1].init.body!)
+      expect(proBody.model).toBe(PRO)
+      // Pro is a passive advisor — NO tools (not even advisor). Flash owns
+      // the advisor tool exclusively.
+      expect(proBody.tools).toBeUndefined()
+      expect(proBody.tool_choice).toBeUndefined()
+      const proMessages = proBody.messages
+      // The advisor question is surfaced as a user message appended after
+      // the original conversation. Pro sees: original user msg + advisor
+      // question as a standalone user message.
+      expect(proMessages.length).toBe(2)
+      expect(proMessages[0].role).toBe('user')
+      expect(proMessages[0].content).toBe('q')
+      expect(proMessages[1].role).toBe('user')
+      expect(proMessages[1].content).toBe('[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] how to refactor X?')
+
+      // Advisor mode does NOT inject any system-prompt contract into pro's
+      // request — advisor mode is fully decoupled from the self-report
+      // `<<<NEEDS_PRO>>>` / `<<<NEEDS_FLASH>>>` markers, so pro should not
+      // see explanations of markers it will never use. If the client supplied
+      // a `system` message it carries through untouched.
+      const proSystemMsgs = proMessages.filter((m: { role: string }) => m.role === 'system')
+      for (const sm of proSystemMsgs) {
+        const text = typeof sm.content === 'string' ? sm.content : ''
+        expect(text).not.toContain('Two markers are available across the system')
+        expect(text).not.toContain('<<<NEEDS_FLASH>>>')
+        expect(text).not.toContain('Cost-aware tier switching instruction')
+      }
+    })
+
+    it('flash retry receives the tool result message and pro sees advisor question as user msg', async () => {
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'advisor', arguments: '{"question":"q1"}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'PRO ANSWER' }, finish_reason: 'stop' }],
+      }))
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'final' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      const flashRetryBody = JSON.parse(captured[2].init.body!)
+      const messages = flashRetryBody.messages
+      const toolMsg = messages[messages.length - 1]
+      expect(toolMsg.role).toBe('tool')
+      expect(toolMsg.tool_call_id).toBe('call_1')
+      expect(toolMsg.content).toBe('PRO ANSWER')
+
+      // Verify pro received the advisor question as a user message
+      const proBody = JSON.parse(captured[1].init.body!)
+      const proMessages = proBody.messages
+      const advisorUserMsg = proMessages.find((m: { role: string; content: string }) =>
+        m.role === 'user' && typeof m.content === 'string' && m.content === '[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] q1')
+      expect(advisorUserMsg).toBeDefined()
+    })
+
+    it('handles multiple advisor calls sequentially via recursion', async () => {
+      // Flash returns TWO advisor tool_calls in one message.
+      // The dispatcher only processes the FIRST call per response; the
+      // second is handled when flash retries and calls advisor again.
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call_a', type: 'function', function: { name: 'advisor', arguments: '{"question":"question A"}' } },
+              { id: 'call_b', type: 'function', function: { name: 'advisor', arguments: '{"question":"question B"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      // Pro responds to call_a
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'PRO ANSWER A' }, finish_reason: 'stop' }],
+      }))
+      // Flash retry — sees tool result for call_a, calls advisor for call_b
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: 'call_b', type: 'function', function: { name: 'advisor', arguments: '{"question":"question B"}' } },
+            ],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      // Pro responds to call_b
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'PRO ANSWER B' }, finish_reason: 'stop' }],
+      }))
+      // Flash final answer
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'synthesised from A and B' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      // flash → pro (call_a) → flash → pro (call_b) → flash
+      expect(out.path).toEqual(['flash', 'pro', 'flash', 'pro', 'flash'])
+      expect(captured).toHaveLength(5)
+
+      // Verify sequential messages: each flash retry only has ONE tool result
+      const retry1 = JSON.parse(captured[2].init.body!)
+      const toolMsgs1 = retry1.messages.filter((m: { role: string }) => m.role === 'tool')
+      expect(toolMsgs1).toHaveLength(1)
+      expect(toolMsgs1[0].tool_call_id).toBe('call_a')
+
+      const retry2 = JSON.parse(captured[4].init.body!)
+      const toolMsgs2 = retry2.messages.filter((m: { role: string }) => m.role === 'tool')
+      expect(toolMsgs2).toHaveLength(2)
+      expect(toolMsgs2[0].tool_call_id).toBe('call_a')
+      expect(toolMsgs2[1].tool_call_id).toBe('call_b')
+
+      const body = JSON.parse((out.body as Buffer).toString('utf-8'))
+      expect(body.choices[0].message.content).toBe('synthesised from A and B')
+    })
+
+    it('handles recursion — flash calls advisor twice', async () => {
+      // flash → advisor → pro → flash → advisor → pro → flash
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: { role: 'assistant', content: null,
+            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'advisor', arguments: '{"question":"q1"}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      queueResponse(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'PRO 1' }, finish_reason: 'stop' }] }))
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: { role: 'assistant', content: null,
+            tool_calls: [{ id: 'call_2', type: 'function', function: { name: 'advisor', arguments: '{"question":"q2"}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      queueResponse(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'PRO 2' }, finish_reason: 'stop' }] }))
+      queueResponse(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'DONE' }, finish_reason: 'stop' }] }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      expect(out.path).toEqual(['flash', 'pro', 'flash', 'pro', 'flash'])
+      const body = JSON.parse((out.body as Buffer).toString('utf-8'))
+      expect(body.choices[0].message.content).toBe('DONE')
+      expect(captured).toHaveLength(5)
+    })
+
+    it('returns error when flash upstream fails', async () => {
+      queueResponse('upstream 500', { status: 500 })
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [] }, false, {})
+      expect(out.status).toBe(500)
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('error')
+      expect(captured).toHaveLength(1)
+    })
+
+    it('returns error when pro upstream fails on advisor call', async () => {
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: { role: 'assistant', content: null,
+            tool_calls: [{ id: 'call_x', type: 'function', function: { name: 'advisor', arguments: '{"question":"q"}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+      queueResponse('pro 502', { status: 502 })
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [] }, false, {})
+
+      expect(out.status).toBe(502)
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('advisor')
+      expect(captured).toHaveLength(2)
+    })
+
+    it('passes through when flash emits tool calls but no advisor call', async () => {
+      // Some other tool name — the proxy should NOT intercept.
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: { role: 'assistant', content: null,
+            tool_calls: [{ id: 'call_other', type: 'function', function: { name: 'some_other_tool', arguments: '{}' } }] },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [] }, false, {})
+
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('non-stream')
+      expect(captured).toHaveLength(1)
+    })
+
+
+    it('rewrites orphaned advisor tool_calls in history as user prompts (non-stream)', async () => {
+      // Client re-sends a prior turn where flash already called advisor but
+      // the tool result message is missing. The proxy must NOT forward the
+      // orphaned tool_call to deepseek (which would 400), instead it should
+      // rewrite the orphan into a user prompt that surfaces the question.
+      //
+      // Inbound messages (note: assistant tool_call WITHOUT a following tool
+      // result — the bug scenario the user reported).
+      const inboundMessages = [
+        { role: 'user', content: 'this is a test of advisor' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'orphan_call_1',
+            type: 'function',
+            function: { name: 'advisor', arguments: '{"question":"please confirm advisor works"}' },
+          }],
+        },
+      ]
+
+      // Only one upstream call expected: flash. No pro fill — we don't invent
+      // a fake pro response for an unanswered tool call.
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'flash direct answer' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: inboundMessages }, false, {})
+
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('non-stream')
+      expect(captured).toHaveLength(1)
+
+      // The flash request should NOT contain the orphaned assistant tool_call
+      // — it should have been rewritten to a user message containing the
+      // advisor question. This is what keeps deepseek from 400-ing.
+      const flashBody = JSON.parse(captured[0].init.body!)
+      const flashMessages = flashBody.messages
+      const stillHasOrphanToolCall = flashMessages.some((m: { role: string; tool_calls?: Array<{ id?: string }> }) =>
+        m.role === 'assistant' && m.tool_calls?.some((tc) => tc.id === 'orphan_call_1'),
+      )
+      expect(stillHasOrphanToolCall).toBe(false)
+
+      // The user prompt that surfaces the question must be present.
+      const userPromptMsg = flashMessages.find((m: { role: string; content: string }) =>
+        m.role === 'user' && typeof m.content === 'string' && m.content.includes('please confirm advisor works'),
+      )
+      expect(userPromptMsg).toBeDefined()
+      expect(userPromptMsg!.content).toMatch(/Earlier you attempted to call the advisor tool/)
+    })
+
+    it('skips orphaned advisor calls that already have tool results', async () => {
+      // Client sends a turn where flash already called advisor AND supplied
+      // the tool result — proxy should NOT re-call pro for this one.
+      const inboundMessages = [
+        { role: 'user', content: 'q' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [{
+            id: 'already_done',
+            type: 'function',
+            function: { name: 'advisor', arguments: '{}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'already_done',
+          content: 'existing tool result',
+        },
+      ]
+
+      // Expected: only one upstream call (flash), no orphan-fill.
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'flash final' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: inboundMessages }, false, {})
+
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('non-stream') // no advisor call made this turn
+      expect(captured).toHaveLength(1) // just flash, no orphan-fill
+    })
+
+    // ══════════════════════════════════════════════════════════════════
+    // VERIFY FIX: pro has NO tools → returns content → tool result has content
+    //
+    // buildProAdvisorBody() now strips ALL tools. Pro cannot call advisor.
+    // Pro sees user's question and returns analysis as content, which the
+    // dispatcher puts into the tool result for flash to synthesize.
+    // ══════════════════════════════════════════════════════════════════
+    it('pro returns content normally (no advisor tool → no tool_calls loop)', async () => {
+      // Step 1: flash calls advisor
+      queueResponse(JSON.stringify({
+        choices: [{
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{
+              id: 'call_flash_1',
+              type: 'function',
+              function: { name: 'advisor', arguments: '{"question":"测试advisor是否正常"}' },
+            }],
+          },
+          finish_reason: 'tool_calls',
+        }],
+      }))
+
+      // Step 2: pro returns content normally (no tools to call)
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'PRO: advisor 工具正常工作，可以放心使用。' }, finish_reason: 'stop' }],
+      }))
+
+      // Step 3: flash retry synthesises
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: '结合顾问分析：advisor 工具正常，可以开始你的任务。' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: '测试下advisor' }] }, false, {})
+
+      // Flash retry body — tool_result must contain pro's analysis
+      const flashRetryBody = JSON.parse(captured[2].init.body!)
+      const toolResultMsg = flashRetryBody.messages[flashRetryBody.messages.length - 1]
+      expect(toolResultMsg.role).toBe('tool')
+      expect(toolResultMsg.content).toBe('PRO: advisor 工具正常工作，可以放心使用。')
+
+      // Flash synthesises pro's analysis
+      const body = JSON.parse((out.body as Buffer).toString('utf-8'))
+      expect(body.choices[0].message.content).toContain('顾问分析')
+
+      // Pro body MUST NOT have any tools
+      const proBody = JSON.parse(captured[1].init.body!)
+      expect(proBody.model).toBe(PRO)
+      expect(proBody.tools).toBeUndefined()
+      expect(proBody.tool_choice).toBeUndefined()
+    })
+
+    it('preserves client-provided tools on flash call (advisor is appended)', async () => {
+      queueResponse(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      await d.dispatch({
+        messages: [{ role: 'user', content: 'q' }],
+        tools: [{ type: 'function', function: { name: 'client_tool' } }],
+      }, false, {})
+
+      const flashBody = JSON.parse(captured[0].init.body!)
+      const tools = flashBody.tools
+      expect(tools).toHaveLength(2)
+      const names = tools.map((t: { function?: { name?: string } }) => t.function?.name)
+      expect(names).toContain('client_tool')
+      expect(names).toContain('advisor')
+    })
+  })
+
+  // --------------------------------------------------------------------
+  // Advisor mode — streaming
+  // --------------------------------------------------------------------
+  describe('advisor mode (stream)', () => {
+    function makeAdvisorConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
+      return makeConfig({ mode: 'advisor', ...overrides })
+    }
+
+    function mkSseStream(chunks: string[]): ReadableStream<Uint8Array> {
+      const enc = new TextEncoder()
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const c of chunks) controller.enqueue(enc.encode(c))
+          controller.close()
+        },
+      })
+    }
+
+    async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+      const reader = stream.getReader()
+      const dec = new TextDecoder()
+      let acc = ''
+      for (let i = 0; i < 500; i++) {
+        const { value, done } = await reader.read()
+        if (done) break
+        acc += dec.decode(value, { stream: true })
+      }
+      return acc
+    }
+
+    function parseSse(sseText: string): { content: string; reasoning: string } {
+      let content = ''
+      let reasoning = ''
+      for (const line of sseText.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trim()
+        if (!payload || payload === '[DONE]') continue
+        try {
+          const parsed = JSON.parse(payload)
+          const delta = parsed?.choices?.[0]?.delta
+          if (typeof delta?.content === 'string') content += delta.content
+          if (typeof delta?.reasoning_content === 'string') reasoning += delta.reasoning_content
+        } catch { /* ignore */ }
+      }
+      return { content, reasoning }
+    }
+
+    it('passes through when flash stream has no advisor tool call', async () => {
+      const stream = mkSseStream([
+        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+        'data: {"choices":[{"delta":{"reasoning_content":"flash thinking"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [], stream: true }, true, {})
+
+      expect(out.isStream).toBe(true)
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, reasoning } = parseSse(acc)
+      expect(reasoning).toBe('flash thinking')
+      expect(content).toBe('Hello')
+      expect(captured).toHaveLength(1)
+    })
+
+    it('intercepts advisor tool call, streams pro analysis into think panel, then pumps flash retry', async () => {
+      const flashStream = mkSseStream([
+        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
+        'data: {"choices":[{"delta":{"reasoning_content":"flash thinking"}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"advisor","arguments":""}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"question\\":\\"q?\\"}"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      ])
+      const proStream = mkSseStream([
+        'data: {"choices":[{"delta":{"reasoning_content":"pro thinking"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"PRO ANSWER"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      const flashRetryStream = mkSseStream([
+        'data: {"choices":[{"delta":{"content":"FINAL"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(flashRetryStream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }], stream: true }, true, {})
+
+      expect(out.isStream).toBe(true)
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, reasoning } = parseSse(acc)
+
+      // Flash reasoning forwarded.
+      expect(reasoning).toContain('flash thinking')
+      // Pro thinking + content are injected into the think panel.
+      expect(reasoning).toContain('pro thinking')
+      expect(reasoning).toContain('PRO ANSWER')
+      // Advisor begin/end separators visible.
+      expect(reasoning).toContain('consulting advisor')
+      expect(reasoning).toContain('back to flash')
+      // Final flash answer is the only content (pro's content was rewritten as reasoning).
+      expect(content).toBe('FINAL')
+      expect(content).not.toContain('PRO ANSWER')
+
+      expect(captured).toHaveLength(3)
+    })
+
+    it('pro call has no tools and no tool_choice', async () => {
+      const flashStream = mkSseStream([
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"advisor","arguments":"{}"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      ])
+      const proStream = mkSseStream([
+        'data: {"choices":[{"delta":{"content":"x"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      const flashRetryStream = mkSseStream([
+        'data: {"choices":[{"delta":{"content":"y"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(flashRetryStream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }], stream: true }, true, {})
+      // The advisor stream dispatcher fires fetchMock calls from inside the stream's
+      // start(); drain the stream so the side effects run.
+      if (out.isStream) {
+        const reader = (out.body as ReadableStream<Uint8Array>).getReader()
+        while (true) {
+          const { done } = await reader.read()
+          if (done) break
+        }
+      }
+
+      const proBody = JSON.parse(captured[1].init.body!)
+      expect(proBody.model).toBe(PRO)
+      // Pro is a passive advisor — NO tools at all.
+      expect(proBody.tools).toBeUndefined()
+      expect(proBody.tool_choice).toBeUndefined()
+      // Advisor question is surfaced as a user message
+      const proMsgs = proBody.messages
+      const advisorUserMsgs = proMsgs.filter((m: { role: string }) => m.role === 'user')
+      expect(advisorUserMsgs.length).toBeGreaterThanOrEqual(1)
+    })
+
+    it('flash retry receives the tool result message in messages', async () => {
+      const flashStream = mkSseStream([
+        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"advisor","arguments":"{}"}}]}}]}\n\n',
+        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      ])
+      const proStream = mkSseStream([
+        'data: {"choices":[{"delta":{"content":"PRO CONTENT"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      const flashRetryStream = mkSseStream([
+        'data: {"choices":[{"delta":{"content":"final"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ])
+      queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(flashRetryStream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }], stream: true }, true, {})
+      if (out.isStream) {
+        const reader = (out.body as ReadableStream<Uint8Array>).getReader()
+        while (true) {
+          const { done } = await reader.read()
+          if (done) break
+        }
+      }
+
+      const flashRetryBody = JSON.parse(captured[2].init.body!)
+      const messages = flashRetryBody.messages
+      const toolMsg = messages[messages.length - 1]
+      expect(toolMsg.role).toBe('tool')
+      expect(toolMsg.tool_call_id).toBe('c1')
+      expect(toolMsg.content).toBe('PRO CONTENT')
+    })
+  })
 })
