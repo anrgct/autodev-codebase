@@ -74,13 +74,14 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
   const host = String(cliOverrides['escalateHost'] ?? fullConfig.escalateHost ?? 'localhost')
 
   const portRaw = cliOverrides['escalatePort'] ?? fullConfig.escalatePort
-  const port = typeof portRaw === 'number' ? portRaw : 8080
+  const port = typeof portRaw === 'number' ? portRaw : parseInt(String(portRaw), 10) || 8080
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`Invalid escalatePort: ${port} (must be an integer in [1, 65535])`)
   }
 
   const stickyProTtlMsRaw = fullConfig.escalateStickyProTtlMs
-  const stickyProTtlMs = typeof stickyProTtlMsRaw === 'number' && stickyProTtlMsRaw >= 0 ? stickyProTtlMsRaw : 300000
+  const stickyNum = typeof stickyProTtlMsRaw === 'number' ? stickyProTtlMsRaw : parseInt(String(stickyProTtlMsRaw), 10)
+  const stickyProTtlMs = Number.isFinite(stickyNum) && stickyNum >= 0 ? stickyNum : 300000
 
   const escalationMode = (fullConfig.escalateMode ?? 'self-report') as 'self-report' | 'advisor'
 
@@ -188,12 +189,12 @@ export function createEscalateCommand(): Command {
 
   command
     .description('Start a local HTTP proxy that auto-escalates flash → pro on <<<NEEDS_PRO>>> markers')
-    .option('--port <port>', 'Listening port (default: 8080)', '8080')
-    .option('--host <host>', 'Listening host (default: localhost)', 'localhost')
+    .option('--port <port>', 'Listening port (default: 8080)')
+    .option('--host <host>', 'Listening host (default: localhost)')
     .option('--api-base <url>', 'Upstream OpenAI-compatible API base URL (default: https://api.deepseek.com/v1)')
     .option('--api-key <key>', 'Upstream API key (if not set, forwards client Authorization header)')
-    .option('--flash-model <id>', 'Flash (cheap) model ID', 'deepseek-v4-flash')
-    .option('--pro-model <id>', 'Pro (strong) model ID', 'deepseek-v4-pro')
+    .option('--flash-model <id>', 'Flash (cheap) model ID (default: deepseek-v4-flash)')
+    .option('--pro-model <id>', 'Pro (strong) model ID (default: deepseek-v4-pro)')
     .option('-p, --path <path>', 'Working directory (for project config lookup)', '.')
     .option('-c, --config <path>', 'Configuration file path')
     .option('--demo', 'Use demo workspace')

@@ -1088,6 +1088,13 @@ describe('EscalateDispatcher', () => {
       expect(content).toBe('FINAL')
       expect(content).not.toContain('PRO ANSWER')
 
+      // pro 子流的 `data: [DONE]` 绝不能转发给客户端 —— 否则客户端会
+      // 误以为整个 SSE 流结束，丢失后续的 advisor end + flash retry 内容。
+      // 只有 flash retry 的最终 [DONE] 应出现，且必须在最后。
+      const dataLines = acc.split('\n').map(l => l.trim()).filter(l => l.startsWith('data:'))
+      expect(dataLines.filter(l => l === 'data: [DONE]')).toHaveLength(1)
+      expect(dataLines.findIndex(l => l === 'data: [DONE]')).toBe(dataLines.length - 1)
+
       expect(captured).toHaveLength(3)
     })
 

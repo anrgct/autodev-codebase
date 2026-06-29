@@ -279,6 +279,61 @@ flash retry 的请求**仍带 advisor tool 定义**。如果 flash 在拿到 pro
 **原因：** advisor 模式与 self-report 模式是两种独立的升级策略。advisor 模式下,pro 不需要知道 `<<<NEEDS_FLASH>>>` 降级标记(它是被动顾问,只是回答问题)。
 
 
+### 2026-06-29 — 文档补充: 记录客户端断开传播 (abort propagation) 行为
+
+**背景：** escalate proxy 一直有个未被文档记录的行为：客户端断开连接时，proxy 会把 cancel 信号传播到 upstream，中止 in-flight fetch（避免 upstream 继续算、浪费 token/资源）。该行为此前只在代码注释和测试文件里有体现。
+
+**实现位置：** `src/escalate/dispatcher.ts` 的 `callUpstream()` —— 将客户端断开信号 (`clientSignal`) 与内部超时 (`UPSTREAM_TIMEOUT_MS`) 通过 `AbortSignal.any([...])` 合并后传给 upstream fetch：
+
+```typescript
+// Combine the internal timeout with the client-disconnect signal so that
+// the upstream fetch is aborted as soon as the client walks away.
+const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+const effectiveSignal = clientSignal
+  ? AbortSignal.any([timeoutSignal, clientSignal])
+  : timeoutSignal
+```
+
+advisor 模式下，`dispatchAdvisorStream()` 进一步用本地 `AbortController` (`localAbort`) 桥接 `clientSignal`，并在 `cancel(reason)` 回调里 `localAbort.abort()` + `currentReader?.cancel()`，确保 pro/flash 任意阶段客户端断开都能传播到当前 upstream reader。
+
+**测试覆盖：** `src/escalate/__tests__/abort-propagation.spec.ts`（e2e，2 个用例）—— 验证非流式 + 流式两种场景下，客户端 abort 后 upstream 连接被关闭 (`lifecycle.aborted === true`)。
+
+### 2026-06-29 — 修订: 修复 streamProAsReasoning 泄漏 pro 子流 [DONE] 导致 flash retry 被吞
+
+**问题：** `streamProAsReasoning()` 把 pro 子流的 `data: [DONE]` 转发给客户端。真实 SSE 客户端（Cline/EventSource）收到 `[DONE]` 后认为整个流结束并停止读取，导致后续的 advisor end 分隔符 + flash retry 的最终内容**全部丢失**。表现为：客户端只看到 pro 分析（think 面板），看不到 flash 综合后的最终答案（content 区域为空）。用户称“最后一个 flash 的响应被吞了，有发请求但没有转发”。
+
+curl 黑盒测试无法复现（curl 不解析 SSE 语义，读完整个字节流），只有真实 SSE 客户端受影响。
+
+**根因：** `data: [DONE]` 行的 `line.delta` 为 undefined，命中 `if (!line.isData || !line.delta)` 分支被 `controller.enqueue(line.bytes)` 转发。pro 的 `[DONE]` 只标记 pro 子流结束，不应终止整个客户端流。
+
+**修复：** `streamProAsReasoning` 循环开头加 `if (line.done) continue`，吞掉 pro 的 `[DONE]`。整个客户端流由 flash retry 的最终 `[DONE]`（passthrough 时转发）终止。
+
+**验证：**
+- 对比：修复前 `[DONE]=2`（pro 中间 + flash 末尾），第一个在中间致其后 flash 事件丢失；修复后 `[DONE]=1`（仅末尾）
+- 单元测试：advisor stream 测试加 [DONE] 位置断言（只 1 次 + 在最后），154 测试全过
+- 复现脚本 `scripts/evidence/290629-sse-missing-id.ts` 加 [DONE] 检查
+
+### 2026-06-29 — 修订: 合成 SSE 事件补齐 id/object/created/model 字段
+
+**问题：** proxy 注入的合成事件（`buildAdvisorBeginEvent`、`buildAdvisorEndEvent`、`buildTierSwitchEvent`、`buildProxyErrorEvent`）只有 `choices`，缺少 `id`/`object`/`created`/`model` 字段。`streamProAsReasoning` 重写 content→reasoning_content 时也丢弃了原始事件的顶层字段。上游 DeepSeek API 的事件都带这些字段，注入事件不一致。
+
+**修复：**
+- 4 个合成事件函数新增 `model` 参数，payload 补齐 `id: randomUUID()`、`object: 'chat.completion.chunk'`、`created: Math.floor(Date.now()/1000)`、`model`
+- 调用点按语义传 model（advisor 段/pro 调用失败→proModel；flash 段/降级→flashModel）
+- `streamProAsReasoning` 改为 `{ ...parsed, choices: [...] }` spread，保留原始事件全部顶层字段
+
+### 2026-06-28 — 修订: 修复 advisor 流式路径 content 事件空行丢失 + [DONE] 位置错误
+
+**问题：** `peekAdvisorStream()` 中，空行分隔符、`[DONE]` 信号被立即转发，但 content/tool_call 数据行被缓冲到流结束才 flush。导致 SSE 输出顺序重排：空行和 [DONE] 出现在 content 之前，content 事件之间失去 `\n\n` 分隔符。SSE 客户端将连续多个 `data:` 行拼接为单事件，`JSON.parse()` 失败：
+
+```
+SyntaxError: Unexpected non-whitespace character after JSON at position 319
+```
+
+**修复：** 引入 `bufMode` 标志位。content/tool_call 行缓冲时进入 buffering 状态（`bufMode=true`），后续的空行、`[DONE]`、非 delta 数据行（如 cost 事件）全部跟随缓冲，保持 `data:\n\n` 的正确顺序。reasoning 行立即转发并重置 `bufMode=false`。
+
+**验证：** 复现脚本 `scripts/evidence/280628-sse-content-blank-line-loss.ts` confirm 空行缺失=0，[DONE] 位置正确。全部 36 个 dispatcher 测试通过。
+
 ### 2026-06-27 — 修订: pro 不再保留 advisor tool 定义
 
 **问题：** `buildProAdvisorBody()` 在 strip 客户端 tools 后又调用 `injectAdvisorTool()`，导致 pro 仍然持有 advisor tool 定义。当用户问题涉及 tool 行为（如"测试下advisor"）时，pro 可能自己调用 advisor tool，返回 `content: null` + `tool_calls`，导致 tool result 的 content 为空字符串。flash 看到空 tool result 后误判 "advisor 工具调用成功"。

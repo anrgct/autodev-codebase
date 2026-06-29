@@ -159,9 +159,32 @@ async function handleChat(
   const isStream = !!(parsed as { stream?: unknown })?.stream
   const clientHeaders = collectClientHeaders(event)
 
+  // Create an AbortController that fires when the client disconnects.
+  // This signal is threaded through to the upstream fetch so that the
+  // remote API request is cancelled promptly instead of running to
+  // completion for a response nobody will receive.
+  //
+  // We listen on `res.on('close')` (not `req`) and check `writableEnded`
+  // because `close` fires both on normal completion AND on abnormal
+  // disconnect — only the latter (response not fully sent yet) should
+  // trigger an abort. The listener is intentionally NOT removed in a
+  // `finally` block: for streaming responses, dispatch() returns long
+  // before the stream finishes transferring, so the listener must stay
+  // registered for the entire response lifecycle. Each request has its
+  // own `res` object, so there's no leak across requests.
+  const abortController = new AbortController()
+  const clientSignal = abortController.signal
+  const res = event.node.res
+
+  res.on('close', () => {
+    if (!res.writableEnded && !clientSignal.aborted) {
+      abortController.abort(new Error('client disconnected'))
+    }
+  })
+
   let result
   try {
-    result = await dispatcher.dispatch(parsed, isStream, clientHeaders)
+    result = await dispatcher.dispatch(parsed, isStream, clientHeaders, clientSignal)
   } catch (err) {
     logger.error?.(`[escalate] dispatcher error: ${err instanceof Error ? err.message : String(err)}`)
     setResponseStatus(event, 502)

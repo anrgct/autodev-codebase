@@ -26,6 +26,7 @@
  *   - (the pro-downgrade case is rare but supported)
  */
 
+import { randomUUID } from 'node:crypto'
 import { fetch, Pool, type Dispatcher } from 'undici'
 import {
   ADVISOR_TOOL_NAME,
@@ -283,12 +284,16 @@ function safeParseChatCompletion(body: string): { choices?: Array<{ message?: Re
  * consultation. Injected into the client's reasoning_content stream so the
  * think panel shows a clear visual separator.
  */
-function buildAdvisorBeginEvent(question?: string): Uint8Array {
+function buildAdvisorBeginEvent(question: string | undefined, model: string): Uint8Array {
   const label = question
     ? `[proxy: consulting advisor (pro): ${question}]`
     : '[proxy: consulting advisor (pro)]'
   const text = `\n\n--- ${label} ---\n\n`
   const payload = {
+    id: randomUUID(),
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
     choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
   }
   return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
@@ -298,9 +303,13 @@ function buildAdvisorBeginEvent(question?: string): Uint8Array {
  * Build a synthetic SSE `data:` chunk that marks the end of a pro-as-advisor
  * consultation and the return to flash.
  */
-function buildAdvisorEndEvent(): Uint8Array {
+function buildAdvisorEndEvent(model: string): Uint8Array {
   const text = `\n\n--- [proxy: back to flash with advisor analysis] ---\n\n`
   const payload = {
+    id: randomUUID(),
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
     choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
   }
   return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
@@ -377,10 +386,14 @@ function concatBytes(a: Uint8Array | null, b: Uint8Array): Uint8Array {
  * think panel) knows where the request now sits, without any command-style
  * directives.
  */
-function buildTierSwitchEvent(from: 'flash' | 'pro', to: 'flash' | 'pro', reason?: string): Uint8Array {
+function buildTierSwitchEvent(from: 'flash' | 'pro', to: 'flash' | 'pro', reason: string | undefined, model: string): Uint8Array {
   const detail = reason ? `; ${reason}` : ''
   const text = `\n\n--- [proxy: now on ${to} (was ${from}${detail})] ---\n\n`
   const payload = {
+    id: randomUUID(),
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
     choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
   }
   return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
@@ -391,10 +404,14 @@ function buildTierSwitchEvent(from: 'flash' | 'pro', to: 'flash' | 'pro', reason
  * as a normal-looking assistant `content` delta followed by `[DONE]`. Used
  * when an upstream retry fails mid-stream and we have nothing else to send.
  */
-function buildProxyErrorEvent(status: number, message: string): Uint8Array {
+function buildProxyErrorEvent(status: number, message: string, model: string): Uint8Array {
   const trimmed = (message ?? '').slice(0, 200)
   const text = `[proxy error: upstream returned ${status}${trimmed ? `: ${trimmed}` : ''}]`
   const payload = {
+    id: randomUUID(),
+    object: 'chat.completion.chunk',
+    created: Math.floor(Date.now() / 1000),
+    model,
     choices: [{ index: 0, delta: { content: text }, finish_reason: 'stop' }],
   }
   return Buffer.from(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, 'utf-8')
@@ -555,15 +572,24 @@ export class EscalateDispatcher {
    */
   private async callUpstream(
     body: ChatCompletionRequestBody,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<Response> {
     const url = `${normalizeBase(this.config.apiBase)}/chat/completions`
     const headers = buildUpstreamHeaders(clientHeaders, this.config)
+
+    // Combine the internal timeout with the client-disconnect signal so that
+    // the upstream fetch is aborted as soon as the client walks away.
+    const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
+    const effectiveSignal = clientSignal
+      ? AbortSignal.any([timeoutSignal, clientSignal])
+      : timeoutSignal
+
     const init: Record<string, unknown> = {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+      signal: effectiveSignal,
     }
     if (this.pool) {
       init['dispatcher'] = this.pool
@@ -681,16 +707,17 @@ export class EscalateDispatcher {
   async dispatch(
     rawBody: unknown,
     isStream: boolean,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     // Advisor mode routes through a different dispatcher (tool-call interception
     // instead of self-report markers); sticky pro does not apply because flash
     // is always in control in advisor mode.
     if (this.config.mode === 'advisor') {
       if (isStream) {
-        return this.dispatchAdvisorStream(rawBody, clientHeaders)
+        return this.dispatchAdvisorStream(rawBody, clientHeaders, clientSignal)
       }
-      return this.dispatchAdvisorNonStream(rawBody, clientHeaders)
+      return this.dispatchAdvisorNonStream(rawBody, clientHeaders, clientSignal)
     }
 
     // Sticky pro: if this conversation prefix was recently escalated, skip flash.
@@ -700,15 +727,15 @@ export class EscalateDispatcher {
         const sticky = this.stickyStore.lookup(msgs)
         if (sticky === 'pro') {
           this.logger.info?.(`[escalate] sticky pro HIT — dispatching directly to pro`)
-          return this.dispatchDirectPro(rawBody, isStream, clientHeaders)
+          return this.dispatchDirectPro(rawBody, isStream, clientHeaders, clientSignal)
         }
       }
     }
 
     if (isStream) {
-      return this.dispatchStream(rawBody, clientHeaders)
+      return this.dispatchStream(rawBody, clientHeaders, clientSignal)
     }
-    return this.dispatchNonStream(rawBody, clientHeaders)
+    return this.dispatchNonStream(rawBody, clientHeaders, clientSignal)
   }
 
   /**
@@ -719,20 +746,22 @@ export class EscalateDispatcher {
   private async dispatchDirectPro(
     rawBody: unknown,
     isStream: boolean,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     if (isStream) {
-      return this.dispatchDirectProStream(rawBody, clientHeaders)
+      return this.dispatchDirectProStream(rawBody, clientHeaders, clientSignal)
     }
-    return this.dispatchDirectProNonStream(rawBody, clientHeaders)
+    return this.dispatchDirectProNonStream(rawBody, clientHeaders, clientSignal)
   }
 
   private async dispatchDirectProNonStream(
     rawBody: unknown,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const proBody = this.buildProBody(rawBody)
-    const proResp = await this.callUpstream(proBody, clientHeaders)
+    const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
     const path: Array<'flash' | 'pro'> = ['pro']
 
     if (!proResp.ok) {
@@ -761,7 +790,7 @@ export class EscalateDispatcher {
       if (msgs) this.stickyStore?.clear(msgs)
       this.logger.info?.(`[escalate] sticky pro: pro downgraded (${proDetect.reason ?? 'bare'}) — retrying on flash`)
       const flashBody = this.buildFlashRetryBody(rawBody)
-      const flashResp = await this.callUpstream(flashBody, clientHeaders)
+      const flashResp = await this.callUpstream(flashBody, clientHeaders, clientSignal)
       path.push('flash')
 
       if (!flashResp.ok) {
@@ -806,10 +835,11 @@ export class EscalateDispatcher {
 
   private async dispatchDirectProStream(
     rawBody: unknown,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const proBody = this.buildProBody(rawBody)
-    const proResp = await this.callUpstream(proBody, clientHeaders)
+    const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
 
     // Upstream error on direct pro — clear sticky and pass the error through
     // as a non-stream body (with annotation headers, since we haven't started
@@ -833,12 +863,30 @@ export class EscalateDispatcher {
     const proReader = proResp.body.getReader()
     const msgs = extractMessages(rawBody)
 
+    // Track current active reader for the cancel handler.
+    let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = proReader
+
+    // Local abort controller linked to clientSignal.
+    const localAbort = new AbortController()
+    const localSignal = localAbort.signal
+    const onLocalAbort = () => {
+      if (!localSignal.aborted) localAbort.abort(clientSignal?.reason)
+    }
+    if (clientSignal) {
+      if (clientSignal.aborted) {
+        localAbort.abort(clientSignal.reason)
+      } else {
+        clientSignal.addEventListener('abort', onLocalAbort, { once: true })
+      }
+    }
+
     const passthrough = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
           // Pro peek — look for NEEDS_FLASH (downgrade).
           const proResult = await dispatcher.peekTierStream(controller, proReader, 'flash')
           if (proResult.outcome === 'done') {
+            currentReader = null
             controller.close()
             return
           }
@@ -847,29 +895,34 @@ export class EscalateDispatcher {
           if (msgs) dispatcher.stickyStore?.clear(msgs)
           dispatcher.logger.info?.(`[escalate] sticky pro: <<<NEEDS_FLASH>>> detected — downgrading to flash`)
 
-          controller.enqueue(buildTierSwitchEvent('pro', 'flash', proResult.reason))
+          controller.enqueue(buildTierSwitchEvent('pro', 'flash', proResult.reason, dispatcher.config.flashModel))
+          currentReader = null  // proReader was cancelled by peekTierStream
 
           const flashBody = dispatcher.buildFlashRetryBody(rawBody)
-          const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders)
+          const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders, localSignal)
           if (!flashResp.ok || !flashResp.body) {
             const errText = flashResp.body ? await flashResp.text().catch(() => '') : ''
-            controller.enqueue(buildProxyErrorEvent(flashResp.status, errText))
+            controller.enqueue(buildProxyErrorEvent(flashResp.status, errText, dispatcher.config.flashModel))
             controller.close()
             return
           }
 
           // Pump flash retry directly — no further peeking (avoid downgrade loops).
-          await pumpReaderToController(flashResp.body.getReader(), controller)
+          const flashReader = flashResp.body.getReader()
+          currentReader = flashReader
+          await pumpReaderToController(flashReader, controller)
+          currentReader = null
           controller.close()
         } catch (err) {
           try {
-            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err)))
+            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel))
           } catch { /* noop */ }
           try { controller.close() } catch { /* noop */ }
         }
       },
       async cancel(reason) {
-        try { await proReader.cancel(reason) } catch { /* noop */ }
+        if (!localSignal.aborted) localAbort.abort(reason)
+        try { await currentReader?.cancel(reason) } catch { /* noop */ }
       },
     })
 
@@ -892,11 +945,12 @@ export class EscalateDispatcher {
 
   private async dispatchNonStream(
     rawBody: unknown,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     // 1. Flash call.
     const flashBody = this.buildFlashBody(rawBody)
-    const flashResp = await this.callUpstream(flashBody, clientHeaders)
+    const flashResp = await this.callUpstream(flashBody, clientHeaders, clientSignal)
     const path: Array<'flash' | 'pro'> = ['flash']
 
     if (!flashResp.ok) {
@@ -948,7 +1002,7 @@ export class EscalateDispatcher {
 
     // 2. Pro call (escalation).
     const proBody = this.buildProBody(rawBody)
-    const proResp = await this.callUpstream(proBody, clientHeaders)
+    const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
     path.push('pro')
 
     if (!proResp.ok) {
@@ -981,7 +1035,7 @@ export class EscalateDispatcher {
 
       // 3. Flash retry (downgrade).
       const flashRetryBody = this.buildFlashRetryBody(rawBody)
-      const flashRetryResp = await this.callUpstream(flashRetryBody, clientHeaders)
+      const flashRetryResp = await this.callUpstream(flashRetryBody, clientHeaders, clientSignal)
       path.push('flash')
 
       if (!flashRetryResp.ok) {
@@ -1032,10 +1086,11 @@ export class EscalateDispatcher {
 
   private async dispatchStream(
     rawBody: unknown,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const flashBody = this.buildFlashBody(rawBody)
-    const flashResp = await this.callUpstream(flashBody, clientHeaders)
+    const flashResp = await this.callUpstream(flashBody, clientHeaders, clientSignal)
 
     // Upstream error — pass through as a non-stream body (annotation headers
     // are still available here because we haven't started streaming yet).
@@ -1057,6 +1112,26 @@ export class EscalateDispatcher {
     const dispatcher = this
     const flashReader = flashResp.body.getReader()
 
+    // Track the current active reader so the cancel handler can always
+    // cancel the right reader when the client disconnects mid-stream.
+    let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = flashReader
+
+    // Local abort controller linked to clientSignal. When the ReadableStream is
+    // cancelled (client disconnect), we abort this controller which also aborts
+    // any in-flight callUpstream calls (via AbortSignal.any with clientSignal).
+    const localAbort = new AbortController()
+    const localSignal = localAbort.signal
+    const onLocalAbort = () => {
+      if (!localSignal.aborted) localAbort.abort(clientSignal?.reason)
+    }
+    if (clientSignal) {
+      if (clientSignal.aborted) {
+        localAbort.abort(clientSignal.reason)
+      } else {
+        clientSignal.addEventListener('abort', onLocalAbort, { once: true })
+      }
+    }
+
     const passthrough = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
@@ -1074,21 +1149,23 @@ export class EscalateDispatcher {
           dispatcher.logger.info?.(`[escalate] <<<NEEDS_PRO>>> detected in stream — switching to pro`)
 
           // Inject a visible separator into the reasoning stream.
-          controller.enqueue(buildTierSwitchEvent('flash', 'pro', flashResult.reason))
+          controller.enqueue(buildTierSwitchEvent('flash', 'pro', flashResult.reason, dispatcher.config.proModel))
 
           const proBody = dispatcher.buildProBody(rawBody)
-          const proResp = await dispatcher.callUpstream(proBody, clientHeaders)
+          const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
           if (!proResp.ok || !proResp.body) {
             const errText = proResp.body ? await proResp.text().catch(() => '') : ''
-            controller.enqueue(buildProxyErrorEvent(proResp.status, errText))
+            controller.enqueue(buildProxyErrorEvent(proResp.status, errText, dispatcher.config.proModel))
             controller.close()
             return
           }
 
           // ---- Pro peek: forward reasoning, watch for NEEDS_FLASH downgrade. ----
           const proReader = proResp.body.getReader()
+          currentReader = proReader
           const proResult = await dispatcher.peekTierStream(controller, proReader, 'flash')
           if (proResult.outcome === 'done') {
+            currentReader = null
             controller.close()
             return
           }
@@ -1097,29 +1174,36 @@ export class EscalateDispatcher {
           if (msgs) dispatcher.stickyStore?.clear(msgs)
           dispatcher.logger.info?.(`[escalate] <<<NEEDS_FLASH>>> detected in pro stream — downgrading to flash`)
 
-          controller.enqueue(buildTierSwitchEvent('pro', 'flash', proResult.reason))
+          controller.enqueue(buildTierSwitchEvent('pro', 'flash', proResult.reason, dispatcher.config.flashModel))
+          currentReader = null  // proReader was cancelled by peekTierStream
 
           const flashRetryBody = dispatcher.buildFlashRetryBody(rawBody)
-          const flashRetryResp = await dispatcher.callUpstream(flashRetryBody, clientHeaders)
+          const flashRetryResp = await dispatcher.callUpstream(flashRetryBody, clientHeaders, localSignal)
           if (!flashRetryResp.ok || !flashRetryResp.body) {
             const errText = flashRetryResp.body ? await flashRetryResp.text().catch(() => '') : ''
-            controller.enqueue(buildProxyErrorEvent(flashRetryResp.status, errText))
+            controller.enqueue(buildProxyErrorEvent(flashRetryResp.status, errText, dispatcher.config.flashModel))
             controller.close()
             return
           }
 
           // Pump flash retry directly — no further peeking (avoid downgrade loops).
-          await pumpReaderToController(flashRetryResp.body.getReader(), controller)
+          const flashRetryReader = flashRetryResp.body.getReader()
+          currentReader = flashRetryReader
+          await pumpReaderToController(flashRetryReader, controller)
+          currentReader = null
           controller.close()
         } catch (err) {
           try {
-            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err)))
+            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel))
           } catch { /* noop */ }
           try { controller.close() } catch { /* noop */ }
         }
       },
       async cancel(reason) {
-        try { await flashReader.cancel(reason) } catch { /* noop */ }
+        // Abort local controller to cancel any in-flight callUpstream calls.
+        if (!localSignal.aborted) localAbort.abort(reason)
+        // Cancel the currently active reader (if any).
+        try { await currentReader?.cancel(reason) } catch { /* noop */ }
       },
     })
 
@@ -1174,8 +1258,9 @@ export class EscalateDispatcher {
       const { value, done } = await reader.read()
       if (done) {
         // Stream ended naturally — flush any buffered content and signal done.
+        // Ensure the last buffered event is properly terminated per SSE spec.
         if (contentPeekBytes !== null) {
-          controller.enqueue(contentPeekBytes)
+          controller.enqueue(Buffer.concat([contentPeekBytes, Buffer.from('\n', 'utf-8')]))
           contentPeekBytes = null
         }
         return { outcome: 'done' }
@@ -1236,12 +1321,23 @@ export class EscalateDispatcher {
           }
           if (decision === 'no-marker') {
             // Definitively no marker — flush the content buffer, switch to
-            // pure passthrough for the rest of this stream, and flush any
-            // remaining lines in this chunk that came after the content line.
-            controller.enqueue(contentPeekBytes!)
+            // pure passthrough for the rest of this stream.
+            //
+            // SSE spec mandates every event MUST end with `\n\n`.  Data
+            // lines captured in `contentPeekBytes` only carry their own
+            // trailing `\n`.  The event-terminating blank line is normally
+            // picked up by `flushRemainingLines` (when it lands in the same
+            // TCP chunk) or by the first passthrough chunk.  Both paths
+            // depend on network timing and can drop the separator when the
+            // upstream flushes one `data:` line per write().  Defensively
+            // close the event ourselves and skip the first remaining line
+            // when it would duplicate our injected separator.
+            const END = Buffer.from('\n', 'utf-8')
+            controller.enqueue(Buffer.concat([contentPeekBytes!, END]))
             contentPeekBytes = null
             mode = 'passthrough'
-            flushRemainingLines(controller, lines, li + 1)
+            const skip = li + 1 < lines.length && !lines[li + 1].isData ? 1 : 0
+            flushRemainingLines(controller, lines, li + 1 + skip)
             if (leftover !== null) controller.enqueue(leftover)
             break // exit lines loop; outer loop continues in passthrough mode
           }
@@ -1249,10 +1345,12 @@ export class EscalateDispatcher {
           // emitting <<<NEEDS_FLASH>>> — treated defensively as need-more).
           // Keep buffering, but cap to avoid pathological partial prefixes.
           if (sseContentBuf.length >= PEEK_MAX_CONTENT_CHARS) {
-            controller.enqueue(contentPeekBytes!)
+            const END = Buffer.from('\n', 'utf-8')
+            controller.enqueue(Buffer.concat([contentPeekBytes!, END]))
             contentPeekBytes = null
             mode = 'passthrough'
-            flushRemainingLines(controller, lines, li + 1)
+            const skip = li + 1 < lines.length && !lines[li + 1].isData ? 1 : 0
+            flushRemainingLines(controller, lines, li + 1 + skip)
             if (leftover !== null) controller.enqueue(leftover)
             break
           }
@@ -1283,7 +1381,8 @@ export class EscalateDispatcher {
    */
   private async dispatchAdvisorNonStream(
     rawBody: unknown,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const initialMessages = extractMessages(rawBody) ?? []
     // Pre-process: rewrite any advisor tool_calls in the inbound history
@@ -1297,7 +1396,7 @@ export class EscalateDispatcher {
       path.push('flash')
 
       const flashBody = this.buildFlashAdvisorBody(rawBody, workingMessages)
-      const flashResp = await this.callUpstream(flashBody, clientHeaders)
+      const flashResp = await this.callUpstream(flashBody, clientHeaders, clientSignal)
       if (!flashResp.ok) {
         const errBuf = Buffer.from(await flashResp.arrayBuffer())
         return {
@@ -1359,7 +1458,7 @@ export class EscalateDispatcher {
       ]
 
       const proBody = this.buildProAdvisorBody(rawBody, proMessages)
-      const proResp = await this.callUpstream(proBody, clientHeaders)
+      const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
       if (!proResp.ok) {
         const errBuf = Buffer.from(await proResp.arrayBuffer())
         return {
@@ -1440,7 +1539,8 @@ ${proContent}`
    */
   private async dispatchAdvisorStream(
     rawBody: unknown,
-    clientHeaders: Record<string, string | string[] | undefined>
+    clientHeaders: Record<string, string | string[] | undefined>,
+    clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const initialMessages = extractMessages(rawBody) ?? []
     // Pre-process: rewrite any advisor tool_calls in the inbound history
@@ -1452,6 +1552,23 @@ ${proContent}`
     const initialHeaders = { value: {} as Record<string, string> }
 
     const dispatcher = this
+
+    // Local abort controller linked to clientSignal.
+    const localAbort = new AbortController()
+    const localSignal = localAbort.signal
+    const onLocalAbort = () => {
+      if (!localSignal.aborted) localAbort.abort(clientSignal?.reason)
+    }
+    if (clientSignal) {
+      if (clientSignal.aborted) {
+        localAbort.abort(clientSignal.reason)
+      } else {
+        clientSignal.addEventListener('abort', onLocalAbort, { once: true })
+      }
+    }
+
+    let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = null
+
     const passthrough = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
@@ -1460,10 +1577,10 @@ ${proContent}`
           while (true) {
             path.push('flash')
             const flashBody = dispatcher.buildFlashAdvisorBody(rawBody, workingMessages)
-            const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders)
+            const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders, localSignal)
             if (!flashResp.ok || !flashResp.body) {
               const errText = flashResp.body ? await flashResp.text().catch(() => '') : ''
-              controller.enqueue(buildProxyErrorEvent(flashResp.status, errText))
+              controller.enqueue(buildProxyErrorEvent(flashResp.status, errText, dispatcher.config.flashModel))
               controller.close()
               return
             }
@@ -1471,13 +1588,16 @@ ${proContent}`
             initialHeaders.value = headersToRecord(flashResp.headers)
 
             const flashReader = flashResp.body.getReader()
+            currentReader = flashReader
             const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader)
             if (peekResult.outcome === 'passthrough') {
+              currentReader = null
               // No advisor call — flash answered directly; flush & close.
               controller.close()
               return
             }
             if (peekResult.outcome === 'error') {
+              currentReader = null
               controller.close()
               return
             }
@@ -1485,6 +1605,7 @@ ${proContent}`
             const assistantMsg = peekResult.assistantMsg
             const advisorCall = extractAdvisorToolCall(assistantMsg)
             if (!advisorCall) {
+              currentReader = null
               controller.close()
               return
             }
@@ -1512,19 +1633,21 @@ ${proContent}`
             ]
 
             const proBody = dispatcher.buildProAdvisorBody(rawBody, proMessages)
-            const proResp = await dispatcher.callUpstream(proBody, clientHeaders)
+            const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
             if (!proResp.ok || !proResp.body) {
               const errText = proResp.body ? await proResp.text().catch(() => '') : ''
-              controller.enqueue(buildProxyErrorEvent(proResp.status, errText))
+              controller.enqueue(buildProxyErrorEvent(proResp.status, errText, dispatcher.config.proModel))
               controller.close()
               return
             }
 
-            controller.enqueue(buildAdvisorBeginEvent(advisorQuestion ?? undefined))
+            controller.enqueue(buildAdvisorBeginEvent(advisorQuestion ?? undefined, dispatcher.config.proModel))
             const proReader = proResp.body.getReader()
+            currentReader = proReader
             const proContent = await dispatcher.streamProAsReasoning(proReader, controller)
+            currentReader = null
             dispatcher.logger.info?.(`[escalate] pro response (${proContent.length} chars): ${proContent.slice(0, 200)}${proContent.length > 200 ? '...' : ''}`)
-            controller.enqueue(buildAdvisorEndEvent())
+            controller.enqueue(buildAdvisorEndEvent(dispatcher.config.proModel))
 
             const toolResult: ChatCompletionMessage = {
               role: 'tool',
@@ -1560,10 +1683,14 @@ ${proContent}`
           }
         } catch (err) {
           try {
-            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err)))
+            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel))
           } catch { /* noop */ }
           try { controller.close() } catch { /* noop */ }
         }
+      },
+      async cancel(reason) {
+        if (!localSignal.aborted) localAbort.abort(reason)
+        try { await currentReader?.cancel(reason) } catch { /* noop */ }
       },
     })
 
@@ -1601,15 +1728,27 @@ ${proContent}`
     const sseBuf = new SseLineBuffer()
     // Buffer for data lines with deltas (content, tool_calls, finish_reason).
     // Flushed on passthrough; discarded when advisor is detected.
+    //
+    // We must also buffer the empty-line separators that belong to content
+    // events; otherwise the separators get forwarded immediately (by the
+    // !line.isData branch) while the content data itself is deferred, which
+    // reorders the SSE stream and causes consecutive content events to lose
+    // their \n\n delimiters.
     let passthroughBytes: Uint8Array | null = null
     let reasoningAcc = ''
     const toolCalls = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>()
     let sawAdvisorToolName = false
     let finishReason: string | null = null
+    // When a content/tool_call/finish_reason line is buffered the next
+    // empty line (event separator) must also be buffered so the pairs stay
+    // in order.  Reasoning lines are forwarded live so their separators
+    // are forwarded live; a reasoning line resets this flag.
+    let bufMode = false
 
     const flushPassthrough = () => {
       if (passthroughBytes !== null) {
-        controller.enqueue(passthroughBytes)
+        // Ensure the last buffered event is properly terminated per SSE spec.
+        controller.enqueue(Buffer.concat([passthroughBytes, Buffer.from('\n', 'utf-8')]))
         passthroughBytes = null
       }
     }
@@ -1627,15 +1766,35 @@ ${proContent}`
         const line = lines[li]
 
         if (!line.isData) {
-          controller.enqueue(line.bytes)
+          // Empty line (SSE event separator).  If we are currently buffering
+          // content/tool_call lines, defer this separator as well so it stays
+          // adjacent to the data it belongs to.
+          if (bufMode) {
+            passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+          } else {
+            controller.enqueue(line.bytes)
+          }
           continue
         }
         if (line.done) {
-          controller.enqueue(line.bytes)
+          // `data: [DONE]` — if we are currently buffering content/tool_call
+          // lines, defer [DONE] as well so it stays after the buffered data.
+          if (bufMode) {
+            passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+          } else {
+            controller.enqueue(line.bytes)
+          }
           continue
         }
         if (!line.delta) {
-          controller.enqueue(line.bytes)
+          // Non-delta data line (e.g. cost event `{"choices":[],"cost":"0"}`).
+          // If we are currently buffering, defer it so it stays in order with
+          // the buffered content.
+          if (bufMode) {
+            passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+          } else {
+            controller.enqueue(line.bytes)
+          }
           continue
         }
 
@@ -1657,16 +1816,19 @@ ${proContent}`
         if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
           reasoningAcc += delta.reasoning_content
           controller.enqueue(line.bytes)
+          bufMode = false  // reasoning resets buffering mode
         }
 
         if (typeof delta.content === 'string') {
           passthroughBytes = concatBytes(passthroughBytes, line.bytes)
           lineBuffered = true
+          bufMode = true
         }
 
         if (Array.isArray(delta.tool_calls)) {
           if (!lineBuffered) passthroughBytes = concatBytes(passthroughBytes, line.bytes)
           lineBuffered = true
+          bufMode = true
           for (const tc of delta.tool_calls) {
             const idx = typeof tc.index === 'number' ? tc.index : 0
             const existing = toolCalls.get(idx) ?? {
@@ -1692,7 +1854,7 @@ ${proContent}`
           finishReason = delta.finish_reason
           // The finish_reason line itself may not have been buffered yet
           // (e.g. delta: {}). Buffer it so it reaches the client on passthrough.
-          if (!lineBuffered) passthroughBytes = concatBytes(passthroughBytes, line.bytes)
+          if (!lineBuffered) { passthroughBytes = concatBytes(passthroughBytes, line.bytes); bufMode = true }
         }
 
         if (sawAdvisorToolName && finishReason === 'tool_calls') {
@@ -1739,6 +1901,12 @@ ${proContent}`
       if (!value || value.length === 0) continue
       const { lines } = sseBuf.feed(value)
       for (const line of lines) {
+        // pro 子流的 `data: [DONE]` 绝不能转发给客户端 —— 它会让
+        // 客户端误以为整个 SSE 流结束并停止读取，导致后续的 advisor
+        // end 分隔符 + flash retry 的内容全部丢失。pro 的 [DONE] 只
+        // 标记 pro 子流结束，整个客户端流由 flash retry 的最终
+        // [DONE]（在 passthrough 时转发）终止。
+        if (line.done) continue
         if (!line.isData || !line.delta) {
           controller.enqueue(line.bytes)
           continue
@@ -1759,7 +1927,9 @@ ${proContent}`
                     if (c0 && c0.delta) {
                       const newDelta: Record<string, unknown> = { ...c0.delta, reasoning_content: delta.content }
                       delete newDelta['content']
-                      const newPayload = JSON.stringify({ choices: [{ ...c0, delta: newDelta }] })
+                      // Preserve all top-level fields (id/object/created/model/...)
+                      // from the original chunk, only swapping content -> reasoning_content.
+                      const newPayload = JSON.stringify({ ...parsed, choices: [{ ...c0, delta: newDelta }] })
                       controller.enqueue(Buffer.from(`data: ${newPayload}\n`, 'utf-8'))
                     } else {
                       controller.enqueue(line.bytes)
