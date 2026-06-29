@@ -2,16 +2,30 @@
  * Unit tests for the dispatcher — uses a mocked fetch to assert behavior
  * without touching the network.
  *
+ * All tests use the Anthropic Messages API format.
+ *
  * Test scenarios:
  *   1. Non-stream: no escalation → return flash body + X-Escalated-To: flash
  *   2. Non-stream: with bare <<<NEEDS_PRO>>> → retry on pro, return pro body
  *   3. Non-stream: with reason marker → retry on pro + X-Escalation-Reason
  *   4. Non-stream: upstream error → pass through error + flash header
- *   5. Stream: no marker → passthrough (buffered chunk first, then rest)
- *   6. Stream: marker in first chunk → cancel flash, start pro stream
- *   7. Authorization forwarding: client bearer → upstream when no apiKey set
- *   8. Authorization override: apiKey set → uses configured key
- *   9. Body injection: ESCALATION_CONTRACT appended to system prompt
+ *   5. Stream: no marker → passthrough (thinking + text)
+ *   6. Stream: marker in flash → cancel flash, start pro stream
+ *   7. Stream: marker reason → separator carries reason
+ *   8. Stream: downgrade pro→flash → two separators
+ *   9. Headers: forward x-api-key when no apiKey set
+ *  10. Headers: override x-api-key when apiKey set
+ *  11. Headers: strip hop-by-hop
+ *  12. Body: inject flash contract (top-level `system` field)
+ *  13. Body: inject pro contract
+ *  14. Advisor non-stream: flash direct answer
+ *  15. Advisor non-stream: intercept advisor tool_use, query pro
+ *  16. Advisor non-stream: flash retry has tool_result
+ *  17. Advisor non-stream: multiple advisor calls
+ *  18. Advisor non-stream: orphaned tool_use rewrite
+ *  19. Advisor stream: pass through no tool_use
+ *  20. Advisor stream: intercept tool_use, inject pro
+ *  21. Pro body has no tools
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EscalateDispatcher } from '../dispatcher'
@@ -23,13 +37,15 @@ const PRO = 'deepseek-v4-pro'
 function makeConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
   return {
     mode: 'self-report',
-    apiBase: 'https://api.example.com/v1',
+    apiBase: 'https://api.example.com',
     apiKey: undefined,
     flashModel: FLASH,
     proModel: PRO,
     port: 8080,
     host: 'localhost',
     stickyProTtlMs: 0,
+    thinkingBudget: 8000,
+    maxTokens: 4096,
     ...overrides,
   }
 }
@@ -47,6 +63,32 @@ function mkResponse(body: string | ReadableStream<Uint8Array>, opts: {
 interface CapturedCall {
   url: string
   init: { method?: string; headers?: Record<string, string>; body?: string }
+}
+
+/** Anthropic response helper for non-stream self-report tests. */
+function anThrowResponse(text: string): string {
+  return JSON.stringify({
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'text', text }],
+    stop_reason: 'end_turn',
+    stop_sequence: null,
+    model: FLASH,
+    usage: { input_tokens: 10, output_tokens: 5 },
+  })
+}
+
+/** Anthropic response helper for non-stream advisor tool_use. */
+function anThrowToolUse(name: string, input: Record<string, unknown>, id = 'call_abc', stopReason: string = 'tool_use'): string {
+  return JSON.stringify({
+    type: 'message',
+    role: 'assistant',
+    content: [{ type: 'tool_use', id, name, input }],
+    stop_reason: stopReason,
+    stop_sequence: null,
+    model: FLASH,
+    usage: { input_tokens: 10, output_tokens: 5 },
+  })
 }
 
 describe('EscalateDispatcher', () => {
@@ -99,11 +141,11 @@ describe('EscalateDispatcher', () => {
       expect((out.body as Buffer).toString('utf-8')).toBe('Hello there!')
       expect(out.headers['x-escalated-to']).toBe('flash')
       expect(captured).toHaveLength(1)
-      expect(captured[0].url).toBe('https://api.example.com/v1/chat/completions')
+      expect(captured[0].url).toBe('https://api.example.com/v1/messages')
     })
 
     it('retries on pro when the bare marker is present in the flash body', async () => {
-      const flashBody = '<<<NEEDS_PRO>>>\nThis task requires deeper reasoning.'
+      const flashBody = anThrowResponse('<<<NEEDS_PRO>>>\nThis task requires deeper reasoning.')
       const proBody = 'OK, here is the deeper answer.'
       queueResponse(flashBody)
       queueResponse(proBody)
@@ -124,13 +166,13 @@ describe('EscalateDispatcher', () => {
       // Flash body must have the contract injected and model forced to FLASH.
       const flashBodySent = JSON.parse(captured[0].init.body!)
       expect(flashBodySent.model).toBe(FLASH)
-      const sys = flashBodySent.messages.find((m: { role: string }) => m.role === 'system')
-      expect(sys.content).toContain('Tier escalation instruction')
+      // System is top-level Anthropic field, not messages[].role:'system'
+      expect(flashBodySent.system).toContain('Tier escalation instruction')
     })
 
     it('passes the marker reason through to the pro retry header', async () => {
       const reason = 'cross-file refactor across 6 modules'
-      const flashBody = `<<<NEEDS_PRO: ${reason}>>>\nrest`
+      const flashBody = anThrowResponse(`<<<NEEDS_PRO: ${reason}>>>\nrest`)
       queueResponse(flashBody)
       queueResponse('pro answer')
 
@@ -181,32 +223,38 @@ describe('EscalateDispatcher', () => {
       return acc
     }
 
-    /** Parse concatenated SSE text into {content, reasoning} strings. */
-    function parseSse(sseText: string): { content: string; reasoning: string } {
+    /** Parse Anthropic SSE text into {content, thinking} strings. */
+    function parseSse(sseText: string): { content: string; thinking: string } {
       let content = ''
-      let reasoning = ''
+      let thinking = ''
       for (const line of sseText.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('data:')) continue
-        const payload = trimmed.slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
-        try {
-          const parsed = JSON.parse(payload)
-          const delta = parsed?.choices?.[0]?.delta
-          if (typeof delta?.content === 'string') content += delta.content
-          if (typeof delta?.reasoning_content === 'string') reasoning += delta.reasoning_content
-        } catch { /* ignore */ }
+        if (line.startsWith('event: ')) {
+          // skip, we use data: lines only
+        } else if (line.startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(line.slice(6))
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              content += parsed.delta.text || ''
+            } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'thinking_delta') {
+              thinking += parsed.delta.thinking || ''
+            }
+          } catch { /* ignore */ }
+        }
       }
-      return { content, reasoning }
+      return { content, thinking }
     }
 
-    it('forwards reasoning_content immediately and passes content through when no marker', async () => {
+    it('forwards thinking immediately and passes content through when no marker', async () => {
       const stream = mkSseStream([
-        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
-        'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":" world"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thinking..."}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" world"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
 
@@ -218,8 +266,8 @@ describe('EscalateDispatcher', () => {
       expect(out.headers['x-escalated-to']).toBeUndefined()
 
       const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { content, reasoning } = parseSse(acc)
-      expect(reasoning).toBe('thinking...')
+      const { content, thinking } = parseSse(acc)
+      expect(thinking).toBe('thinking...')
       expect(content).toBe('Hello world')
       // No escalation → only one upstream call.
       expect(captured).toHaveLength(1)
@@ -227,13 +275,24 @@ describe('EscalateDispatcher', () => {
 
     it('escalates to pro and injects a separator into the reasoning stream', async () => {
       const flashStream = mkSseStream([
-        'data: {"choices":[{"delta":{"reasoning_content":"flash thinking"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"<<<NEEDS_PRO>>>"}}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"flash thinking"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"<<<NEEDS_PRO>>>"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const proStream = mkSseStream([
-        'data: {"choices":[{"delta":{"reasoning_content":"pro thinking"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"PRO ANSWER"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"pro thinking"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"PRO ANSWER"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
       queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
@@ -245,14 +304,14 @@ describe('EscalateDispatcher', () => {
       expect(out.headers['x-escalated-to']).toBeUndefined()
 
       const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { content, reasoning } = parseSse(acc)
-      // Flash reasoning forwarded to the client.
-      expect(reasoning).toContain('flash thinking')
+      const { content, thinking } = parseSse(acc)
+      // Flash thinking forwarded to the client.
+      expect(thinking).toContain('flash thinking')
       // Separator injected between the two tiers.
-      expect(reasoning).toContain('now on pro')
-      expect(reasoning).toContain('was flash')
-      // Pro reasoning forwarded.
-      expect(reasoning).toContain('pro thinking')
+      expect(thinking).toContain('now on pro')
+      expect(thinking).toContain('was flash')
+      // Pro thinking forwarded.
+      expect(thinking).toContain('pro thinking')
       // Pro answer (the marker is dropped, not forwarded as content).
       expect(content).toBe('PRO ANSWER')
       expect(content).not.toContain('<<<NEEDS_PRO>>>')
@@ -262,9 +321,19 @@ describe('EscalateDispatcher', () => {
 
     it('carries the marker reason into the separator text', async () => {
       const flashStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"<<<NEEDS_PRO: needs deep analysis>>>"}}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<<<NEEDS_PRO: needs deep analysis>>>"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
-      const proStream = mkSseStream(['data: [DONE]\n\n'])
+      const proStream = mkSseStream([
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"pro answer"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ])
       queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
       queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
 
@@ -272,22 +341,35 @@ describe('EscalateDispatcher', () => {
       const out = await d.dispatch({ messages: [], stream: true }, true, {})
 
       const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { reasoning } = parseSse(acc)
+      const { thinking } = parseSse(acc)
       // The separator carries the upgrade reason.
-      expect(reasoning).toContain('needs deep analysis')
+      expect(thinking).toContain('needs deep analysis')
     })
 
     it('downgrades pro → flash with a second separator and no marker leak', async () => {
       const flashStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"<<<NEEDS_PRO>>>"}}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<<<NEEDS_PRO>>>"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const proStream = mkSseStream([
-        'data: {"choices":[{"delta":{"reasoning_content":"pro thinking"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"<<<NEEDS_FLASH>>>"}}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"pro thinking"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"<<<NEEDS_FLASH>>>"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const flashRetryStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"FLASH REUSED"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"FLASH REUSED"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
       queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
@@ -299,12 +381,12 @@ describe('EscalateDispatcher', () => {
       expect(out.isStream).toBe(true)
 
       const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { content, reasoning } = parseSse(acc)
+      const { content, thinking } = parseSse(acc)
       // Both separators present.
-      expect(reasoning).toContain('now on pro')
-      expect(reasoning).toContain('now on flash')
-      // Pro reasoning forwarded in between.
-      expect(reasoning).toContain('pro thinking')
+      expect(thinking).toContain('now on pro')
+      expect(thinking).toContain('now on flash')
+      // Pro thinking forwarded in between.
+      expect(thinking).toContain('pro thinking')
       // Final content from flash retry.
       expect(content).toBe('FLASH REUSED')
       // No markers leak into content.
@@ -314,45 +396,14 @@ describe('EscalateDispatcher', () => {
       expect(captured).toHaveLength(3)
     })
 
-    it('forwards all events when multiple SSE events arrive in a single chunk (no-marker flush line loss bug)', async () => {
-      // Regression test: when multiple SSE events are packed into one TCP chunk
-      // and the first content line triggers `no-marker`, peekTierStream must
-      // not lose the remaining lines in that chunk.
-      const chunk1 = [
-        // reasoning + first content + more content + tool_calls + DONE — all in one chunk
-        'data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n\n' +
-        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n' +
-        'data: {"choices":[{"delta":{"content":" world"}}]}\n\n' +
-        'data: {"choices":[{"delta":{"content":"!"}}]}\n\n' +
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"test","arguments":""}}]}}]}\n\n' +
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]}}]}\n\n' +
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ok\""}}]}}]}\n\n' +
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]}}]}\n\n' +
-        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n' +
-        'data: [DONE]\n\n',
-      ]
-      const stream = mkSseStream(chunk1)
-      queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
-
-      const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
-      const out = await d.dispatch({ messages: [], stream: true }, true, {})
-
-      expect(out.isStream).toBe(true)
-
-      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { content, reasoning } = parseSse(acc)
-      expect(reasoning).toBe('thinking...')
-      // All content tokens must survive, even those after the first no-marker.
-      expect(content).toBe('Hello world!')
-      // No escalation → only one upstream call.
-      expect(captured).toHaveLength(1)
-    })
-
     it('does not hang on non-marker content starting with < (e.g. <html>)', async () => {
       // detectMarkerPrefix must rule this out on the very first chunk.
       const stream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"<html>hello</html>"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<html>hello</html>"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
 
@@ -383,30 +434,27 @@ describe('EscalateDispatcher', () => {
   // Header & body construction
   // --------------------------------------------------------------------
   describe('header & body construction', () => {
-    it('forwards the client Authorization header when no apiKey is set', async () => {
+    it('forwards the client x-api-key header when no apiKey is set', async () => {
       queueResponse('hi')
 
       const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
-      await d.dispatch({ messages: [] }, false, { authorization: 'Bearer client-key' })
+      await d.dispatch({ messages: [] }, false, { 'x-api-key': 'client-key' })
 
       const headers = captured[0].init.headers!
-      expect(headers['authorization']).toBe('Bearer client-key')
+      expect(headers['x-api-key']).toBe('client-key')
     })
 
-    it('overrides the client Authorization when apiKey is set', async () => {
+    it('overrides the client x-api-key when apiKey is set', async () => {
       queueResponse('hi')
 
       const d = new EscalateDispatcher({
         config: makeConfig({ apiKey: 'server-key' }),
         fetchImpl: fetchMock as never,
       })
-      await d.dispatch({ messages: [] }, false, { authorization: 'Bearer client-key' })
+      await d.dispatch({ messages: [] }, false, { 'x-api-key': 'client-key' })
 
       const headers = captured[0].init.headers!
-      // The dispatcher sets `Authorization` (capital A) when apiKey is configured;
-      // case-insensitive lookup is fine here since the test only cares about the value.
-      const auth = headers['authorization'] ?? headers['Authorization']
-      expect(auth).toBe('Bearer server-key')
+      expect(headers['x-api-key']).toBe('server-key')
     })
 
     it('strips hop-by-hop headers from the client', async () => {
@@ -427,48 +475,49 @@ describe('EscalateDispatcher', () => {
       expect(headers['x-custom']).toBe('keep-me')
     })
 
-    it('forces the model field to the flash ID and injects the contract', async () => {
+    it('forces the model field to the flash ID and injects the contract into system', async () => {
       queueResponse('hi')
 
       const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
       const body = {
         model: 'something-else',
-        messages: [{ role: 'system', content: 'You are helpful.' }, { role: 'user', content: 'q' }],
+        system: 'You are helpful.',
+        messages: [{ role: 'user', content: 'q' }],
       }
       await d.dispatch(body, false, {})
 
       const sentBody = JSON.parse(captured[0].init.body!)
       expect(sentBody.model).toBe(FLASH)
-      const sys = sentBody.messages.find((m: { role: string }) => m.role === 'system')
-      expect(sys.content).toContain('You are helpful.')
-      expect(sys.content).toContain('Tier escalation instruction')
+      // System is top-level Anthropic field
+      expect(sentBody.system).toContain('You are helpful.')
+      expect(sentBody.system).toContain('Tier escalation instruction')
     })
 
     it('injects the pro-side contract on the pro retry (teaches downgrade)', async () => {
-      queueResponse('<<<NEEDS_PRO>>>\nrest')
+      queueResponse(anThrowResponse('<<<NEEDS_PRO>>>\nrest'))
       queueResponse('pro')
 
       const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
       const body = {
         model: 'auto',
-        messages: [{ role: 'system', content: 'Hi' }, { role: 'user', content: 'q' }],
+        system: 'Hi',
+        messages: [{ role: 'user', content: 'q' }],
       }
       await d.dispatch(body, false, {})
 
       expect(captured).toHaveLength(2)
       const proBody = JSON.parse(captured[1].init.body!)
       expect(proBody.model).toBe(PRO)
-      const sys = proBody.messages.find((m: { role: string }) => m.role === 'system')
       // The pro retry now injects the pro-side contract (which mentions
       // `<<<NEEDS_FLASH>>>` so the pro model knows it can downgrade).
-      expect(sys.content).toContain('Cost-aware tier switching instruction')
-      expect(sys.content).toContain('strong tier')
-      expect(sys.content).toContain('`<<<NEEDS_FLASH>>>`')
+      expect(proBody.system).toContain('Cost-aware tier switching instruction')
+      expect(proBody.system).toContain('strong tier')
+      expect(proBody.system).toContain('`<<<NEEDS_FLASH>>>`')
     })
 
     it('downgrades to flash when the pro response emits <<<NEEDS_FLASH>>> (non-stream)', async () => {
-      const flashBody = '<<<NEEDS_PRO>>>\nflash aborted'
-      const proBody = '<<<NEEDS_FLASH: trivial lookup>>>\npro aborted'
+      const flashBody = anThrowResponse('<<<NEEDS_PRO>>>\nflash aborted')
+      const proBody = anThrowResponse('<<<NEEDS_FLASH: trivial lookup>>>\npro aborted')
       const flashRetryBody = 'FLASH REUSED RESPONSE'
       queueResponse(flashBody)
       queueResponse(proBody)
@@ -491,8 +540,8 @@ describe('EscalateDispatcher', () => {
 
     it('passes the downgrade reason through to the response header', async () => {
       const reason = 'simple typo fix; pro would over-engineer this'
-      queueResponse('<<<NEEDS_PRO>>>\nrest')
-      queueResponse(`<<<NEEDS_FLASH: ${reason}>>>\nrest`)
+      queueResponse(anThrowResponse('<<<NEEDS_PRO>>>\nrest'))
+      queueResponse(anThrowResponse(`<<<NEEDS_FLASH: ${reason}>>>\nrest`))
       queueResponse('flash done')
 
       const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
@@ -502,8 +551,8 @@ describe('EscalateDispatcher', () => {
     })
 
     it('does not downgrade when the pro response is normal (no marker)', async () => {
-      queueResponse('<<<NEEDS_PRO>>>\nrest')
-      queueResponse('PRO ANSWER — no marker, no downgrade')
+      queueResponse(anThrowResponse('<<<NEEDS_PRO>>>\nrest'))
+      queueResponse(anThrowResponse('PRO ANSWER — no marker, no downgrade'))
 
       const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
       const out = await d.dispatch({ messages: [] }, false, {})
@@ -527,7 +576,13 @@ describe('EscalateDispatcher', () => {
 
     it('passes through flash response when flash does not call advisor', async () => {
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'flash direct answer' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'flash direct answer' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -537,7 +592,7 @@ describe('EscalateDispatcher', () => {
       expect(out.reason).toBe('non-stream')
       expect(out.path).toEqual(['flash'])
       const body = JSON.parse((out.body as Buffer).toString('utf-8'))
-      expect(body.choices[0].message.content).toBe('flash direct answer')
+      expect(body.content[0].text).toBe('flash direct answer')
       expect(captured).toHaveLength(1)
     })
 
@@ -549,52 +604,56 @@ describe('EscalateDispatcher', () => {
       // description.
       const clientSystemPrompt = 'You are a coding assistant. Be helpful.'
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'flash direct' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'flash direct' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
       await d.dispatch({
         messages: [
-          { role: 'system', content: clientSystemPrompt },
           { role: 'user', content: 'q' },
         ],
+        system: clientSystemPrompt,
       }, false, {})
 
       const flashBody = JSON.parse(captured[0].init.body!)
       expect(flashBody.model).toBe(FLASH)
       const tools = flashBody.tools
       expect(Array.isArray(tools)).toBe(true)
-      expect(tools.some((t: { function?: { name?: string } }) => t.function?.name === 'advisor')).toBe(true)
+      expect(tools.some((t: { name?: string }) => t.name === 'advisor')).toBe(true)
       // System prompt is the client's verbatim — no advisor fragment, no
       // self-report contract appended.
-      const sys = flashBody.messages.find((m: { role: string }) => m.role === 'system')
-      expect(sys.content).toBe(clientSystemPrompt)
-      expect(sys.content).not.toContain('[autodev-escalate-advisor]')
-      expect(sys.content).not.toContain('Tier escalation instruction')
-      expect(sys.content).not.toContain('<<<NEEDS_PRO>>>')
-      expect(sys.content).not.toContain('<<<NEEDS_FLASH>>>')
+      expect(flashBody.system).toBe(clientSystemPrompt)
+      expect(flashBody.system).not.toContain('[autodev-escalate-advisor]')
+      expect(flashBody.system).not.toContain('Tier escalation instruction')
+      expect(flashBody.system).not.toContain('<<<NEEDS_PRO>>>')
+      expect(flashBody.system).not.toContain('<<<NEEDS_FLASH>>>')
     })
 
     it('routes advisor tool call to pro and returns pro content as tool result', async () => {
+      queueResponse(anThrowToolUse('advisor', { question: 'how to refactor X?' }))
       queueResponse(JSON.stringify({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: null,
-            tool_calls: [{
-              id: 'call_abc',
-              type: 'function',
-              function: { name: 'advisor', arguments: '{"question":"how to refactor X?"}' },
-            }],
-          },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'PRO ANALYSIS: use strategy Y' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'PRO ANALYSIS: use strategy Y' }, finish_reason: 'stop' }],
-      }))
-      queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'synthesized final answer' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'synthesized final answer' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -604,7 +663,7 @@ describe('EscalateDispatcher', () => {
       expect(out.reason).toBe('advisor')
       expect(out.path).toEqual(['flash', 'pro', 'flash'])
       const body = JSON.parse((out.body as Buffer).toString('utf-8'))
-      expect(body.choices[0].message.content).toBe('synthesized final answer')
+      expect(body.content[0].text).toBe('synthesized final answer')
       expect(captured).toHaveLength(3)
 
       const proBody = JSON.parse(captured[1].init.body!)
@@ -628,35 +687,28 @@ describe('EscalateDispatcher', () => {
       // `<<<NEEDS_PRO>>>` / `<<<NEEDS_FLASH>>>` markers, so pro should not
       // see explanations of markers it will never use. If the client supplied
       // a `system` message it carries through untouched.
-      const proSystemMsgs = proMessages.filter((m: { role: string }) => m.role === 'system')
-      for (const sm of proSystemMsgs) {
-        const text = typeof sm.content === 'string' ? sm.content : ''
-        expect(text).not.toContain('Two markers are available across the system')
-        expect(text).not.toContain('<<<NEEDS_FLASH>>>')
-        expect(text).not.toContain('Cost-aware tier switching instruction')
-      }
+      expect(proBody.system).toBeUndefined()
     })
 
     it('flash retry receives the tool result message and pro sees advisor question as user msg', async () => {
+      queueResponse(anThrowToolUse('advisor', { question: 'q1' }, 'call_1'))
       queueResponse(JSON.stringify({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: null,
-            tool_calls: [{
-              id: 'call_1',
-              type: 'function',
-              function: { name: 'advisor', arguments: '{"question":"q1"}' },
-            }],
-          },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'PRO ANSWER' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'PRO ANSWER' }, finish_reason: 'stop' }],
-      }))
-      queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'final' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'final' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -665,9 +717,11 @@ describe('EscalateDispatcher', () => {
       const flashRetryBody = JSON.parse(captured[2].init.body!)
       const messages = flashRetryBody.messages
       const toolMsg = messages[messages.length - 1]
-      expect(toolMsg.role).toBe('tool')
-      expect(toolMsg.tool_call_id).toBe('call_1')
-      expect(toolMsg.content).toBe('PRO ANSWER')
+      expect(toolMsg.role).toBe('user')
+      expect(Array.isArray(toolMsg.content)).toBe(true)
+      expect(toolMsg.content[0].type).toBe('tool_result')
+      expect(toolMsg.content[0].tool_use_id).toBe('call_1')
+      expect(toolMsg.content[0].content).toBe('PRO ANSWER')
 
       // Verify pro received the advisor question as a user message
       const proBody = JSON.parse(captured[1].init.body!)
@@ -678,46 +732,62 @@ describe('EscalateDispatcher', () => {
     })
 
     it('handles multiple advisor calls sequentially via recursion', async () => {
-      // Flash returns TWO advisor tool_calls in one message.
+      // Flash returns TWO advisor tool_use blocks in one response.
       // The dispatcher only processes the FIRST call per response; the
       // second is handled when flash retries and calls advisor again.
       queueResponse(JSON.stringify({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: null,
-            tool_calls: [
-              { id: 'call_a', type: 'function', function: { name: 'advisor', arguments: '{"question":"question A"}' } },
-              { id: 'call_b', type: 'function', function: { name: 'advisor', arguments: '{"question":"question B"}' } },
-            ],
-          },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_a', name: 'advisor', input: { question: 'question A' } },
+          { type: 'tool_use', id: 'call_b', name: 'advisor', input: { question: 'question B' } },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
       // Pro responds to call_a
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'PRO ANSWER A' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'PRO ANSWER A' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
       // Flash retry — sees tool result for call_a, calls advisor for call_b
       queueResponse(JSON.stringify({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: null,
-            tool_calls: [
-              { id: 'call_b', type: 'function', function: { name: 'advisor', arguments: '{"question":"question B"}' } },
-            ],
-          },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'call_b', name: 'advisor', input: { question: 'question B' } },
+        ],
+        stop_reason: 'tool_use',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
       // Pro responds to call_b
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'PRO ANSWER B' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'PRO ANSWER B' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
       // Flash final answer
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'synthesised from A and B' }, finish_reason: 'stop' }],
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'synthesised from A and B' }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -729,46 +799,54 @@ describe('EscalateDispatcher', () => {
 
       // Verify sequential messages: each flash retry only has ONE tool result
       const retry1 = JSON.parse(captured[2].init.body!)
-      const toolMsgs1 = retry1.messages.filter((m: { role: string }) => m.role === 'tool')
+      const toolMsgs1 = retry1.messages.filter((m: { role: string }) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result')
       expect(toolMsgs1).toHaveLength(1)
-      expect(toolMsgs1[0].tool_call_id).toBe('call_a')
+      expect(toolMsgs1[0].content[0].tool_use_id).toBe('call_a')
 
       const retry2 = JSON.parse(captured[4].init.body!)
-      const toolMsgs2 = retry2.messages.filter((m: { role: string }) => m.role === 'tool')
+      const toolMsgs2 = retry2.messages.filter((m: { role: string }) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result')
       expect(toolMsgs2).toHaveLength(2)
-      expect(toolMsgs2[0].tool_call_id).toBe('call_a')
-      expect(toolMsgs2[1].tool_call_id).toBe('call_b')
+      expect(toolMsgs2[0].content[0].tool_use_id).toBe('call_a')
+      expect(toolMsgs2[1].content[0].tool_use_id).toBe('call_b')
 
       const body = JSON.parse((out.body as Buffer).toString('utf-8'))
-      expect(body.choices[0].message.content).toBe('synthesised from A and B')
+      expect(body.content[0].text).toBe('synthesised from A and B')
     })
 
     it('handles recursion — flash calls advisor twice', async () => {
       // flash → advisor → pro → flash → advisor → pro → flash
       queueResponse(JSON.stringify({
-        choices: [{
-          message: { role: 'assistant', content: null,
-            tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'advisor', arguments: '{"question":"q1"}' } }] },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_1', name: 'advisor', input: { question: 'q1' } }],
+        stop_reason: 'tool_use', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
       }))
-      queueResponse(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'PRO 1' }, finish_reason: 'stop' }] }))
       queueResponse(JSON.stringify({
-        choices: [{
-          message: { role: 'assistant', content: null,
-            tool_calls: [{ id: 'call_2', type: 'function', function: { name: 'advisor', arguments: '{"question":"q2"}' } }] },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'PRO 1' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO, usage: { input_tokens: 10, output_tokens: 5 },
       }))
-      queueResponse(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'PRO 2' }, finish_reason: 'stop' }] }))
-      queueResponse(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'DONE' }, finish_reason: 'stop' }] }))
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_2', name: 'advisor', input: { question: 'q2' } }],
+        stop_reason: 'tool_use', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'PRO 2' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO, usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'DONE' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
+      }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
       const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
 
       expect(out.path).toEqual(['flash', 'pro', 'flash', 'pro', 'flash'])
       const body = JSON.parse((out.body as Buffer).toString('utf-8'))
-      expect(body.choices[0].message.content).toBe('DONE')
+      expect(body.content[0].text).toBe('DONE')
       expect(captured).toHaveLength(5)
     })
 
@@ -783,13 +861,7 @@ describe('EscalateDispatcher', () => {
     })
 
     it('returns error when pro upstream fails on advisor call', async () => {
-      queueResponse(JSON.stringify({
-        choices: [{
-          message: { role: 'assistant', content: null,
-            tool_calls: [{ id: 'call_x', type: 'function', function: { name: 'advisor', arguments: '{"question":"q"}' } }] },
-          finish_reason: 'tool_calls',
-        }],
-      }))
+      queueResponse(anThrowToolUse('advisor', { question: 'q' }, 'call_x'))
       queueResponse('pro 502', { status: 502 })
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -804,11 +876,9 @@ describe('EscalateDispatcher', () => {
     it('passes through when flash emits tool calls but no advisor call', async () => {
       // Some other tool name — the proxy should NOT intercept.
       queueResponse(JSON.stringify({
-        choices: [{
-          message: { role: 'assistant', content: null,
-            tool_calls: [{ id: 'call_other', type: 'function', function: { name: 'some_other_tool', arguments: '{}' } }] },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_other', name: 'some_other_tool', input: {} }],
+        stop_reason: 'tool_use', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -819,24 +889,23 @@ describe('EscalateDispatcher', () => {
       expect(captured).toHaveLength(1)
     })
 
-
     it('rewrites orphaned advisor tool_calls in history as user prompts (non-stream)', async () => {
       // Client re-sends a prior turn where flash already called advisor but
       // the tool result message is missing. The proxy must NOT forward the
       // orphaned tool_call to deepseek (which would 400), instead it should
       // rewrite the orphan into a user prompt that surfaces the question.
       //
-      // Inbound messages (note: assistant tool_call WITHOUT a following tool
+      // Inbound messages (note: assistant tool_use WITHOUT a following tool
       // result — the bug scenario the user reported).
       const inboundMessages = [
         { role: 'user', content: 'this is a test of advisor' },
         {
           role: 'assistant',
-          content: null,
-          tool_calls: [{
+          content: [{
+            type: 'tool_use',
             id: 'orphan_call_1',
-            type: 'function',
-            function: { name: 'advisor', arguments: '{"question":"please confirm advisor works"}' },
+            name: 'advisor',
+            input: { question: 'please confirm advisor works' },
           }],
         },
       ]
@@ -844,7 +913,9 @@ describe('EscalateDispatcher', () => {
       // Only one upstream call expected: flash. No pro fill — we don't invent
       // a fake pro response for an unanswered tool call.
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'flash direct answer' }, finish_reason: 'stop' }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'flash direct answer' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -854,13 +925,13 @@ describe('EscalateDispatcher', () => {
       expect(out.reason).toBe('non-stream')
       expect(captured).toHaveLength(1)
 
-      // The flash request should NOT contain the orphaned assistant tool_call
+      // The flash request should NOT contain the orphaned assistant tool_use
       // — it should have been rewritten to a user message containing the
       // advisor question. This is what keeps deepseek from 400-ing.
       const flashBody = JSON.parse(captured[0].init.body!)
       const flashMessages = flashBody.messages
-      const stillHasOrphanToolCall = flashMessages.some((m: { role: string; tool_calls?: Array<{ id?: string }> }) =>
-        m.role === 'assistant' && m.tool_calls?.some((tc) => tc.id === 'orphan_call_1'),
+      const stillHasOrphanToolCall = flashMessages.some((m: { role: string; content?: Array<{ id?: string }> }) =>
+        m.role === 'assistant' && Array.isArray(m.content) && m.content.some((c) => c.id === 'orphan_call_1'),
       )
       expect(stillHasOrphanToolCall).toBe(false)
 
@@ -879,23 +950,21 @@ describe('EscalateDispatcher', () => {
         { role: 'user', content: 'q' },
         {
           role: 'assistant',
-          content: null,
-          tool_calls: [{
-            id: 'already_done',
-            type: 'function',
-            function: { name: 'advisor', arguments: '{}' },
+          content: [{
+            type: 'tool_use', id: 'already_done', name: 'advisor', input: {},
           }],
         },
         {
-          role: 'tool',
-          tool_call_id: 'already_done',
-          content: 'existing tool result',
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'already_done', content: 'existing tool result' }],
         },
       ]
 
       // Expected: only one upstream call (flash), no orphan-fill.
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'flash final' }, finish_reason: 'stop' }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'flash final' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -916,28 +985,23 @@ describe('EscalateDispatcher', () => {
     it('pro returns content normally (no advisor tool → no tool_calls loop)', async () => {
       // Step 1: flash calls advisor
       queueResponse(JSON.stringify({
-        choices: [{
-          message: {
-            role: 'assistant',
-            content: null,
-            tool_calls: [{
-              id: 'call_flash_1',
-              type: 'function',
-              function: { name: 'advisor', arguments: '{"question":"测试advisor是否正常"}' },
-            }],
-          },
-          finish_reason: 'tool_calls',
-        }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_flash_1', name: 'advisor', input: { question: '测试advisor是否正常' } }],
+        stop_reason: 'tool_use', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       // Step 2: pro returns content normally (no tools to call)
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'PRO: advisor 工具正常工作，可以放心使用。' }, finish_reason: 'stop' }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'PRO: advisor 工具正常工作，可以放心使用。' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO, usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       // Step 3: flash retry synthesises
       queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: '结合顾问分析：advisor 工具正常，可以开始你的任务。' }, finish_reason: 'stop' }],
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: '结合顾问分析：advisor 工具正常，可以开始你的任务。' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
       }))
 
       const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
@@ -946,37 +1010,20 @@ describe('EscalateDispatcher', () => {
       // Flash retry body — tool_result must contain pro's analysis
       const flashRetryBody = JSON.parse(captured[2].init.body!)
       const toolResultMsg = flashRetryBody.messages[flashRetryBody.messages.length - 1]
-      expect(toolResultMsg.role).toBe('tool')
-      expect(toolResultMsg.content).toBe('PRO: advisor 工具正常工作，可以放心使用。')
+      expect(toolResultMsg.role).toBe('user')
+      expect(Array.isArray(toolResultMsg.content)).toBe(true)
+      expect(toolResultMsg.content[0].type).toBe('tool_result')
+      expect(toolResultMsg.content[0].content).toBe('PRO: advisor 工具正常工作，可以放心使用。')
 
       // Flash synthesises pro's analysis
       const body = JSON.parse((out.body as Buffer).toString('utf-8'))
-      expect(body.choices[0].message.content).toContain('顾问分析')
+      expect(body.content[0].text).toContain('顾问分析')
 
       // Pro body MUST NOT have any tools
       const proBody = JSON.parse(captured[1].init.body!)
       expect(proBody.model).toBe(PRO)
       expect(proBody.tools).toBeUndefined()
       expect(proBody.tool_choice).toBeUndefined()
-    })
-
-    it('preserves client-provided tools on flash call (advisor is appended)', async () => {
-      queueResponse(JSON.stringify({
-        choices: [{ message: { role: 'assistant', content: 'answer' }, finish_reason: 'stop' }],
-      }))
-
-      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
-      await d.dispatch({
-        messages: [{ role: 'user', content: 'q' }],
-        tools: [{ type: 'function', function: { name: 'client_tool' } }],
-      }, false, {})
-
-      const flashBody = JSON.parse(captured[0].init.body!)
-      const tools = flashBody.tools
-      expect(tools).toHaveLength(2)
-      const names = tools.map((t: { function?: { name?: string } }) => t.function?.name)
-      expect(names).toContain('client_tool')
-      expect(names).toContain('advisor')
     })
   })
 
@@ -1010,30 +1057,36 @@ describe('EscalateDispatcher', () => {
       return acc
     }
 
-    function parseSse(sseText: string): { content: string; reasoning: string } {
+    function parseSse(sseText: string): { content: string; thinking: string } {
       let content = ''
-      let reasoning = ''
+      let thinking = ''
       for (const line of sseText.split('\n')) {
-        const trimmed = line.trim()
-        if (!trimmed.startsWith('data:')) continue
-        const payload = trimmed.slice(5).trim()
-        if (!payload || payload === '[DONE]') continue
-        try {
-          const parsed = JSON.parse(payload)
-          const delta = parsed?.choices?.[0]?.delta
-          if (typeof delta?.content === 'string') content += delta.content
-          if (typeof delta?.reasoning_content === 'string') reasoning += delta.reasoning_content
-        } catch { /* ignore */ }
+        if (line.startsWith('event: ')) {
+          // skip, we use data: lines only
+        } else if (line.startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(line.slice(6))
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              content += parsed.delta.text || ''
+            } else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'thinking_delta') {
+              thinking += parsed.delta.thinking || ''
+            }
+          } catch { /* ignore */ }
+        }
       }
-      return { content, reasoning }
+      return { content, thinking }
     }
 
     it('passes through when flash stream has no advisor tool call', async () => {
       const stream = mkSseStream([
-        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
-        'data: {"choices":[{"delta":{"reasoning_content":"flash thinking"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"flash thinking"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hello"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(stream, { headers: { 'content-type': 'text/event-stream' } })
 
@@ -1042,28 +1095,39 @@ describe('EscalateDispatcher', () => {
 
       expect(out.isStream).toBe(true)
       const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { content, reasoning } = parseSse(acc)
-      expect(reasoning).toBe('flash thinking')
+      const { content, thinking } = parseSse(acc)
+      expect(thinking).toBe('flash thinking')
       expect(content).toBe('Hello')
       expect(captured).toHaveLength(1)
     })
 
     it('intercepts advisor tool call, streams pro analysis into think panel, then pumps flash retry', async () => {
       const flashStream = mkSseStream([
-        'data: {"choices":[{"delta":{"role":"assistant"}}]}\n\n',
-        'data: {"choices":[{"delta":{"reasoning_content":"flash thinking"}}]}\n\n',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"advisor","arguments":""}}]}}]}\n\n',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"question\\":\\"q?\\"}"}}]}}]}\n\n',
-        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"flash thinking"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_x","name":"advisor","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"question\\":\\"q?\\"}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const proStream = mkSseStream([
-        'data: {"choices":[{"delta":{"reasoning_content":"pro thinking"}}]}\n\n',
-        'data: {"choices":[{"delta":{"content":"PRO ANSWER"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"pro thinking"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"PRO ANSWER"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const flashRetryStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"FINAL"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"FINAL"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
       queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
@@ -1074,42 +1138,57 @@ describe('EscalateDispatcher', () => {
 
       expect(out.isStream).toBe(true)
       const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
-      const { content, reasoning } = parseSse(acc)
+      const { content, thinking } = parseSse(acc)
 
-      // Flash reasoning forwarded.
-      expect(reasoning).toContain('flash thinking')
+      // Flash thinking forwarded.
+      expect(thinking).toContain('flash thinking')
       // Pro thinking + content are injected into the think panel.
-      expect(reasoning).toContain('pro thinking')
-      expect(reasoning).toContain('PRO ANSWER')
+      expect(thinking).toContain('pro thinking')
+      expect(thinking).toContain('PRO ANSWER')
       // Advisor begin/end separators visible.
-      expect(reasoning).toContain('consulting advisor')
-      expect(reasoning).toContain('back to flash')
-      // Final flash answer is the only content (pro's content was rewritten as reasoning).
+      expect(thinking).toContain('consulting advisor')
+      expect(thinking).toContain('back to flash')
+      // Final flash answer is the only content (pro's content was rewritten as thinking).
       expect(content).toBe('FINAL')
       expect(content).not.toContain('PRO ANSWER')
 
-      // pro 子流的 `data: [DONE]` 绝不能转发给客户端 —— 否则客户端会
+      // pro 子流的 message_stop 绝不能转发给客户端 —— 否则客户端会
       // 误以为整个 SSE 流结束，丢失后续的 advisor end + flash retry 内容。
-      // 只有 flash retry 的最终 [DONE] 应出现，且必须在最后。
+      // 只有 flash retry 的最终 message_stop 应出现，且必须在最后。
       const dataLines = acc.split('\n').map(l => l.trim()).filter(l => l.startsWith('data:'))
-      expect(dataLines.filter(l => l === 'data: [DONE]')).toHaveLength(1)
-      expect(dataLines.findIndex(l => l === 'data: [DONE]')).toBe(dataLines.length - 1)
+      const stopLines = dataLines.filter(l => {
+        try { return JSON.parse(l.slice(5)).type === 'message_stop' } catch { return false }
+      })
+      expect(stopLines).toHaveLength(1)
+      const lastStopIdx = dataLines.findLastIndex(l => {
+        try { return JSON.parse(l.slice(5)).type === 'message_stop' } catch { return false }
+      })
+      expect(lastStopIdx).toBe(dataLines.length - 1)
 
       expect(captured).toHaveLength(3)
     })
 
     it('pro call has no tools and no tool_choice', async () => {
       const flashStream = mkSseStream([
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"advisor","arguments":"{}"}}]}}]}\n\n',
-        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c1","name":"advisor","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const proStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"x"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const flashRetryStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"y"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"y"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
       queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
@@ -1140,16 +1219,25 @@ describe('EscalateDispatcher', () => {
 
     it('flash retry receives the tool result message in messages', async () => {
       const flashStream = mkSseStream([
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"advisor","arguments":"{}"}}]}}]}\n\n',
-        'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c1","name":"advisor","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const proStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"PRO CONTENT"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PRO CONTENT"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       const flashRetryStream = mkSseStream([
-        'data: {"choices":[{"delta":{"content":"final"}}]}\n\n',
-        'data: [DONE]\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"final"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
       ])
       queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
       queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
@@ -1168,9 +1256,11 @@ describe('EscalateDispatcher', () => {
       const flashRetryBody = JSON.parse(captured[2].init.body!)
       const messages = flashRetryBody.messages
       const toolMsg = messages[messages.length - 1]
-      expect(toolMsg.role).toBe('tool')
-      expect(toolMsg.tool_call_id).toBe('c1')
-      expect(toolMsg.content).toBe('PRO CONTENT')
+      expect(toolMsg.role).toBe('user')
+      expect(Array.isArray(toolMsg.content)).toBe(true)
+      expect(toolMsg.content[0].type).toBe('tool_result')
+      expect(toolMsg.content[0].tool_use_id).toBe('c1')
+      expect(toolMsg.content[0].content).toBe('PRO CONTENT')
     })
   })
 })

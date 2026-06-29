@@ -8,28 +8,17 @@
  * returns complete `\n`-terminated lines with their original byte payload
  * preserved (so re-emitting them keeps the downstream SSE stream valid).
  *
- * Design notes:
- *   - Lines are re-encoded via `Buffer.from(line + '\n', 'utf-8')`. For UTF-8
- *     input this is byte-identical to the original chunk; the only lossy
- *     transform is stripping a trailing `\r` (which SSE allows).
- *   - The `delta` field is parsed lazily and only carries the fields the
- *     dispatcher cares about: `content`, `reasoning_content`, `role`,
- *     `tool_calls`. Anything else is still forwarded via `bytes`.
+ * Anthropic SSE format:
+ *   event: content_block_delta
+ *   data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+ *   <blank line>
+ *
+ * This parser tracks both `event:` and `data:` lines and parses the data
+ * payload into an {@link AnthropicStreamEvent} when possible.
  */
 
-export interface SseDelta {
-  content?: string
-  reasoning_content?: string
-  role?: string
-  tool_calls?: unknown
-  /**
-   * Chat-completion `finish_reason` from the delta. Most providers only emit
-   * this on the final chunk; it's used by the advisor dispatcher to detect
-   * that a tool_call is complete (i.e. the assistant is waiting for the
-   * client to provide tool results).
-   */
-  finish_reason?: string
-}
+import type { AnthropicStreamEvent } from './anthropic-protocol'
+import { parseStreamEvent } from './anthropic-protocol'
 
 export interface SseLine {
   /** Raw bytes of this line INCLUDING the trailing `\n`. Safe to `enqueue()`. */
@@ -38,10 +27,12 @@ export interface SseLine {
   rawLine: string
   /** Whether this line starts with `data:`. */
   isData: boolean
-  /** Parsed delta (only for `data:` lines that look like chat-completion chunks). */
-  delta?: SseDelta
-  /** True iff this is a `data: [DONE]` line. */
-  done?: boolean
+  /** Whether this line starts with `event:`. */
+  isEvent: boolean
+  /** The event type (value after "event: "), e.g. "content_block_delta". */
+  eventType?: string
+  /** Parsed Anthropic stream event (only for `data:` lines with valid JSON). */
+  anthropicEvent?: AnthropicStreamEvent
 }
 
 export interface SseFeedResult {
@@ -82,16 +73,20 @@ export class SseLineBuffer {
         bytes: Buffer.from(rawLine + '\n', 'utf-8'),
         rawLine,
         isData: rawLine.startsWith('data:'),
+        isEvent: rawLine.startsWith('event:'),
+      }
+
+      if (line.isEvent) {
+        line.eventType = rawLine.slice(6).trim()
       }
 
       if (line.isData) {
         const payload = rawLine.slice(5).trim()
-        if (payload === '[DONE]') {
-          line.done = true
-        } else if (payload.length > 0) {
-          line.delta = parseDelta(payload)
+        if (payload.length > 0) {
+          line.anthropicEvent = parseStreamEvent(payload)
         }
       }
+
       lines.push(line)
     }
 
@@ -111,36 +106,4 @@ export class SseLineBuffer {
     this.lineBuf = ''
     this.decoder = new TextDecoder('utf-8', { fatal: false })
   }
-}
-
-function parseDelta(payload: string): SseDelta | undefined {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(payload)
-  } catch {
-    return undefined
-  }
-  if (!parsed || typeof parsed !== 'object') return undefined
-  const choices = (parsed as { choices?: unknown }).choices
-  if (!Array.isArray(choices) || choices.length === 0) return undefined
-  const c0 = choices[0] as Record<string, unknown> | undefined
-  if (!c0) return undefined
-  const delta = (c0['delta'] ?? c0['message']) as Record<string, unknown> | undefined
-  if (!delta || typeof delta !== 'object') return undefined
-
-  const out: SseDelta = {}
-  if (typeof delta['content'] === 'string') out.content = delta['content']
-  if (typeof delta['reasoning_content'] === 'string') out.reasoning_content = delta['reasoning_content']
-  if (typeof delta['role'] === 'string') out.role = delta['role']
-  if (delta['tool_calls'] !== undefined) out.tool_calls = delta['tool_calls']
-  // `finish_reason` lives on the choice object itself (`choices[0].finish_reason`),
-  // not inside the delta. Providers like DeepSeek emit it on the final chunk of
-  // a tool-call turn so the client can detect "the assistant is now waiting
-  // for tool results". Read it from `c0` (the choice) rather than `delta`.
-  if (typeof c0['finish_reason'] === 'string') out.finish_reason = c0['finish_reason']
-
-  if (!out.content && !out.reasoning_content && !out.role && out.tool_calls === undefined && !out.finish_reason) {
-    return undefined
-  }
-  return out
 }

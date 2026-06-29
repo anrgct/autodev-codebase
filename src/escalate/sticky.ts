@@ -28,7 +28,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import type { ChatCompletionMessage } from './contract'
+import type { AnthropicMessage } from './contract'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,13 +55,15 @@ const DEFAULT_CONTENT_CHARS = 200
  * Only `role` and the first ~200 chars of each `content` string are used;
  * tool/function payloads are ignored for fingerprint stability.
  */
-function fingerprintMessages(msgs: ChatCompletionMessage[]): string {
+function fingerprintMessages(msgs: AnthropicMessage[]): string {
   const simplified = msgs.map((m) => ({
     role: m.role,
     content:
       typeof m.content === 'string'
         ? m.content.slice(0, DEFAULT_CONTENT_CHARS)
-        : '',
+        : (Array.isArray(m.content) && m.content.length > 0 && m.content[0].type === 'text'
+            ? (m.content[0].text ?? '').slice(0, DEFAULT_CONTENT_CHARS)
+            : ''),
   }))
   const json = JSON.stringify(simplified)
   return createHash('sha256').update(json).digest('hex').slice(0, 16)
@@ -86,7 +88,7 @@ export class StickyStore {
    * Walk the messages from longest prefix to shortest.
    * Return `'pro'` if any prefix matches an unexpired entry.
    */
-  lookup(messages: ChatCompletionMessage[]): 'pro' | null {
+  lookup(messages: AnthropicMessage[]): 'pro' | null {
     const now = Date.now()
     // Walk from longest prefix (messages - 1) down to length 1.
     for (let i = messages.length - 1; i >= 1; i--) {
@@ -109,7 +111,7 @@ export class StickyStore {
    * The prefix is everything EXCEPT the last message (the most recent user
    * turn that triggered the escalation).
    */
-  storeUpgrade(messages: ChatCompletionMessage[]): void {
+  storeUpgrade(messages: AnthropicMessage[]): void {
     // Need at least 2 messages (e.g. system + user) to form a prefix of length >= 1.
     if (messages.length < 2) return
     const prefix = messages.slice(0, -1)
@@ -126,7 +128,7 @@ export class StickyStore {
    * Remove all prefix entries for a given message history.
    * Called when the pro model downgrades itself.
    */
-  clear(messages: ChatCompletionMessage[]): void {
+  clear(messages: AnthropicMessage[]): void {
     for (let i = messages.length - 1; i >= 1; i--) {
       const key = fingerprintMessages(messages.slice(0, i))
       this.store.delete(key)

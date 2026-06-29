@@ -4,8 +4,8 @@
  *
  * The contract is the same one Reasonix uses (see DeepSeek-Reasonix
  * `src/prompt-fragments.ts`); only the *injection point* is different —
- * here it is injected by the proxy into the `system` field of every
- * outbound chat-completion request, on a per-model basis.
+ * here it is injected by the proxy into the top-level `system` field of the
+ * Anthropic Messages API request body, on a per-model basis.
  *
  * Two directions are supported:
  *   - **flash → pro**: flash model emits `<<<NEEDS_PRO>>>` to escalate.
@@ -17,13 +17,18 @@
  * first-chunk peek buffer.
  *
  * Each contract includes a unique sentinel `[autodev-escalate-contract]`
- * used for idempotency: if the system message already contains it, the
+ * used for idempotency: if the `system` field already contains it, the
  * injector returns the body unchanged.
  *
  * This file also defines the **advisor** tool injection — a different
  * escalation strategy where the model calls a virtual `advisor` function
  * tool and the proxy routes the call to the pro model. See
  * `injectAdvisorTool()` below for details.
+ *
+ * NOTE: This file now uses Anthropic Messages API format exclusively.
+ * Types formerly shared as ChatCompletionMessage/ChatCompletionRequestBody
+ * have been replaced by AnthropicMessage/Anthropic types from the protocol
+ * layer. The sticky module imports AnthropicMessage from here.
  */
 
 /** Unique sentinel marking that the system message already carries a contract. */
@@ -154,129 +159,58 @@ export const ADVISOR_TOOL_NAME = 'advisor'
  *  the tool's description. */
 export const ADVISOR_TOOL_SENTINEL = '[autodev-escalate-advisor]'
 
-/** Shape of the `advisor` tool as it appears in the OpenAI `tools` array.
- *  The description carries the full "when/how/when-not" guidance so the model
- *  can learn the tool's usage from the schema alone — no separate system-prompt
- *  fragment is needed. This keeps the system prompt untouched (just whatever
- *  the client supplied) and avoids polluting it with proxy internals. */
-export const advisorToolDefinition = {
-  type: 'function',
-  function: {
-    name: ADVISOR_TOOL_NAME,
-    description:
-      `When to call ${ADVISOR_TOOL_NAME}: (1) the user's request is ambiguous ` +
-      `or could be interpreted in multiple conflicting ways; (2) the task ` +
-      `involves choosing between several approaches with non-trivial trade-offs ` +
-      `(architectural choices, API design, data model decisions); (3) a tool ` +
-      `you called returned an unexpected error, empty result, or clearly wrong ` +
-      `output and you're not sure how to recover; (4) you've made 2+ attempts ` +
-      `at the same sub-problem without making progress; (5) cross-file ` +
-      `refactors with subtle dependencies, concurrency or security invariants, ` +
-      `correctness proofs, or design trade-offs you'd be guessing at. ` +
-      `How to call: pass a \`question\` string that is specific and includes ` +
-      `the relevant context — pro sees the full conversation, so just highlight ` +
-      `what you want pro to weigh in on. After pro's analysis comes back as a ` +
-      `tool message, integrate it into your final answer; the user does NOT see ` +
-      `the tool call or pro's raw response — only your synthesized answer. ` +
-      `You may call ${ADVISOR_TOOL_NAME} multiple times per turn for ` +
-      `independent questions. ` +
-      `Do NOT call ${ADVISOR_TOOL_NAME} for trivial lookups, single-line edits, ` +
-      `typo fixes, or when you already know the answer with high confidence.`,
-    parameters: {
-      type: 'object',
-      properties: {
-        question: {
-          type: 'string',
-          description: 'The specific question for the pro advisor. Include the relevant context; pro sees the full conversation but you should still surface what you want pro to weigh in on.',
-        },
+/**
+ * Re-export Anthropic types so the sticky module and dispatcher can import
+ * them from a single location (`./contract`) without changing their imports.
+ * The actual definitions live in `./anthropic-protocol`.
+ */
+export type {
+  AnthropicMessage,
+  AnthropicClientRequestBody,
+  AnthropicTool,
+  AnthropicToolChoice,
+  AnthropicContentBlock,
+} from './anthropic-protocol'
+import type { AnthropicMessage, AnthropicTool, AnthropicToolChoice } from './anthropic-protocol'
+
+/**
+ * The advisor tool definition — in Anthropic Messages API format.
+ *
+ * The description carries the full "when/how/when-not" guidance so the model
+ * can learn the tool's usage from the schema alone — no separate system-prompt
+ * fragment is needed. This keeps the `system` field untouched (just whatever
+ * the client supplied) and avoids polluting it with proxy internals.
+ */
+export const advisorToolDefinition: AnthropicTool = {
+  name: ADVISOR_TOOL_NAME,
+  description:
+    `[${ADVISOR_TOOL_NAME}] Consult a stronger (pro) model for a second opinion. ` +
+    `The user sees only your final synthesized answer — not the tool call or pro's raw reply.\n\n` +
+    `WHEN to call: (1) ambiguous / multi-interpretation request; ` +
+    `(2) choosing among approaches with non-trivial trade-offs (architecture, API design, data model); ` +
+    `(3) a tool returned an unexpected error / empty / clearly-wrong result and recovery is unclear; ` +
+    `(4) 2+ failed attempts at the same sub-problem; ` +
+    `(5) cross-file refactors, concurrency/security invariants, or correctness reasoning you'd be guessing at.\n\n` +
+    `WHEN NOT: trivial lookups, single-line edits, typo fixes, or anything you already know with high confidence.\n\n` +
+    `HOW: call the tool DIRECTLY without preamble or transitional phrases (don't say "let me consult…" first). ` +
+    `Pass a specific \`question\` highlighting what you want weighed in on — pro sees the full conversation. ` +
+    `Synthesize pro's analysis into your answer; you may call ${ADVISOR_TOOL_NAME} multiple times per turn for independent questions.`,
+  input_schema: {
+    type: 'object',
+    properties: {
+      question: {
+        type: 'string',
+        description: 'The specific question for the pro advisor. Include the relevant context; pro sees the full conversation but you should still surface what you want pro to weigh in on.',
       },
-      required: ['question'],
     },
+    required: ['question'],
   },
 }
 
-/**
- * System prompt fragment that teaches the flash model when and how to use the
- * `advisor` tool. Inserted once per request; subsequent injections are skipped
- * via the sentinel so retries that carry `messages` forward from earlier turns
- * do not re-append the fragment.
- */
-export function advisorSystemPromptFragment(): string {
-  return [
-    `${ADVISOR_TOOL_SENTINEL} Advisor tool instruction (you are running on the fast/cheap tier):`,
-    ``,
-    `You have access to a virtual \`${ADVISOR_TOOL_NAME}\` tool that consults a stronger model (\`pro\`).`,
-    `When you call this tool, the proxy intercepts the call, forwards your question to pro,`,
-    `and returns pro's analysis to you as a \`tool\` message. You then synthesize the final answer`,
-    `for the user.`,
-    ``,
-    `### When to call ${ADVISOR_TOOL_NAME}:`,
-    ``,
-    `1. **AMBIGUOUS / UNCLEAR requirements** — The user's request is vague, underspecified, or`,
-    `   could be interpreted in multiple conflicting ways.`,
-    `2. **MULTIPLE OPTIONS / decision needed** — The task involves choosing between several`,
-    `   approaches with non-trivial trade-offs (architectural choices, API design patterns,`,
-    `   data model decisions).`,
-    `3. **TOOL CALL FAILURE** — You called a tool and it returned an unexpected error, empty`,
-    `   result, or clearly wrong output, and you're not sure how to recover.`,
-    `4. **STUCK / spinning** — You've made 2+ attempts at the same sub-problem without`,
-    `   making progress.`,
-    `5. **COMPLEX reasoning** — Cross-file refactors with subtle dependencies, concurrency or`,
-    `   security invariants, correctness proofs, design trade-offs you'd be guessing at.`,
-    ``,
-    `### How to call ${ADVISOR_TOOL_NAME}:`,
-    ``,
-    `- Call the tool with a \`question\` parameter that is specific and includes relevant context.`,
-    `- Keep the question focused — pro will see the full conversation, so you don't need to`,
-    `  restate everything; highlight what you want pro to weigh in on.`,
-    `- After receiving pro's analysis, integrate it into your final answer. The user does NOT`,
-    `  see the tool call or pro's raw response — only your synthesized answer.`,
-    `- You may call ${ADVISOR_TOOL_NAME} multiple times in one turn if you have multiple`,
-    `  independent questions for pro.`,
-    ``,
-    `### When NOT to call ${ADVISOR_TOOL_NAME}:`,
-    ``,
-    `- Trivial lookups, single-line edits, typo fixes — handle directly.`,
-    `- When you already know the answer with high confidence.`,
-  ].join('\n')
-}
+
 
 /**
- * OpenAI chat-completion request body (just the bits we touch).
- * Kept structural-typing to avoid pulling in OpenAI SDK types.
- */
-export interface ChatCompletionMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool' | 'function'
-  content: string | null | Array<{ type: string; [k: string]: unknown }>
-  name?: string
-  /**
-   * Tool calls attached to an assistant message. Present when the model emitted
-   * one or more `function` tool calls; used by the advisor dispatcher to detect
-   * `advisor` calls and replay them as `tool` messages on the next flash turn.
-   */
-  tool_calls?: Array<{
-    id?: string
-    type?: 'function'
-    function?: { name?: string; arguments?: string }
-  }>
-  /** Required for `role: 'tool'` messages; references the originating `tool_calls[i].id`. */
-  tool_call_id?: string
-  [k: string]: unknown
-}
-
-export interface ChatCompletionRequestBody {
-  model?: string
-  messages?: ChatCompletionMessage[]
-  stream?: boolean
-  /** OpenAI `tools` array; the advisor injection appends to this list. */
-  tools?: Array<Record<string, unknown>>
-  /** OpenAI `tool_choice`; the advisor dispatcher removes this when calling pro. */
-  tool_choice?: unknown
-  [k: string]: unknown
-}
-
-/**
- * Inject the tier contract into the request's `system` message.
+ * Inject the tier contract into the request's top-level `system` field.
  *
  * The first parameter identifies the model this request is targeting
  * (which determines the contract text). The second parameter is the
@@ -285,67 +219,57 @@ export interface ChatCompletionRequestBody {
  * to flash" notes.
  *
  * Strategy:
- *   1. If a system message already contains the contract sentinel, return
+ *   1. If the `system` field already contains the contract sentinel, return
  *      the body unchanged (idempotency).
- *   2. Otherwise, append the contract to an existing system message, or
- *      prepend a new one if no system message exists.
+ *   2. Otherwise, append the contract to an existing `system` string, or
+ *      set `system` to the contract if none exists.
  *   3. Force the `model` field to the target model so the contract is
  *      consistent with the request.
  *
  * The function is pure — it returns a new body, never mutating the input.
+ *
+ * The body type is generic with structural typing so callers can pass
+ * either `AnthropicClientRequestBody` or `ResolvedUpstreamBody`.
  */
-export function injectContract<T extends ChatCompletionRequestBody>(
+export function injectContract<T extends { system?: string | unknown; model?: string; [k: string]: unknown }>(
   body: T,
   targetModelId: string,
   proModelId: string
 ): T {
   const contract = escalationContract(targetModelId, proModelId)
-  const messages = body.messages ?? []
-  // Idempotency: don't double-inject if a contract is already present.
-  if (messages.some((m) => m.role === 'system' && typeof m.content === 'string' && m.content.includes(CONTRACT_SENTINEL))) {
+  // Idempotency: don't double-inject if the system field already has the sentinel.
+  if (typeof body.system === 'string' && body.system.includes(CONTRACT_SENTINEL)) {
     return body
   }
 
-  const sysIdx = messages.findIndex((m) => m.role === 'system')
-  let nextMessages: ChatCompletionMessage[]
-  if (sysIdx === -1) {
-    nextMessages = [{ role: 'system', content: contract }, ...messages]
-  } else {
-    const existing = messages[sysIdx]
-    const existingContent = typeof existing.content === 'string' ? existing.content : ''
-    nextMessages = messages.slice()
-    nextMessages[sysIdx] = {
-      ...existing,
-      content: existingContent ? `${existingContent}\n\n${contract}` : contract
-    }
-  }
+  const existingSystem = typeof body.system === 'string' ? body.system : ''
+  const newSystem = existingSystem
+    ? `${existingSystem}\n\n${contract}`
+    : contract
 
-  return { ...body, messages: nextMessages, model: targetModelId }
+  return { ...body, system: newSystem, model: targetModelId }
 }
 
 /**
  * Inject the advisor wiring into the request body:
  *   - Append the `advisor` tool definition to `body.tools` (idempotent — skipped
- *     if a tool with the same `name` is already present).
+ *     if a tool with the `name` field matching `advisor` is already present).
  *
- * The function does NOT modify the system prompt: the advisor tool's
+ * The function does NOT modify the `system` field: the advisor tool's
  * description (see `advisorToolDefinition`) carries the full usage guidance
- * and the model can learn the tool from the schema alone. This keeps the
- * client's system message untouched.
+ * and the model can learn the tool from the schema alone.
  */
-export function injectAdvisorTool<T extends ChatCompletionRequestBody>(body: T): T {
+export function injectAdvisorTool<T extends { tools?: unknown[]; [k: string]: unknown }>(body: T): T {
   const existingTools = Array.isArray(body.tools) ? body.tools : []
   const toolAlreadyPresent = existingTools.some((t) => {
     if (!t || typeof t !== 'object') return false
-    const fn = (t as { function?: { name?: unknown } }).function
-    return fn?.name === ADVISOR_TOOL_NAME
+    return (t as Record<string, unknown>)['name'] === ADVISOR_TOOL_NAME
   })
 
   if (toolAlreadyPresent) {
-    // Nothing to change.
     return body
   }
 
-  const nextTools: Array<Record<string, unknown>> = [...existingTools, advisorToolDefinition]
+  const nextTools = [...existingTools, advisorToolDefinition]
   return { ...body, tools: nextTools }
 }

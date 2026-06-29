@@ -1,7 +1,7 @@
 /**
  * Unit tests for SseLineBuffer — the incremental SSE line parser used by
  * the streaming peek loop. Focus on line-boundary handling across chunks
- * and byte fidelity of re-emitted lines.
+ * and byte fidelity of re-emitted lines, now using Anthropic SSE format.
  */
 import { describe, it, expect } from 'vitest'
 import { SseLineBuffer } from '../sse-buffer'
@@ -22,83 +22,103 @@ describe('SseLineBuffer', () => {
     expect(leftover).toBeNull()
   })
 
-  it('parses delta.content from a chat-completion data line', () => {
+  it('parses event: lines', () => {
     const buf = new SseLineBuffer()
-    const { lines } = buf.feed(enc('data: {"choices":[{"delta":{"content":"hi"}}]}\n'))
+    const { lines } = buf.feed(enc('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n'))
+    expect(lines).toHaveLength(3)
+    expect(lines[0].isEvent).toBe(true)
+    expect(lines[0].eventType).toBe('content_block_delta')
+    expect(lines[1].isData).toBe(true)
+    expect(lines[1].anthropicEvent).toBeDefined()
+    expect(lines[1].anthropicEvent!.type).toBe('content_block_delta')
+  })
+
+  it('parses text_delta events', () => {
+    const buf = new SseLineBuffer()
+    const { lines } = buf.feed(enc('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n'))
     expect(lines).toHaveLength(1)
-    expect(lines[0].delta?.content).toBe('hi')
-    expect(lines[0].delta?.reasoning_content).toBeUndefined()
+    const ev = lines[0].anthropicEvent
+    expect(ev).toBeDefined()
+    if (ev?.type === 'content_block_delta') {
+      expect(ev.delta.type).toBe('text_delta')
+      expect(ev.delta.text).toBe('hi')
+    }
   })
 
-  it('parses delta.reasoning_content (think blocks)', () => {
+  it('parses thinking_delta events', () => {
     const buf = new SseLineBuffer()
-    const { lines } = buf.feed(enc('data: {"choices":[{"delta":{"reasoning_content":"thinking..."}}]}\n'))
-    expect(lines[0].delta?.reasoning_content).toBe('thinking...')
-    expect(lines[0].delta?.content).toBeUndefined()
+    const { lines } = buf.feed(enc('data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"thinking..."}}\n'))
+    expect(lines).toHaveLength(1)
+    const ev = lines[0].anthropicEvent
+    expect(ev).toBeDefined()
+    if (ev?.type === 'content_block_delta') {
+      expect(ev.delta.type).toBe('thinking_delta')
+      expect(ev.delta.thinking).toBe('thinking...')
+    }
   })
 
-  it('parses delta.role (first chunk of a stream)', () => {
+  it('parses message_start events', () => {
     const buf = new SseLineBuffer()
-    const { lines } = buf.feed(enc('data: {"choices":[{"delta":{"role":"assistant"}}]}\n'))
-    expect(lines[0].delta?.role).toBe('assistant')
-    // No content / reasoning — delta is still returned because role is set.
-    expect(lines[0].delta?.content).toBeUndefined()
+    const { lines } = buf.feed(enc('data: {"type":"message_start","message":{"role":"assistant","content":[]}}\n'))
+    expect(lines).toHaveLength(1)
+    const ev = lines[0].anthropicEvent
+    expect(ev).toBeDefined()
+    if (ev?.type === 'message_start') {
+      expect(ev.message.role).toBe('assistant')
+    }
   })
 
-  it('flags data: [DONE] lines', () => {
+  it('parses message_stop events (Anthropic stream end, no [DONE])', () => {
     const buf = new SseLineBuffer()
-    const { lines } = buf.feed(enc('data: [DONE]\n'))
-    expect(lines[0].done).toBe(true)
-    expect(lines[0].delta).toBeUndefined()
+    const { lines } = buf.feed(enc('data: {"type":"message_stop"}\n'))
+    expect(lines[0].anthropicEvent).toBeDefined()
+    expect(lines[0].anthropicEvent!.type).toBe('message_stop')
   })
 
-  it('returns no delta for non-JSON data lines', () => {
+  it('returns undefined anthropicEvent for non-JSON data lines', () => {
     const buf = new SseLineBuffer()
     const { lines } = buf.feed(enc('data: not-json\n'))
-    expect(lines[0].delta).toBeUndefined()
-    expect(lines[0].done).toBeUndefined()
+    expect(lines[0].anthropicEvent).toBeUndefined()
   })
 
   it('combines partial lines across multiple chunks', () => {
     const buf = new SseLineBuffer()
-    const r1 = buf.feed(enc('data: {"choices":['))
+    const r1 = buf.feed(enc('data: {"type":"content_block_delta","ind'))
     expect(r1.lines).toHaveLength(0)
     expect(r1.leftover).not.toBeNull()
 
-    const r2 = buf.feed(enc('{"delta":{"content":"x"}}]}\n'))
+    const r2 = buf.feed(enc('ex":0,"delta":{"type":"text_delta","text":"x"}}\n'))
     expect(r2.lines).toHaveLength(1)
-    expect(r2.lines[0].delta?.content).toBe('x')
+    const ev = r2.lines[0].anthropicEvent
+    expect(ev).toBeDefined()
+    if (ev?.type === 'content_block_delta') {
+      expect(ev.delta.type).toBe('text_delta')
+      expect(ev.delta.text).toBe('x')
+    }
     expect(r2.leftover).toBeNull()
   })
 
   it('exposes leftover bytes when switching to passthrough mode', () => {
-    // Simulate the dispatcher's "no-marker" branch: a chunk that ends with
-    // a partial line. The leftover must be flushable so the downstream sees
-    // a continuous byte stream.
     const buf = new SseLineBuffer()
     const r1 = buf.feed(enc('data: complete\ndata: parti'))
     expect(r1.lines).toHaveLength(1)
     expect(r1.lines[0].rawLine).toBe('data: complete')
-    // The partial line is exposed as leftover bytes.
     expect(r1.leftover).not.toBeNull()
     expect(new TextDecoder().decode(r1.leftover!)).toBe('data: parti')
   })
 
   it('preserves byte fidelity of re-emitted lines', () => {
     const buf = new SseLineBuffer()
-    const original = 'data: {"choices":[{"delta":{"content":"héllo"}}]}\n'
+    const original = 'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"héllo"}}\n'
     const { lines } = buf.feed(enc(original))
-    // Re-emitted bytes must round-trip to the same UTF-8 string.
     const roundtrip = new TextDecoder().decode(lines[0].bytes)
     expect(roundtrip).toBe(original)
   })
 
   it('handles UTF-8 multi-byte characters split across chunks', () => {
-    // 'é' is 0xC3 0xA9 in UTF-8. Split between the two bytes.
     const buf = new SseLineBuffer()
-    // 'data: x' + first byte of é, then second byte + '\n'
     const fullBytes = enc('data: xé\n')
-    const mid = 8 // split point inside the multi-byte char (0xC3 at index 8)
+    const mid = 8
     const r1 = buf.feed(fullBytes.slice(0, mid))
     expect(r1.lines).toHaveLength(0)
     const r2 = buf.feed(fullBytes.slice(mid))
@@ -110,7 +130,6 @@ describe('SseLineBuffer', () => {
     const buf = new SseLineBuffer()
     const { lines } = buf.feed(enc('data: hello\r\n'))
     expect(lines[0].rawLine).toBe('data: hello')
-    // The re-emitted bytes use \n only (CRLF is normalized).
     expect(new TextDecoder().decode(lines[0].bytes)).toBe('data: hello\n')
   })
 

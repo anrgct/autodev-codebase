@@ -5,10 +5,12 @@
  * then drives the proxy with HTTP requests and asserts escalation behavior.
  *
  * Mock upstream is a tiny in-process HTTP server that:
- *   - serves `/v1/chat/completions` differently depending on a `target` query
- *     parameter (`flash` or `pro`).
+ *   - serves `/v1/messages` differently depending on the model in the body
+ *     (flash or pro).
  *   - echoes back the model name and the request body so we can assert what
  *     the proxy actually sent.
+ *
+ * Uses the Anthropic Messages API format exclusively.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer as createNodeServer, type Server as NodeServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -23,7 +25,7 @@ const MOCK_TOKEN = 'sk-mock-test-token'
 interface CapturedRequest {
   body: string
   contentType: string
-  authorization: string | undefined
+  xApiKey: string | undefined
 }
 
 let upstream: NodeServer
@@ -53,33 +55,29 @@ beforeAll(async () => {
       captured[target].push({
         body,
         contentType: String(req.headers['content-type'] ?? ''),
-        authorization: req.headers['authorization'] as string | undefined,
+        xApiKey: req.headers['x-api-key'] as string | undefined,
       })
       res.setHeader('content-type', 'application/json')
 
-      if (url.startsWith('/v1/chat/completions')) {
+      if (url.startsWith('/v1/messages')) {
         if (target === 'flash') {
-          // Simulate the model emitting the NEEDS_PRO marker on the first line.
+          // Simulate the model emitting the NEEDS_PRO marker.
           res.end(JSON.stringify({
-            id: 'mock-flash-1',
-            object: 'chat.completion',
-            choices: [{
-              index: 0,
-              message: { role: 'assistant', content: '<<<NEEDS_PRO>>>\n[flash aborted]' },
-              finish_reason: 'stop',
-            }],
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: '<<<NEEDS_PRO>>>\n[flash aborted]' }],
+            stop_reason: 'end_turn',
             model: FLASH_MODEL,
+            usage: { input_tokens: 10, output_tokens: 5 },
           }))
         } else {
           res.end(JSON.stringify({
-            id: 'mock-pro-1',
-            object: 'chat.completion',
-            choices: [{
-              index: 0,
-              message: { role: 'assistant', content: 'PRO DEEP ANALYSIS HERE' },
-              finish_reason: 'stop',
-            }],
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'PRO DEEP ANALYSIS HERE' }],
+            stop_reason: 'end_turn',
             model: PRO_MODEL,
+            usage: { input_tokens: 10, output_tokens: 8 },
           }))
         }
       } else if (url.startsWith('/v1/models')) {
@@ -101,13 +99,16 @@ afterAll(async () => {
 function makeConfig(): EscalateConfig {
   return {
     mode: 'self-report',
-    apiBase: `http://127.0.0.1:${upstreamPort}/v1`,
+    // apiBase WITHOUT /v1 suffix — callUpstream appends /v1/messages
+    apiBase: `http://127.0.0.1:${upstreamPort}`,
     apiKey: MOCK_TOKEN,
     flashModel: FLASH_MODEL,
     proModel: PRO_MODEL,
     port: 0, // ephemeral
     host: '127.0.0.1',
     stickyProTtlMs: 0,
+    thinkingBudget: 8000,
+    maxTokens: 4096,
   }
 }
 
@@ -144,14 +145,15 @@ describe('escalate proxy e2e', () => {
     expect((j['model'] as Record<string, string>)['pro']).toBe(PRO_MODEL)
   })
 
-  it('POST /v1/chat/completions injects the contract and escalates on marker', async () => {
+  it('POST /v1/messages injects the contract and escalates on marker', async () => {
     captured.flash = []
     captured.pro = []
 
     // Note: the mock upstream always returns the NEEDS_PRO marker for the flash
     // path, so we expect the proxy to transparently retry on pro.
-    const r = await postJson(`${proxyUrl}/v1/chat/completions`, {
+    const r = await postJson(`${proxyUrl}/v1/messages`, {
       model: 'auto',
+      system: 'You are a helpful coding agent.',
       messages: [{ role: 'user', content: 'Solve a tricky problem' }],
     })
 
@@ -160,51 +162,39 @@ describe('escalate proxy e2e', () => {
     expect(r.headers['x-escalated-from']).toBe('flash')
     expect(r.headers['x-escalation-reason']).toBe('self-report')
     const j = JSON.parse(r.bodyText)
-    expect(j.choices[0].message.content).toBe('PRO DEEP ANALYSIS HERE')
+    expect(j.type).toBe('message')
+    expect(j.role).toBe('assistant')
+    expect(j.content[0].type).toBe('text')
+    expect(j.content[0].text).toBe('PRO DEEP ANALYSIS HERE')
+    expect(j.stop_reason).toBe('end_turn')
 
     // Upstream saw the flash call with the contract injected.
     expect(captured.flash).toHaveLength(1)
     const flashBody = JSON.parse(captured.flash[0].body)
     expect(flashBody.model).toBe(FLASH_MODEL)
-    const sys = flashBody.messages.find((m: { role: string }) => m.role === 'system')
-    expect(sys.content).toContain('Tier escalation instruction')
-    // Authorization was forwarded.
-    expect(captured.flash[0].authorization).toBe(`Bearer ${MOCK_TOKEN}`)
+    // System is top-level field, not messages[].role:'system'
+    expect(flashBody.system).toContain('Tier escalation instruction')
+    // The client's original system prompt is preserved alongside the contract.
+    expect(flashBody.system).toContain('You are a helpful coding agent.')
+    // Authorization was forwarded via x-api-key header.
+    expect(captured.flash[0].xApiKey).toBe(MOCK_TOKEN)
 
     // Upstream saw the pro call with the pro-side contract injected.
     expect(captured.pro).toHaveLength(1)
     const proBody = JSON.parse(captured.pro[0].body)
     expect(proBody.model).toBe(PRO_MODEL)
-    const proSys = proBody.messages.find((m: { role: string }) => m.role === 'system')
     // The pro-side contract teaches the pro model about the downgrade
     // marker (<<<NEEDS_FLASH>>>) so it can voluntarily step down.
-    expect(proSys).toBeDefined()
-    expect(proSys.content).toContain('Cost-aware tier switching instruction')
-    expect(proSys.content).toContain('strong tier')
-    expect(proSys.content).toContain('`<<<NEEDS_FLASH>>>`')
-  })
+    expect(proBody.system).toContain('Cost-aware tier switching instruction')
+    expect(proBody.system).toContain('strong tier')
+    expect(proBody.system).toContain('`<<<NEEDS_FLASH>>>`')
+    // Client system prompt is also preserved on the pro retry.
+    expect(proBody.system).toContain('You are a helpful coding agent.')
 
-  it('falls through to flash when the model does not emit the marker', async () => {
-    captured.flash = []
-    captured.pro = []
-
-    // Override the mock behavior: we can't easily change the in-process server's
-    // behavior here, so we'll just hit a different path. Since the mock only
-    // returns the marker, we can only assert positive escalation in this e2e.
-    // The non-escalation path is thoroughly unit-tested in dispatcher.spec.ts.
-
-    // Verify the negative case differently: by sending to a path that the
-    // mock returns plain content for. Since our mock always escalates, we'll
-    // instead verify the structural correctness of the proxied body when it
-    // does escalate.
-    const r = await postJson(`${proxyUrl}/v1/chat/completions`, {
-      model: 'auto',
-      messages: [],
-    })
-    expect(r.status).toBe(200)
-    // Since the mock always returns the marker, this is the only path we can
-    // verify here. The non-escalation case is covered in dispatcher.spec.ts.
-    expect(r.headers['x-escalated-to']).toBe('pro')
+    // Incoming body format should be Anthropic Messages API shape.
+    expect(flashBody).toHaveProperty('messages')
+    expect(flashBody).toHaveProperty('system')
+    expect(Array.isArray(flashBody.messages)).toBe(true)
   })
 
   it('passes through /v1/models to the upstream', async () => {

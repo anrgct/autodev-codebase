@@ -196,14 +196,17 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
   highlighterConcurrency: { type: 'integer', minValue: 1, description: 'Maximum concurrent highlight requests (llamacpp-llm provider)' },
 
   // Escalate proxy
-  escalateMode: { type: 'enum', enumValues: ['self-report', 'advisor'] as const, description: 'Escalation mode: "self-report" (inject contract, model emits <<<NEEDS_PRO>>> marker) or "advisor" (virtual advisor tool — flash calls it, proxy routes to pro)' },
-  escalateApiBase: { type: 'string', description: 'API base URL for the upstream LLM (default: https://api.deepseek.com/v1)' },
+  escalateMode: { type: 'enum', enumValues: ['self-report', 'advisor'] as const, description: 'Escalation mode: "self-report" (inject contract, model emits <<<NEEDS_PRO>>> marker) or "advisor" (virtual advisor tool — flash calls it, proxy routes to pro). Default: advisor' },
+  escalateApiBase: { type: 'string', description: 'API base URL for the upstream Anthropic-compatible LLM (default: https://api.deepseek.com/anthropic)' },
   escalateApiKey: { type: 'string', description: 'API key for upstream LLM (optional — if not set, client Authorization header is forwarded)' },
   escalateFlashModel: { type: 'string', description: 'Flash (cheap) model ID used for first attempt (default: deepseek-v4-flash)' },
   escalateProModel: { type: 'string', description: 'Pro (strong) model ID used after <<<NEEDS_PRO>>> escalation (default: deepseek-v4-pro)' },
   escalatePort: { type: 'integer', minValue: 1, maxValue: 65535, description: 'Local proxy server listening port (default: 8080)' },
   escalateHost: { type: 'string', description: 'Local proxy server listening host (default: localhost)' },
   escalateStickyProTtlMs: { type: 'integer', minValue: 0, description: 'Sticky pro TTL in milliseconds (default: 300000 = 5 min). Set 0 to disable.' },
+
+  escalateThinkingBudget: { type: 'integer', minValue: 0, description: 'Anthropic thinking budget tokens (default: 8000). Used when client does not provide thinking.' },
+  escalateMaxTokens: { type: 'integer', minValue: 1, description: 'Default max_tokens for Anthropic Messages API (default: 4096). Used when client does not provide max_tokens.' },
 
   // QRRanker shared tuning: average attention over N decode steps.
   // 0 = default (prefill-only, no decode cost). 20+ = prefill + N decode.

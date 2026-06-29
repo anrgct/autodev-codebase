@@ -9,7 +9,7 @@
  *      `<<<NEEDS_PRO>>>` (flash → pro escalation) or `<<<NEEDS_FLASH>>>`
  *      (pro → flash downgrade) marker, and switch tiers accordingly.
  *   3. For stream responses: read a tiny peek buffer (up to PEEK_MAX_CHARS
- *      of accumulated SSE delta content), look for the marker, and:
+ *      of accumulated SSE text_delta content), look for the marker, and:
  *        - on match: cancel the current stream, retry against the other
  *          tier, return its stream
  *        - on no match: passthrough the buffered chunk and pipe the rest
@@ -24,6 +24,9 @@
  *   - `['flash', 'pro']` — flash escalated to pro
  *   - `['flash', 'pro', 'flash']` — flash escalated, then pro downgraded
  *   - (the pro-downgrade case is rare but supported)
+ *
+ * NOTE: This file now uses the Anthropic Messages API format exclusively.
+ * All format operations are delegated to `./anthropic-protocol`.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -32,9 +35,31 @@ import {
   ADVISOR_TOOL_NAME,
   injectAdvisorTool,
   injectContract,
-  type ChatCompletionRequestBody,
-  type ChatCompletionMessage,
+  type AnthropicMessage,
+  type AnthropicClientRequestBody,
 } from './contract'
+import type {
+  AnthropicStreamEvent,
+  AnthropicContentBlock,
+  ContentBlockStartEvent,
+} from './anthropic-protocol'
+import {
+  isMessageStop,
+  getStopReason,
+  buildAdvisorBeginEvent as buildProtoAdvisorBegin,
+  buildAdvisorEndEvent as buildProtoAdvisorEnd,
+  buildTierSwitchEvent as buildProtoTierSwitch,
+  buildProxyErrorEvent as buildProtoProxyError,
+  parseNonStreamResponse,
+  extractTextFromBlocks,
+  extractFirstToolUse,
+  buildToolResultMessage,
+  buildAssistantToolUseMessage,
+  buildUserTextMessage,
+  buildAssistantTextMessage,
+  ContentBlockIndexRewriter,
+  ANTHROPIC_VERSION,
+} from './anthropic-protocol'
 import { detectEscalationMarker, detectMarkerPrefix, stripNeedsProMarker } from './detector'
 import { SseLineBuffer, type SseLine } from './sse-buffer'
 import type { DispatchResult, EscalateConfig } from './types'
@@ -46,34 +71,33 @@ import { StickyStore } from './sticky'
 const UPSTREAM_TIMEOUT_MS = 120_000
 
 /**
- * Hard ceiling on how much `delta.content` we accumulate in the streaming
- * peek loop before forcing a decision. In practice `detectMarkerPrefix`
- * decides within the first 1–2 content chunks (an immediate `no-marker` once
- * the first char isn't `<`), so this is just a safety net against pathological
- * upstreams that emit a very long partial marker prefix.
+ * Hard ceiling on how much text we accumulate in the streaming peek loop
+ * before forcing a decision. In practice `detectMarkerPrefix` decides
+ * within the first 1–2 text chunks, so this is just a safety net.
  */
 const PEEK_MAX_CONTENT_CHARS = 1024
 
 /**
- * Try to extract the assistant message content from an OpenAI-compatible
- * chat-completion response body. If the body is JSON in the expected shape,
- * return `choices[0].message.content` (string). If it's not a chat
- * completion, or the body is plain text, return the original input verbatim.
+ * Extract concatenated assistant text from an Anthropic non-streaming
+ * response body. Returns the raw body unchanged if it is not a recognizable
+ * Anthropic message response.
  */
 function extractChatContent(body: string): string {
-  if (!body || body[0] !== '{') return body
-  try {
-    const parsed = JSON.parse(body)
-    const choices = parsed?.choices
-    if (Array.isArray(choices) && choices.length > 0) {
-      const c0 = choices[0]
-      const content = c0?.message?.content ?? c0?.text ?? c0?.delta?.content
-      if (typeof content === 'string') return content
-    }
-  } catch {
-    // Not JSON; treat the body as raw text.
-  }
-  return body
+  const parsed = parseNonStreamResponse(body)
+  if (!parsed) return body
+  return extractTextFromBlocks(parsed.content)
+}
+
+/**
+ * Extract assistant thinking from an Anthropic non-streaming response.
+ */
+function extractChatThinking(body: string): string {
+  const parsed = parseNonStreamResponse(body)
+  if (!parsed) return ''
+  return parsed.content
+    .filter((b): b is AnthropicContentBlock & { thinking: string } => b.type === 'thinking' && typeof b.thinking === 'string')
+    .map((b) => b.thinking as string)
+    .join('')
 }
 
 /** Internal — never throw across the dispatcher boundary; convert to a structured error result. */
@@ -96,17 +120,19 @@ export interface DispatcherOptions {
 /**
  * Build the upstream request headers from the client's headers and our config.
  *
- * Authorization priority:
- *   1. If `config.apiKey` is set, use it (overriding the client).
- *   2. Otherwise forward the client's Authorization header verbatim.
- *   3. If neither is set, send no Authorization header.
+ * Anthropic Messages API headers:
+ *   - `x-api-key` (instead of `Authorization: Bearer`)
+ *   - `anthropic-version: 2023-06-01`
  *
- * Hop-by-hop headers (Connection, Keep-Alive, Proxy-*, TE, etc.) and the
- * Host header are dropped.
+ * Authorization priority:
+ *   1. If `config.apiKey` is set, use it as `x-api-key`.
+ *   2. Otherwise forward the client's `x-api-key` header verbatim.
+ *   3. If neither is set, send no `x-api-key` header.
+ *
+ * Hop-by-hop headers are dropped.
  */
 function buildUpstreamHeaders(clientHeaders: Record<string, string | string[] | undefined>, config: EscalateConfig): Record<string, string> {
   const out: Record<string, string> = {}
-  // Hop-by-hop / unsafe-to-forward headers
   const DROP = new Set([
     'host', 'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
     'te', 'trailers', 'transfer-encoding', 'upgrade', 'content-length'
@@ -115,12 +141,14 @@ function buildUpstreamHeaders(clientHeaders: Record<string, string | string[] | 
     if (v === undefined) continue
     const lk = k.toLowerCase()
     if (DROP.has(lk)) continue
-    if (lk === 'authorization' && config.apiKey) continue // we will set our own
+    // Skip both old-style Authorization and client x-api-key when we have a configured key
+    if ((lk === 'authorization' || lk === 'x-api-key') && config.apiKey) continue
     out[lk] = Array.isArray(v) ? v.join(', ') : String(v)
   }
   if (config.apiKey) {
-    out['authorization'] = `Bearer ${config.apiKey}`
+    out['x-api-key'] = config.apiKey
   }
+  out['anthropic-version'] = ANTHROPIC_VERSION
   if (!out['content-type']) {
     out['content-type'] = 'application/json'
   }
@@ -144,7 +172,6 @@ function buildResponseHeaders(upstreamHeaders: Headers | Record<string, string |
     if (v === undefined) continue
     const lk = k.toLowerCase()
     if (DROP.has(lk)) continue
-    // Strip content-length — we may not match the upstream body byte-for-byte.
     if (lk === 'content-length') continue
     out[lk] = Array.isArray(v) ? v.join(', ') : String(v)
   }
@@ -166,155 +193,126 @@ function headersToRecord(headers: Headers): Record<string, string> {
 /**
  * Extract messages from a parsed body, returning null on missing/invalid data.
  */
-function extractMessages(rawBody: unknown): ChatCompletionMessage[] | null {
+function extractMessages(rawBody: unknown): AnthropicMessage[] | null {
   if (!rawBody || typeof rawBody !== 'object') return null
   const body = rawBody as Record<string, unknown>
   const msgs = body['messages']
   if (!Array.isArray(msgs)) return null
-  return msgs as ChatCompletionMessage[]
+  return msgs as AnthropicMessage[]
 }
 
+// ---------------------------------------------------------------------------
+// Advisor tool call helpers (Anthropic format)
+// ---------------------------------------------------------------------------
 
 /**
- * Shape of a tool call attached to an assistant message, after delta accumulation.
- * Matches the OpenAI streaming + non-streaming chat-completion format.
+ * Shape of an advisor tool call extracted from content blocks.
  */
 interface NormalizedToolCall {
   id: string
-  type: 'function'
-  function: { name: string; arguments: string }
+  name: string
+  input: Record<string, unknown>
 }
 
 /**
- * Find the first `advisor` tool call attached to an assistant message's
- * `tool_calls` array, returning the normalized shape (or null if no advisor
- * call is present). Returns null if the message is not an assistant message
- * or has no tool calls.
+ * Extract the `question` string from a normalized tool call's input.
+ */
+function extractAdvisorQuestion(toolCall: NormalizedToolCall): string | undefined {
+  if (typeof toolCall.input === 'object' && toolCall.input !== null) {
+    const q = (toolCall.input as Record<string, unknown>)['question']
+    if (typeof q === 'string' && q.length > 0) return q
+  }
+  return undefined
+}
+
+/**
+ * Find the first `advisor` tool_use content block in an assistant message.
+ * Returns null if no advisor call is present.
  */
 export function extractAdvisorToolCall(
-  message: ChatCompletionMessage | undefined | null
+  message: AnthropicMessage | undefined | null
 ): NormalizedToolCall | null {
   if (!message || message.role !== 'assistant') return null
-  const calls = message.tool_calls
-  if (!Array.isArray(calls)) return null
-  for (const c of calls) {
-    if (!c || typeof c !== 'object') continue
-    if (c.function?.name !== ADVISOR_TOOL_NAME) continue
-    const id = typeof c.id === 'string' && c.id.length > 0
-      ? c.id
-      : `advisor-${Math.random().toString(36).slice(2, 10)}`
-    return {
-      id,
-      type: 'function',
-      function: {
-        name: ADVISOR_TOOL_NAME,
-        arguments: typeof c.function.arguments === 'string' ? c.function.arguments : '',
-      },
-    }
+  if (!Array.isArray(message.content)) return null
+  const block = message.content.find(
+    (b): b is AnthropicContentBlock & { id: string; name: string } =>
+      b.type === 'tool_use' && b.name === ADVISOR_TOOL_NAME && typeof b.id === 'string'
+  )
+  if (!block) return null
+  return {
+    id: block.id,
+    name: block.name,
+    input: (block.input as Record<string, unknown>) ?? {},
   }
-  return null
 }
 
 /**
- * Extract ALL `advisor` tool calls from an assistant message (not just the
- * first one). Returns an empty array if the message has no advisor tool calls.
+ * Extract ALL `advisor` tool_use content blocks from an assistant message.
+ * Returns an empty array if none found.
  */
 export function extractAllAdvisorToolCalls(
-  message: ChatCompletionMessage | undefined | null
+  message: AnthropicMessage | undefined | null
 ): NormalizedToolCall[] {
   if (!message || message.role !== 'assistant') return []
-  const calls = message.tool_calls
-  if (!Array.isArray(calls)) return []
-  const results: NormalizedToolCall[] = []
-  for (const c of calls) {
-    if (!c || typeof c !== 'object') continue
-    if (c.function?.name !== ADVISOR_TOOL_NAME) continue
-    const id = typeof c.id === 'string' && c.id.length > 0
-      ? c.id
-      : `advisor-${Math.random().toString(36).slice(2, 10)}`
-    results.push({
-      id,
-      type: 'function',
-      function: {
-        name: ADVISOR_TOOL_NAME,
-        arguments: typeof c.function.arguments === 'string' ? c.function.arguments : '',
-      },
+  if (!Array.isArray(message.content)) return []
+  return message.content
+    .filter((b): b is AnthropicContentBlock & { id: string; name: string } => {
+      if (b.type !== 'tool_use') return false
+      if (b.name !== ADVISOR_TOOL_NAME) return false
+      return typeof b.id === 'string'
     })
-  }
-  return results
+    .map((b) => ({
+      id: b.id,
+      name: b.name,
+      input: (b.input as Record<string, unknown>) ?? {},
+    }))
 }
 
-/**
- * Parse the `question` parameter out of an advisor tool call's JSON arguments.
- * Returns `undefined` if the arguments are not valid JSON or the field is missing.
- */
-export function extractAdvisorQuestion(toolCall: NormalizedToolCall): string | undefined {
-  const raw = toolCall.function.arguments
-  if (!raw) return undefined
-  try {
-    const parsed = JSON.parse(raw) as { question?: unknown }
-    if (typeof parsed.question === 'string' && parsed.question.length > 0) {
-      return parsed.question
-    }
-  } catch {
-    // Fall through — treat the raw arguments as the question (model may have
-    // emitted plain text instead of a JSON object).
-  }
-  return raw
+// ---------------------------------------------------------------------------
+// Event-type helpers
+// ---------------------------------------------------------------------------
+
+/** Check if an SSE line is a content_block_start for text. */
+function isTextBlockStart(line: SseLine): boolean {
+  const ev = line.anthropicEvent
+  return ev?.type === 'content_block_start' && ev.content_block.type === 'text'
 }
 
-/**
- * Best-effort JSON parse of a chat-completion response body. Returns null
- * if the body is not valid JSON or doesn't have a `choices[0]` array.
- */
-function safeParseChatCompletion(body: string): { choices?: Array<{ message?: Record<string, unknown>; finish_reason?: unknown; delta?: Record<string, unknown> }> } | null {
-  if (!body || body[0] !== '{') return null
-  try {
-    const parsed = JSON.parse(body) as { choices?: unknown }
-    if (!parsed || typeof parsed !== 'object') return null
-    if (!Array.isArray(parsed.choices)) return null
-    return parsed as { choices?: Array<{ message?: Record<string, unknown>; finish_reason?: unknown; delta?: Record<string, unknown> }> }
-  } catch {
-    return null
-  }
+/** Check if an SSE line is a content_block_start for thinking. */
+function isThinkingBlockStart(line: SseLine): boolean {
+  const ev = line.anthropicEvent
+  return ev?.type === 'content_block_start' && ev.content_block.type === 'thinking'
 }
 
-/**
- * Build a synthetic SSE `data:` chunk that marks the start of a pro-as-advisor
- * consultation. Injected into the client's reasoning_content stream so the
- * think panel shows a clear visual separator.
- */
-function buildAdvisorBeginEvent(question: string | undefined, model: string): Uint8Array {
-  const label = question
-    ? `[proxy: consulting advisor (pro): ${question}]`
-    : '[proxy: consulting advisor (pro)]'
-  const text = `\n\n--- ${label} ---\n\n`
-  const payload = {
-    id: randomUUID(),
-    object: 'chat.completion.chunk',
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
-  }
-  return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
+/** Check if an SSE line is a text_delta. */
+function isTextDelta(line: SseLine): string | undefined {
+  const ev = line.anthropicEvent
+  if (ev?.type !== 'content_block_delta') return undefined
+  if (ev.delta.type !== 'text_delta') return undefined
+  return ev.delta.text
 }
 
-/**
- * Build a synthetic SSE `data:` chunk that marks the end of a pro-as-advisor
- * consultation and the return to flash.
- */
-function buildAdvisorEndEvent(model: string): Uint8Array {
-  const text = `\n\n--- [proxy: back to flash with advisor analysis] ---\n\n`
-  const payload = {
-    id: randomUUID(),
-    object: 'chat.completion.chunk',
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
-  }
-  return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
+/** Check if an SSE line is a thinking_delta. */
+function isThinkingDelta(line: SseLine): string | undefined {
+  const ev = line.anthropicEvent
+  if (ev?.type !== 'content_block_delta') return undefined
+  if (ev.delta.type !== 'thinking_delta') return undefined
+  return ev.delta.thinking
 }
 
+/** Check if an SSE line is a content_block_stop. */
+function isContentBlockStop(line: SseLine): boolean {
+  return line.anthropicEvent?.type === 'content_block_stop'
+}
+
+/** Check if an SSE line is a message_delta (carries stop_reason). */
+function isMessageDeltaEvent(line: SseLine): boolean {
+  return line.anthropicEvent?.type === 'message_delta'
+}
+
+// ---------------------------------------------------------------------------
+// Annotation helpers
+// ---------------------------------------------------------------------------
 
 /** Normalize `apiBase` to remove trailing slash. */
 function normalizeBase(apiBase: string): string {
@@ -346,10 +344,6 @@ function annotationHeaders(opts: {
 /**
  * Sanitize a value for use in an HTTP header — URL-encode any character
  * outside the printable ASCII range (0x20–0x7E).
- *
- * Also collapses internal whitespace runs to a single space and strips
- * leading/trailing whitespace, ensuring the value is a single line
- * without leading/trailing whitespace (per RFC 7230).
  */
 function sanitizeHeaderValue(raw: string): string {
   if (!raw) return raw
@@ -375,78 +369,125 @@ function concatBytes(a: Uint8Array | null, b: Uint8Array): Uint8Array {
   return out
 }
 
-/**
- * Build a synthetic SSE `data:` chunk that injects a visible separator into
- * the client's `reasoning_content` (think) stream — a concise statement of
- * the tier switch and the resulting current tier, rendered in the same UI
- * region where the prior model's reasoning was shown.
- *
- * Format: `--- [proxy: now on <to> (was <from>; <reason>)] ---`
- * States the current tier plainly so the model (and the user reading the
- * think panel) knows where the request now sits, without any command-style
- * directives.
- */
-function buildTierSwitchEvent(from: 'flash' | 'pro', to: 'flash' | 'pro', reason: string | undefined, model: string): Uint8Array {
-  const detail = reason ? `; ${reason}` : ''
-  const text = `\n\n--- [proxy: now on ${to} (was ${from}${detail})] ---\n\n`
-  const payload = {
-    id: randomUUID(),
-    object: 'chat.completion.chunk',
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta: { reasoning_content: text }, finish_reason: null }],
-  }
-  return Buffer.from(`data: ${JSON.stringify(payload)}\n\n`, 'utf-8')
-}
-
-/**
- * Build a synthetic SSE tail that delivers a proxy-side error to the client
- * as a normal-looking assistant `content` delta followed by `[DONE]`. Used
- * when an upstream retry fails mid-stream and we have nothing else to send.
- */
-function buildProxyErrorEvent(status: number, message: string, model: string): Uint8Array {
-  const trimmed = (message ?? '').slice(0, 200)
-  const text = `[proxy error: upstream returned ${status}${trimmed ? `: ${trimmed}` : ''}]`
-  const payload = {
-    id: randomUUID(),
-    object: 'chat.completion.chunk',
-    created: Math.floor(Date.now() / 1000),
-    model,
-    choices: [{ index: 0, delta: { content: text }, finish_reason: 'stop' }],
-  }
-  return Buffer.from(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, 'utf-8')
+/** Check if an event: line at index `li` is orphaned (no following data: line). */
+function isOrphanedContentBlockEvent(lines: SseLine[], li: number): boolean {
+  const line = lines[li]
+  if (!line.isEvent) return false
+  if (line.eventType !== 'content_block_start' &&
+      line.eventType !== 'content_block_delta' &&
+      line.eventType !== 'content_block_stop') return false
+  const nextLine = li + 1 < lines.length ? lines[li + 1] : null
+  return !nextLine || !nextLine.isData
 }
 
 /**
  * Drain a reader into a WritableStreamDefaultController until the reader is
  * done. Used after a tier switch to forward the final tier's response with
  * no further marker inspection.
+ *
+ * In passthrough mode, we still go through SseLineBuffer for each chunk
+ * so that content_block indices can be rewritten via ContentBlockIndexRewriter
+ * (needed when synthetic events have been injected between sub-streams).
  */
 async function pumpReaderToController(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  controller: ReadableStreamDefaultController<Uint8Array>
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  rewriter?: ContentBlockIndexRewriter
 ): Promise<void> {
+  if (!rewriter) {
+    // Fast path: no index rewriting needed.
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) return
+      if (value) controller.enqueue(value)
+    }
+  }
+
+  // Slow path: rewrite content_block indices.
+  rewriter.beginSubStream()
+  const sseBuf = new SseLineBuffer()
   while (true) {
     const { value, done } = await reader.read()
     if (done) return
-    if (value) controller.enqueue(value)
+    if (!value || value.length === 0) continue
+    const { lines } = sseBuf.feed(value)
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li]
+      // Drop orphaned content_block event: lines (no following data:).
+      if (isOrphanedContentBlockEvent(lines, li)) continue
+      if (line.anthropicEvent) {
+        const event = line.anthropicEvent
+        if (event.type === 'content_block_start' || event.type === 'content_block_delta' || event.type === 'content_block_stop') {
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+      }
+      controller.enqueue(line.bytes)
+    }
   }
 }
 
 /**
- * Flush remaining lines from `lines[startIdx]` onward into the controller.
- * Used when peekTierStream switches to passthrough mode mid-chunk to ensure
- * no SSE events from the current TCP chunk are dropped.
+ * Rewrite the index in a content_block event line using the rewriter.
+ */
+function rewriteIndexInLine(line: SseLine, rewriter: ContentBlockIndexRewriter): Uint8Array {
+  // The line bytes are the raw text. We need to rewrite the `index` field
+  // in the data payload. For Anthropic SSE, the data is on the `data:` line.
+  // The previous lines (event:) and subsequent blank lines are not modified.
+  // We reconstruct the entire event bytes.
+  if (!line.isData || !line.anthropicEvent) {
+    return line.bytes
+  }
+  const event = line.anthropicEvent
+  if (event.type !== 'content_block_start' && event.type !== 'content_block_delta' && event.type !== 'content_block_stop') {
+    return line.bytes
+  }
+  const isBlockStart = event.type === 'content_block_start'
+  const newIndex = rewriter.rewriteBlockIndex(event.index, isBlockStart)
+  const newPayload = JSON.stringify({ ...event, index: newIndex })
+  return Buffer.from(`data: ${newPayload}\n`, 'utf-8')
+}
+
+/**
+ * Build a synthetic thinking content block from accumulated text. Used in
+ * advisor mode to rewrite flash's pre-advisor text (transition words like
+ * "好的，我来测试一下") into a thinking block, so it shows up in the client's
+ * thinking panel rather than as final answer text.
+ *
+ * The block uses a single index for start/delta/stop (one index per block).
+ */
+function buildThinkingBlockBytes(thinkingText: string, rewriter: ContentBlockIndexRewriter): Uint8Array {
+  const idx = rewriter.allocate()
+  const start = `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: { type: 'thinking', thinking: '' } })}\n\n`
+  const delta = `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta: { type: 'thinking_delta', thinking: thinkingText } })}\n\n`
+  const stop = `event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: idx })}\n\n`
+  return Buffer.from(start + delta + stop, 'utf-8')
+}
+
+/**
+ * Flush remaining lines from `lines[startIdx]` onward into the controller,
+ * with optional index rewriting.
  */
 function flushRemainingLines(
   controller: ReadableStreamDefaultController<Uint8Array>,
   lines: SseLine[],
-  startIdx: number
+  startIdx: number,
+  rewriter?: ContentBlockIndexRewriter
 ): void {
   for (let i = startIdx; i < lines.length; i++) {
-    try { controller.enqueue(lines[i].bytes) } catch { /* noop */ }
+    try {
+      if (rewriter && lines[i].anthropicEvent) {
+        controller.enqueue(rewriteIndexInLine(lines[i], rewriter))
+      } else {
+        controller.enqueue(lines[i].bytes)
+      }
+    } catch { /* noop */ }
   }
 }
+
+// ===========================================================================
+// EscalateDispatcher class
+// ===========================================================================
 
 export class EscalateDispatcher {
   private readonly config: EscalateConfig
@@ -469,88 +510,64 @@ export class EscalateDispatcher {
     }
   }
 
+  // ----------------------------------------------------------------------
+  // Body builders (Anthropic Messages API format)
+  // ----------------------------------------------------------------------
+
   /**
    * Build a flash request body — inject the flash-side contract, force model.
    */
-  private buildFlashBody(rawBody: unknown): ChatCompletionRequestBody {
-    const body = (rawBody ?? {}) as ChatCompletionRequestBody
+  private buildFlashBody(rawBody: unknown): Record<string, unknown> {
+    const body = (rawBody ?? {}) as Record<string, unknown>
     return injectContract(body, this.config.flashModel, this.config.proModel)
   }
 
   /**
-   * Build a pro request body — inject the pro-side contract (which teaches
-   * the model about the `<<<NEEDS_FLASH>>>` downgrade marker), force model.
+   * Build a pro request body — inject the pro-side contract, force model.
    */
-  private buildProBody(rawBody: unknown): ChatCompletionRequestBody {
-    const body = (rawBody ?? {}) as ChatCompletionRequestBody
-    // Second arg is the pro model ID — same as target here since the
-    // target IS the pro model. The contract generator uses this to know
-    // it's targeting the pro tier.
+  private buildProBody(rawBody: unknown): Record<string, unknown> {
+    const body = (rawBody ?? {}) as Record<string, unknown>
     return injectContract(body, this.config.proModel, this.config.proModel)
   }
 
   /**
-   * Build a body targeted at a specific tier (used by downgrade retry to
-   * flash after a successful pro escalation). Same injection as the
-   * original flash call.
+   * Build a body targeted at a specific tier (used by downgrade retry to flash).
    */
-  private buildFlashRetryBody(rawBody: unknown): ChatCompletionRequestBody {
+  private buildFlashRetryBody(rawBody: unknown): Record<string, unknown> {
     return this.buildFlashBody(rawBody)
   }
 
   // ----------------------------------------------------------------------
-  // Advisor mode body builders
+  // Advisor mode body builders (Anthropic format)
   // ----------------------------------------------------------------------
 
   /**
-   * Build a flash body for advisor mode: append the `advisor` tool definition
-   * and the advisor usage fragment to the request. Used on every flash turn,
-   * including retries, so the model can call `advisor` again if it is still
-   * uncertain after receiving pro's analysis.
-   *
-   * Note: this intentionally does NOT call `injectContract()`. Advisor mode
-   * uses the `advisor` tool exclusively; the `<<<NEEDS_PRO>>>` text marker
-   * is a different escalation strategy (self-report mode) and the advisor
-   * fragment explicitly tells the model the marker is NOT active here.
-   * Injecting both would confuse the model about which escalation channel
-   * to use.
+   * Build a flash body for advisor mode: append the `advisor` tool definition.
+   * Note: intentionally does NOT call `injectContract()` — advisor mode uses
+   * the `advisor` tool exclusively, not the self-report markers.
    */
   private buildFlashAdvisorBody(
     rawBody: unknown,
-    messages?: ChatCompletionMessage[]
-  ): ChatCompletionRequestBody {
-    const base = (rawBody ?? {}) as ChatCompletionRequestBody
-    // If `messages` is provided (e.g. carrying a previous `tool_calls` +
-    // `tool` round), override the inbound messages so the assistant message
-    // history is consistent with what flash actually emitted.
-    const bodyWithMessages: ChatCompletionRequestBody = messages
+    messages?: AnthropicMessage[]
+  ): Record<string, unknown> {
+    const base = (rawBody ?? {}) as Record<string, unknown>
+    const bodyWithMessages: Record<string, unknown> = messages
       ? { ...base, messages }
       : base
-    // Force the model field to the flash ID. We can't rely on
-    // `injectContract()` here because advisor mode deliberately skips it —
-    // so we set the model ourselves.
-    const withModel: ChatCompletionRequestBody = { ...bodyWithMessages, model: this.config.flashModel }
+    const withModel: Record<string, unknown> = { ...bodyWithMessages, model: this.config.flashModel }
     return injectAdvisorTool(withModel)
   }
 
   /**
    * Build a pro body for advisor mode: target the pro model and STRIP ALL
    * tools. Pro is a passive advisor — it should NOT have access to the
-   * `advisor` tool definition (that's flash's privilege) or any client
-   * tools. Strip `tool_choice` as well (irrelevant without tools).
-   *
-   * Note: this does NOT inject the self-report tier-switch contract. Advisor
-   * mode is independent of the `<<<NEEDS_PRO>>>` / `<<<NEEDS_FLASH>>>`
-   * markers, so we don't pollute pro's system prompt with explanations of
-   * markers it will never use. If the client supplied a `system` message it
-   * carries through untouched.
+   * `advisor` tool definition or any client tools.
    */
   private buildProAdvisorBody(
     rawBody: unknown,
-    messages: ChatCompletionMessage[]
-  ): ChatCompletionRequestBody {
-    const base = (rawBody ?? {}) as ChatCompletionRequestBody
-    // Strip ALL tools and tool_choice — pro is a passive advisor.
+    messages: AnthropicMessage[]
+  ): Record<string, unknown> {
+    const base = (rawBody ?? {}) as Record<string, unknown>
     const {
       tools: _tools,
       tool_choice: _tc,
@@ -559,120 +576,121 @@ export class EscalateDispatcher {
       ...base,
       messages,
       model: this.config.proModel,
-    } as ChatCompletionRequestBody & { tool_choice?: unknown }
+    } as Record<string, unknown> & { tools?: unknown; tool_choice?: unknown }
     void _tools
     void _tc
-    return rest as ChatCompletionRequestBody
+    // Ensure max_tokens is set (Anthropic required field)
+    if (typeof rest['max_tokens'] !== 'number') {
+      rest['max_tokens'] = this.config.maxTokens
+    }
+    return rest
   }
 
+  // ----------------------------------------------------------------------
+  // Upstream call
+  // ----------------------------------------------------------------------
 
   /**
-   * Make a single upstream call and return the raw Response.
-   * Caller is responsible for reading the body and handling errors.
+   * Make a single upstream call using Anthropic Messages API.
+   * The URL is `${apiBase}/v1/messages`.
    */
   private async callUpstream(
-    body: ChatCompletionRequestBody,
+    body: Record<string, unknown>,
     clientHeaders: Record<string, string | string[] | undefined>,
     clientSignal?: AbortSignal
   ): Promise<Response> {
-    const url = `${normalizeBase(this.config.apiBase)}/chat/completions`
+    const url = `${normalizeBase(this.config.apiBase)}/v1/messages`
     const headers = buildUpstreamHeaders(clientHeaders, this.config)
 
-    // Combine the internal timeout with the client-disconnect signal so that
-    // the upstream fetch is aborted as soon as the client walks away.
+    // Combine the internal timeout with the client-disconnect signal.
     const timeoutSignal = AbortSignal.timeout(UPSTREAM_TIMEOUT_MS)
     const effectiveSignal = clientSignal
       ? AbortSignal.any([timeoutSignal, clientSignal])
       : timeoutSignal
 
+    // Ensure required max_tokens field is present
+    const safeBody = { ...body }
+    if (typeof safeBody['max_tokens'] !== 'number') {
+      safeBody['max_tokens'] = this.config.maxTokens
+    }
+    // Ensure thinking field for models that need explicit enablement
+    if (safeBody['thinking'] === undefined) {
+      safeBody['thinking'] = { type: 'enabled', budget_tokens: this.config.thinkingBudget }
+    }
+
     const init: Record<string, unknown> = {
       method: 'POST',
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(safeBody),
       signal: effectiveSignal,
     }
     if (this.pool) {
       init['dispatcher'] = this.pool
     }
-    // undici.fetch returns its own Response; cast through unknown to the global Response.
-    // The init cast is needed because undici's RequestInit and the global RequestInit
-    // disagree on Blob types under the project's TS lib config.
     return (await this.fetchImpl(url, init as never)) as unknown as Response
   }
 
   // ----------------------------------------------------------------------
-  // Advisor history helpers — rewrite tool_calls that arrived without
-  // tool messages in the client's request body. We turn each orphaned
-  // advisor call into a `user` message that says "you previously tried to
-  // ask the advisor this; please answer directly now". This avoids the
-  // deepseek 400 ("An assistant message with 'tool_calls' must be
-  // followed by tool messages") without inventing a fake pro response.
+  // Advisor history helpers — rewrite orphaned advisor tool_use calls
   // ----------------------------------------------------------------------
 
   /**
    * Walk the inbound `messages` and rewrite any assistant message whose
-   * `tool_calls` include an `advisor` call with no matching `role:'tool'`
+   * content blocks include an `advisor` tool_use with no matching tool_result
    * message after it.
    *
-   * The orphaned advisor call is replaced with a `user` message that
-   * surfaces the question and asks the model to answer directly:
-   *
-   *   user: [Earlier you attempted to call the advisor tool with the
-   *         following question]: <question text>
-   *         Please proceed with your best answer based on your own analysis.
-   *
-   * Any non-advisor tool_calls on the same assistant message are preserved
-   * (they belong to the client's tool surface, not to our proxy).
+   * The orphaned advisor tool_use is replaced with a `user` message that
+   * surfaces the question and asks the model to answer directly.
    */
   private rewriteOrphanedAdvisorCalls(
-    messages: ChatCompletionMessage[]
-  ): ChatCompletionMessage[] {
-    const result: ChatCompletionMessage[] = []
+    messages: AnthropicMessage[]
+  ): AnthropicMessage[] {
+    const result: AnthropicMessage[] = []
     for (let i = 0; i < messages.length; i++) {
       const m = messages[i]
-      // Quick path: not an assistant message with tool_calls.
-      if (m.role !== 'assistant' || !Array.isArray(m.tool_calls) || m.tool_calls.length === 0) {
+
+      // Quick path: not an assistant message with content blocks.
+      if (m.role !== 'assistant' || !Array.isArray(m.content)) {
         result.push(m)
         continue
       }
 
-      // Look forward for any matching tool message.
-      const laterToolIds = new Set<string>()
+      // Look forward for any matching tool_result.
+      const laterToolResultIds = new Set<string>()
       for (let j = i + 1; j < messages.length; j++) {
         const lm = messages[j]
-        if (lm.role === 'tool' && typeof lm.tool_call_id === 'string') {
-          laterToolIds.add(lm.tool_call_id)
+        if (lm.role === 'user' && Array.isArray(lm.content)) {
+          for (const block of lm.content) {
+            if (block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
+              laterToolResultIds.add(block.tool_use_id)
+            }
+          }
         }
       }
 
-      const advisorCalls = m.tool_calls.filter(
-        (tc) => tc && typeof tc === 'object' && tc.function?.name === ADVISOR_TOOL_NAME
+      const advisorBlocks = m.content.filter(
+        (b) => b.type === 'tool_use' && b.name === ADVISOR_TOOL_NAME
       )
-      const nonAdvisorCalls = m.tool_calls.filter(
-        (tc) => !(tc && typeof tc === 'object' && tc.function?.name === ADVISOR_TOOL_NAME)
-      )
-
-      const orphanedAdvisorCalls = advisorCalls.filter(
-        (tc) => typeof tc.id !== 'string' || !laterToolIds.has(tc.id)
+      const nonAdvisorBlocks = m.content.filter(
+        (b) => !(b.type === 'tool_use' && b.name === ADVISOR_TOOL_NAME)
       )
 
-      if (orphanedAdvisorCalls.length === 0) {
-        // Nothing to rewrite — keep the assistant message as-is.
+      const orphanedAdvisorBlocks = advisorBlocks.filter(
+        (b) => typeof b.id !== 'string' || !laterToolResultIds.has(b.id)
+      )
+
+      if (orphanedAdvisorBlocks.length === 0) {
         result.push(m)
         continue
       }
 
       // Build the user prompt that surfaces each orphaned advisor question.
-      const questions = orphanedAdvisorCalls.map((tc) => {
-        const raw = typeof tc.function?.arguments === 'string' ? tc.function.arguments : '{}'
-        try {
-          const parsed = JSON.parse(raw) as { question?: unknown }
-          return typeof parsed.question === 'string' && parsed.question.length > 0
-            ? parsed.question
-            : raw
-        } catch {
-          return raw
+      const questions = orphanedAdvisorBlocks.map((b) => {
+        if (b.input && typeof b.input === 'object') {
+          const q = (b.input as Record<string, unknown>)['question']
+          if (typeof q === 'string' && q.length > 0) return q
         }
+        return b.name
       })
       const plural = questions.length > 1 ? 's' : ''
       const list = questions.map((q) => `- ${q}`).join('\n')
@@ -682,27 +700,24 @@ export class EscalateDispatcher {
 
       result.push({ role: 'user', content: userPrompt })
 
-      // If the assistant message had non-advisor tool_calls, preserve them
-      // on a separate assistant message — they belong to the client.
-      if (nonAdvisorCalls.length > 0) {
+      // If the assistant message had non-advisor content blocks, preserve them.
+      if (nonAdvisorBlocks.length > 0) {
         result.push({
           role: 'assistant',
-          content: m.content,
-          tool_calls: nonAdvisorCalls,
+          content: nonAdvisorBlocks,
         })
       }
     }
     return result
   }
 
+  // ----------------------------------------------------------------------
+  // Main dispatch entry
+  // ----------------------------------------------------------------------
 
   /**
    * Dispatch a chat-completion request, applying flash ↔ pro switching
    * (escalation + downgrade) as needed.
-   *
-   * @param rawBody     Parsed JSON body of the inbound request.
-   * @param isStream    Whether the client requested `stream: true` (SSE).
-   * @param clientHeaders  Headers from the inbound request (for forwarding Authorization, etc.).
    */
   async dispatch(
     rawBody: unknown,
@@ -710,9 +725,6 @@ export class EscalateDispatcher {
     clientHeaders: Record<string, string | string[] | undefined>,
     clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
-    // Advisor mode routes through a different dispatcher (tool-call interception
-    // instead of self-report markers); sticky pro does not apply because flash
-    // is always in control in advisor mode.
     if (this.config.mode === 'advisor') {
       if (isStream) {
         return this.dispatchAdvisorStream(rawBody, clientHeaders, clientSignal)
@@ -738,11 +750,10 @@ export class EscalateDispatcher {
     return this.dispatchNonStream(rawBody, clientHeaders, clientSignal)
   }
 
-  /**
-   * Direct pro dispatch — skip flash entirely because sticky pro hit.
-   * For non-stream: just call pro and check for downgrade.
-   * For stream: call pro stream, peek for NEEDS_FLASH, downgrade if needed.
-   */
+  // ----------------------------------------------------------------------
+  // Direct pro dispatch (sticky pro hit)
+  // ----------------------------------------------------------------------
+
   private async dispatchDirectPro(
     rawBody: unknown,
     isStream: boolean,
@@ -766,7 +777,6 @@ export class EscalateDispatcher {
 
     if (!proResp.ok) {
       const errBuf = Buffer.from(await proResp.arrayBuffer())
-      // Upstream error on direct pro — clear sticky so next retry goes flash.
       const msgs = extractMessages(rawBody)
       if (msgs) this.stickyStore?.clear(msgs)
       return {
@@ -785,7 +795,6 @@ export class EscalateDispatcher {
     const proDetect = detectEscalationMarker(proContent)
 
     if (proDetect.matched && proDetect.direction === 'flash') {
-      // Pro downgraded — clear sticky and retry on flash.
       const msgs = extractMessages(rawBody)
       if (msgs) this.stickyStore?.clear(msgs)
       this.logger.info?.(`[escalate] sticky pro: pro downgraded (${proDetect.reason ?? 'bare'}) — retrying on flash`)
@@ -821,7 +830,6 @@ export class EscalateDispatcher {
       }
     }
 
-    // Pro kept — return response.
     return {
       finalModel: 'pro',
       reason: 'passthrough',
@@ -841,9 +849,6 @@ export class EscalateDispatcher {
     const proBody = this.buildProBody(rawBody)
     const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
 
-    // Upstream error on direct pro — clear sticky and pass the error through
-    // as a non-stream body (with annotation headers, since we haven't started
-    // streaming yet).
     if (!proResp.ok || !proResp.body) {
       const errBuf = proResp.body ? Buffer.from(await proResp.arrayBuffer()) : Buffer.from('')
       const msgs = extractMessages(rawBody)
@@ -862,11 +867,8 @@ export class EscalateDispatcher {
     const dispatcher = this
     const proReader = proResp.body.getReader()
     const msgs = extractMessages(rawBody)
-
-    // Track current active reader for the cancel handler.
     let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = proReader
 
-    // Local abort controller linked to clientSignal.
     const localAbort = new AbortController()
     const localSignal = localAbort.signal
     const onLocalAbort = () => {
@@ -880,42 +882,42 @@ export class EscalateDispatcher {
       }
     }
 
+    const rewriter = new ContentBlockIndexRewriter()
+    rewriter.reset()
+
     const passthrough = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          // Pro peek — look for NEEDS_FLASH (downgrade).
-          const proResult = await dispatcher.peekTierStream(controller, proReader, 'flash')
+          const proResult = await dispatcher.peekTierStream(controller, proReader, 'flash', rewriter)
           if (proResult.outcome === 'done') {
             currentReader = null
             controller.close()
             return
           }
 
-          // Pro → flash downgrade. Clear sticky so next request starts from flash.
           if (msgs) dispatcher.stickyStore?.clear(msgs)
           dispatcher.logger.info?.(`[escalate] sticky pro: <<<NEEDS_FLASH>>> detected — downgrading to flash`)
 
-          controller.enqueue(buildTierSwitchEvent('pro', 'flash', proResult.reason, dispatcher.config.flashModel))
-          currentReader = null  // proReader was cancelled by peekTierStream
+          controller.enqueue(buildProtoTierSwitch('pro', 'flash', proResult.reason, dispatcher.config.flashModel, rewriter))
+          currentReader = null
 
           const flashBody = dispatcher.buildFlashRetryBody(rawBody)
           const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders, localSignal)
           if (!flashResp.ok || !flashResp.body) {
             const errText = flashResp.body ? await flashResp.text().catch(() => '') : ''
-            controller.enqueue(buildProxyErrorEvent(flashResp.status, errText, dispatcher.config.flashModel))
+            controller.enqueue(buildProtoProxyError(flashResp.status, errText, dispatcher.config.flashModel, rewriter))
             controller.close()
             return
           }
 
-          // Pump flash retry directly — no further peeking (avoid downgrade loops).
           const flashReader = flashResp.body.getReader()
           currentReader = flashReader
-          await pumpReaderToController(flashReader, controller)
+          await pumpReaderToController(flashReader, controller, rewriter)
           currentReader = null
           controller.close()
         } catch (err) {
           try {
-            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel))
+            controller.enqueue(buildProtoProxyError(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel, rewriter))
           } catch { /* noop */ }
           try { controller.close() } catch { /* noop */ }
         }
@@ -931,8 +933,6 @@ export class EscalateDispatcher {
       reason: 'passthrough',
       path: ['pro'],
       status: proResp.status,
-      // Streaming responses no longer carry X-Escalated-* headers — see note
-      // in dispatchStream.
       headers: buildResponseHeaders(proResp.headers, {}),
       body: passthrough,
       isStream: true,
@@ -940,7 +940,7 @@ export class EscalateDispatcher {
   }
 
   // ----------------------------------------------------------------------
-  // Non-streaming path
+  // Non-streaming path (self-report)
   // ----------------------------------------------------------------------
 
   private async dispatchNonStream(
@@ -948,7 +948,6 @@ export class EscalateDispatcher {
     clientHeaders: Record<string, string | string[] | undefined>,
     clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
-    // 1. Flash call.
     const flashBody = this.buildFlashBody(rawBody)
     const flashResp = await this.callUpstream(flashBody, clientHeaders, clientSignal)
     const path: Array<'flash' | 'pro'> = ['flash']
@@ -971,7 +970,6 @@ export class EscalateDispatcher {
     const flashDetect = detectEscalationMarker(flashContent)
 
     if (!flashDetect.matched) {
-      // No escalation. Strip a stray marker (paranoia) and pass through.
       return {
         finalModel: 'flash',
         reason: 'non-stream',
@@ -984,8 +982,6 @@ export class EscalateDispatcher {
     }
 
     if (flashDetect.direction !== 'pro') {
-      // The flash model emitted a NEEDS_FLASH marker — unusual (flash shouldn't
-      // know about that marker), but defensively treat it as no-op and passthrough.
       this.logger.warn?.(`[escalate] flash model emitted unexpected <<<NEEDS_FLASH>>> — treating as passthrough`)
       return {
         finalModel: 'flash',
@@ -1000,7 +996,6 @@ export class EscalateDispatcher {
 
     this.logger.info?.(`[escalate] <<<NEEDS_PRO>>> detected (${flashDetect.reason ?? 'bare'}) — retrying on pro`)
 
-    // 2. Pro call (escalation).
     const proBody = this.buildProBody(rawBody)
     const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
     path.push('pro')
@@ -1024,16 +1019,13 @@ export class EscalateDispatcher {
     const proContent = extractChatContent(proText)
     const proDetect = detectEscalationMarker(proContent)
 
-    // Sticky pro: record the upgrade so next request with same prefix skips flash.
     const msgs = extractMessages(rawBody)
     if (msgs) this.stickyStore?.storeUpgrade(msgs)
 
     if (proDetect.matched && proDetect.direction === 'flash') {
       this.logger.info?.(`[escalate] <<<NEEDS_FLASH>>> detected on pro (${proDetect.reason ?? 'bare'}) — downgrading to flash`)
-      // Clear sticky — next request should start from flash again.
       if (msgs) this.stickyStore?.clear(msgs)
 
-      // 3. Flash retry (downgrade).
       const flashRetryBody = this.buildFlashRetryBody(rawBody)
       const flashRetryResp = await this.callUpstream(flashRetryBody, clientHeaders, clientSignal)
       path.push('flash')
@@ -1066,7 +1058,6 @@ export class EscalateDispatcher {
       }
     }
 
-    // No downgrade — return the pro response.
     return {
       finalModel: 'pro',
       reason: 'self-report',
@@ -1081,7 +1072,7 @@ export class EscalateDispatcher {
   }
 
   // ----------------------------------------------------------------------
-  // Streaming path
+  // Streaming path (self-report)
   // ----------------------------------------------------------------------
 
   private async dispatchStream(
@@ -1092,8 +1083,6 @@ export class EscalateDispatcher {
     const flashBody = this.buildFlashBody(rawBody)
     const flashResp = await this.callUpstream(flashBody, clientHeaders, clientSignal)
 
-    // Upstream error — pass through as a non-stream body (annotation headers
-    // are still available here because we haven't started streaming yet).
     if (!flashResp.ok || !flashResp.body) {
       const errBuf = flashResp.body
         ? Buffer.from(await flashResp.arrayBuffer())
@@ -1111,14 +1100,8 @@ export class EscalateDispatcher {
 
     const dispatcher = this
     const flashReader = flashResp.body.getReader()
-
-    // Track the current active reader so the cancel handler can always
-    // cancel the right reader when the client disconnects mid-stream.
     let currentReader: ReadableStreamDefaultReader<Uint8Array> | null = flashReader
 
-    // Local abort controller linked to clientSignal. When the ReadableStream is
-    // cancelled (client disconnect), we abort this controller which also aborts
-    // any in-flight callUpstream calls (via AbortSignal.any with clientSignal).
     const localAbort = new AbortController()
     const localSignal = localAbort.signal
     const onLocalAbort = () => {
@@ -1132,38 +1115,42 @@ export class EscalateDispatcher {
       }
     }
 
+    // Content block index rewriter — starts at 0 for the flash stream.
+    // Each sub-stream's content_block indices are rewritten through this
+    // rewriter to produce continuous indices across the entire client stream.
+    const rewriter = new ContentBlockIndexRewriter()
+    rewriter.reset()
+
     const passthrough = new ReadableStream<Uint8Array>({
       async start(controller) {
         try {
-          // ---- Flash peek: forward reasoning immediately, inspect content. ----
-          const flashResult = await dispatcher.peekTierStream(controller, flashReader, 'pro')
+          // ---- Flash peek: forward thinking immediately, inspect text. ----
+          const flashResult = await dispatcher.peekTierStream(controller, flashReader, 'pro', rewriter)
           if (flashResult.outcome === 'done') {
             controller.close()
             return
           }
 
           // ---- Switched: flash → pro. ----
-          // Sticky pro: record the upgrade before the potentially-downgrading pro peek.
           const msgs = extractMessages(rawBody)
           if (msgs) dispatcher.stickyStore?.storeUpgrade(msgs)
           dispatcher.logger.info?.(`[escalate] <<<NEEDS_PRO>>> detected in stream — switching to pro`)
 
-          // Inject a visible separator into the reasoning stream.
-          controller.enqueue(buildTierSwitchEvent('flash', 'pro', flashResult.reason, dispatcher.config.proModel))
+          controller.enqueue(buildProtoTierSwitch('flash', 'pro', flashResult.reason, dispatcher.config.proModel, rewriter))
 
           const proBody = dispatcher.buildProBody(rawBody)
           const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
           if (!proResp.ok || !proResp.body) {
             const errText = proResp.body ? await proResp.text().catch(() => '') : ''
-            controller.enqueue(buildProxyErrorEvent(proResp.status, errText, dispatcher.config.proModel))
+            controller.enqueue(buildProtoProxyError(proResp.status, errText, dispatcher.config.proModel, rewriter))
             controller.close()
             return
           }
 
-          // ---- Pro peek: forward reasoning, watch for NEEDS_FLASH downgrade. ----
+          // ---- Pro peek: forward thinking, watch for NEEDS_FLASH downgrade. ----
           const proReader = proResp.body.getReader()
           currentReader = proReader
-          const proResult = await dispatcher.peekTierStream(controller, proReader, 'flash')
+          const proResult = await dispatcher.peekTierStream(controller, proReader, 'flash', rewriter)
           if (proResult.outcome === 'done') {
             currentReader = null
             controller.close()
@@ -1174,35 +1161,33 @@ export class EscalateDispatcher {
           if (msgs) dispatcher.stickyStore?.clear(msgs)
           dispatcher.logger.info?.(`[escalate] <<<NEEDS_FLASH>>> detected in pro stream — downgrading to flash`)
 
-          controller.enqueue(buildTierSwitchEvent('pro', 'flash', proResult.reason, dispatcher.config.flashModel))
-          currentReader = null  // proReader was cancelled by peekTierStream
+          controller.enqueue(buildProtoTierSwitch('pro', 'flash', proResult.reason, dispatcher.config.flashModel, rewriter))
+          currentReader = null
 
           const flashRetryBody = dispatcher.buildFlashRetryBody(rawBody)
           const flashRetryResp = await dispatcher.callUpstream(flashRetryBody, clientHeaders, localSignal)
           if (!flashRetryResp.ok || !flashRetryResp.body) {
             const errText = flashRetryResp.body ? await flashRetryResp.text().catch(() => '') : ''
-            controller.enqueue(buildProxyErrorEvent(flashRetryResp.status, errText, dispatcher.config.flashModel))
+            controller.enqueue(buildProtoProxyError(flashRetryResp.status, errText, dispatcher.config.flashModel, rewriter))
             controller.close()
             return
           }
 
-          // Pump flash retry directly — no further peeking (avoid downgrade loops).
+          // Pump flash retry directly — no further peeking.
           const flashRetryReader = flashRetryResp.body.getReader()
           currentReader = flashRetryReader
-          await pumpReaderToController(flashRetryReader, controller)
+          await pumpReaderToController(flashRetryReader, controller, rewriter)
           currentReader = null
           controller.close()
         } catch (err) {
           try {
-            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel))
+            controller.enqueue(buildProtoProxyError(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel, rewriter))
           } catch { /* noop */ }
           try { controller.close() } catch { /* noop */ }
         }
       },
       async cancel(reason) {
-        // Abort local controller to cancel any in-flight callUpstream calls.
         if (!localSignal.aborted) localAbort.abort(reason)
-        // Cancel the currently active reader (if any).
         try { await currentReader?.cancel(reason) } catch { /* noop */ }
       },
     })
@@ -1212,63 +1197,76 @@ export class EscalateDispatcher {
       reason: 'passthrough',
       path: ['flash'],
       status: flashResp.status,
-      // Note: streaming responses no longer carry X-Escalated-* headers.
-      // The upgrade decision happens AFTER the response head is sent (so that
-      // reasoning_content can stream through immediately and keep the client's
-      // TTFB low). The in-band separator injected via reasoning_content
-      // (`--- [proxy: now on pro (was flash)] ---`) is the visible signal.
       headers: buildResponseHeaders(flashResp.headers, {}),
       body: passthrough,
       isStream: true,
     }
   }
 
+  // ----------------------------------------------------------------------
+  // Peek one tier's SSE stream — Anthropic format
+  // ----------------------------------------------------------------------
+
   /**
-   * Peek one tier's SSE stream and forward bytes to `controller`:
-   *   - `delta.reasoning_content` (think blocks) → forwarded immediately, so
-   *     the client never blocks waiting for the model's thinking to finish.
-   *   - `delta.content` → buffered and run through `detectMarkerPrefix`:
+   * Peek one tier's Anthropic SSE stream and forward bytes to `controller`:
+   *   - `thinking_delta` events → forwarded immediately (TTFB).
+   *   - `text_delta` events → buffered and run through `detectMarkerPrefix`:
    *       * `matched-<expectedDirection>` → cancel reader, return 'switched'.
-   *         Caller is responsible for emitting the tier-switch separator and
-   *         starting the next tier's request.
-   *       * `no-marker` (first content char isn't `<`, or first line complete
-   *         without a match) → flush the content buffer, switch to pure
-   *         passthrough mode, and keep pumping until the stream ends.
+   *       * `no-marker` → flush the text block buffer, switch to passthrough.
    *       * `need-more` → keep buffering (partial marker prefix).
+   *   - Content block start/stop events for text blocks → buffered alongside
+   *     the deltas so the event sequence stays consistent.
+   *   - Content block start/stop for thinking → forwarded immediately.
+   *   - `message_delta` / `message_stop` → NOT forwarded (intermediate
+   *     sub-stream termination is invisible to the client).
    *
-   * Returns `{outcome:'switched', reason?}` if the expected marker was seen
-   * (reader cancelled, buffered content bytes dropped), or `{outcome:'done'}`
-   * if the stream ended naturally (all bytes — buffered and live — have been
-   * forwarded to the controller; caller should close the controller).
-   *
-   * The 'switched' return deliberately does NOT close the controller — the
-   * caller typically wants to enqueue more bytes (separator + next tier).
+   * All forwarded content_block_* events have their `index` field rewritten
+   * through the `rewriter` to ensure continuous indices across sub-streams.
    */
   private async peekTierStream(
     controller: ReadableStreamDefaultController<Uint8Array>,
     reader: ReadableStreamDefaultReader<Uint8Array>,
-    expectedDirection: 'pro' | 'flash'
+    expectedDirection: 'pro' | 'flash',
+    rewriter: ContentBlockIndexRewriter
   ): Promise<{ outcome: 'done' } | { outcome: 'switched'; reason?: string }> {
+    rewriter.beginSubStream()
     const sseBuf = new SseLineBuffer()
-    let sseContentBuf = ''
-    let contentPeekBytes: Uint8Array | null = null
+    let textBlockAcc = ''          // Accumulated text_delta.text for marker detection
+    let textBlockBufferedBytes: Uint8Array | null = null  // Buffered bytes for the current text block
+    let bufferingTextBlock = false // True when we're inside a text block (start seen, not yet stopped)
     let mode: 'peeking' | 'passthrough' = 'peeking'
+
+    /**
+     * Flush the buffered text block to the controller, rewriting indices.
+     */
+    const flushTextBlock = () => {
+      if (textBlockBufferedBytes !== null) {
+        controller.enqueue(textBlockBufferedBytes)
+        textBlockBufferedBytes = null
+      }
+      textBlockAcc = ''
+      bufferingTextBlock = false
+    }
 
     while (true) {
       const { value, done } = await reader.read()
       if (done) {
-        // Stream ended naturally — flush any buffered content and signal done.
-        // Ensure the last buffered event is properly terminated per SSE spec.
-        if (contentPeekBytes !== null) {
-          controller.enqueue(Buffer.concat([contentPeekBytes, Buffer.from('\n', 'utf-8')]))
-          contentPeekBytes = null
-        }
+        flushTextBlock()
         return { outcome: 'done' }
       }
       if (!value || value.length === 0) continue
 
       if (mode === 'passthrough') {
-        controller.enqueue(value)
+        // In passthrough, we still need to go through the SSE buffer for
+        // index rewriting (since synthetic events may have been injected).
+        const { lines } = sseBuf.feed(value)
+        for (const line of lines) {
+          if (rewriter && line.anthropicEvent) {
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          } else {
+            controller.enqueue(line.bytes)
+          }
+        }
         continue
       }
 
@@ -1277,118 +1275,159 @@ export class EscalateDispatcher {
       for (let li = 0; li < lines.length; li++) {
         const line = lines[li]
 
-        // Non-`data:` lines (blank lines, comments, event: lines) — forward.
+        // Non-data lines — forward thinking events, buffer text events.
         if (!line.isData) {
-          controller.enqueue(line.bytes)
-          continue
-        }
-        // `data: [DONE]` — forward.
-        if (line.done) {
-          controller.enqueue(line.bytes)
-          continue
-        }
-        // `data:` without a parseable chat delta — forward verbatim.
-        if (!line.delta) {
-          controller.enqueue(line.bytes)
-          continue
-        }
-
-        const hasContent = typeof line.delta.content === 'string' && line.delta.content.length > 0
-        const hasReasoning = typeof line.delta.reasoning_content === 'string' && line.delta.reasoning_content.length > 0
-
-        // reasoning_content (think) — forward immediately. This is the core
-        // fix for the long-TTFB problem on reasoning models: the client sees
-        // think bytes as soon as the model emits them, not after a full peek.
-        if (hasReasoning) {
-          controller.enqueue(line.bytes)
-        }
-
-        // content — buffer + prefix-increment detection.
-        if (hasContent) {
-          sseContentBuf += line.delta.content!
-          contentPeekBytes = concatBytes(contentPeekBytes, line.bytes)
-
-          const decision = detectMarkerPrefix(sseContentBuf)
-          if (decision === 'matched-pro' && expectedDirection === 'pro') {
-            const det = detectEscalationMarker(sseContentBuf)
-            try { await reader.cancel() } catch { /* noop */ }
-            return { outcome: 'switched', reason: det.reason }
+          if (bufferingTextBlock) {
+            textBlockBufferedBytes = concatBytes(textBlockBufferedBytes, line.bytes)
+          } else {
+            controller.enqueue(line.bytes)
           }
-          if (decision === 'matched-flash' && expectedDirection === 'flash') {
-            const det = detectEscalationMarker(sseContentBuf)
+          continue
+        }
+
+        if (!line.anthropicEvent) {
+          // Non-parseable data line — forward if not buffering text.
+          if (bufferingTextBlock) {
+            textBlockBufferedBytes = concatBytes(textBlockBufferedBytes, line.bytes)
+          } else {
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        const event = line.anthropicEvent
+
+        // --- thinking_delta: forward immediately ---
+        const thinkText = isThinkingDelta(line)
+        if (thinkText !== undefined) {
+          // If we were buffering a text block, something is wrong (thinking
+          // shouldn't appear during a text block). Flush defensively.
+          if (bufferingTextBlock) {
+            flushTextBlock()
+          }
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // --- text_delta: buffer for marker detection ---
+        const txt = isTextDelta(line)
+        if (txt !== undefined) {
+          textBlockAcc += txt
+          textBlockBufferedBytes = concatBytes(textBlockBufferedBytes, rewriteIndexInLine(line, rewriter))
+
+          const decision = detectMarkerPrefix(textBlockAcc)
+          if ((decision === 'matched-pro' && expectedDirection === 'pro') ||
+              (decision === 'matched-flash' && expectedDirection === 'flash')) {
+            const det = detectEscalationMarker(textBlockAcc)
             try { await reader.cancel() } catch { /* noop */ }
             return { outcome: 'switched', reason: det.reason }
           }
           if (decision === 'no-marker') {
-            // Definitively no marker — flush the content buffer, switch to
-            // pure passthrough for the rest of this stream.
-            //
-            // SSE spec mandates every event MUST end with `\n\n`.  Data
-            // lines captured in `contentPeekBytes` only carry their own
-            // trailing `\n`.  The event-terminating blank line is normally
-            // picked up by `flushRemainingLines` (when it lands in the same
-            // TCP chunk) or by the first passthrough chunk.  Both paths
-            // depend on network timing and can drop the separator when the
-            // upstream flushes one `data:` line per write().  Defensively
-            // close the event ourselves and skip the first remaining line
-            // when it would duplicate our injected separator.
-            const END = Buffer.from('\n', 'utf-8')
-            controller.enqueue(Buffer.concat([contentPeekBytes!, END]))
-            contentPeekBytes = null
+            // Definitively no marker — flush the text block and switch to passthrough.
+            flushTextBlock()
             mode = 'passthrough'
-            const skip = li + 1 < lines.length && !lines[li + 1].isData ? 1 : 0
-            flushRemainingLines(controller, lines, li + 1 + skip)
+            flushRemainingLines(controller, lines, li + 1, rewriter)
             if (leftover !== null) controller.enqueue(leftover)
-            break // exit lines loop; outer loop continues in passthrough mode
+            break
           }
-          // 'need-more' (or a cross-direction marker like a flash model
-          // emitting <<<NEEDS_FLASH>>> — treated defensively as need-more).
-          // Keep buffering, but cap to avoid pathological partial prefixes.
-          if (sseContentBuf.length >= PEEK_MAX_CONTENT_CHARS) {
-            const END = Buffer.from('\n', 'utf-8')
-            controller.enqueue(Buffer.concat([contentPeekBytes!, END]))
-            contentPeekBytes = null
+          // 'need-more' — keep buffering.
+          if (textBlockAcc.length >= PEEK_MAX_CONTENT_CHARS) {
+            flushTextBlock()
             mode = 'passthrough'
-            const skip = li + 1 < lines.length && !lines[li + 1].isData ? 1 : 0
-            flushRemainingLines(controller, lines, li + 1 + skip)
+            flushRemainingLines(controller, lines, li + 1, rewriter)
             if (leftover !== null) controller.enqueue(leftover)
             break
           }
           continue
         }
 
-        // data line with neither content nor reasoning (role, tool_calls, …) — forward.
-        // (If the line had reasoning_content we already forwarded it above.)
-        if (!hasReasoning) {
-          controller.enqueue(line.bytes)
+        // --- content_block_start: track whether we're in a text block ---
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'thinking') {
+            // Thinking block — forward immediately.
+            if (bufferingTextBlock) {
+              flushTextBlock()
+            }
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          } else if (event.content_block.type === 'text') {
+            // Text block — start buffering.
+            if (bufferingTextBlock) {
+              // Unexpected: two consecutive text blocks. Flush first.
+              flushTextBlock()
+            }
+            bufferingTextBlock = true
+            textBlockBufferedBytes = concatBytes(textBlockBufferedBytes, rewriteIndexInLine(line, rewriter))
+          } else {
+            // tool_use or other — forward.
+            if (bufferingTextBlock) {
+              textBlockBufferedBytes = concatBytes(textBlockBufferedBytes, rewriteIndexInLine(line, rewriter))
+            } else {
+              controller.enqueue(rewriteIndexInLine(line, rewriter))
+            }
+          }
+          continue
         }
+
+        // --- content_block_stop: end of a block ---
+        if (event.type === 'content_block_stop') {
+          if (bufferingTextBlock) {
+            // End of the text block. We've accumulated the full content,
+            // but haven't flushed (no marker detected yet). Keep buffering
+            // the stop event as well — it will be flushed when no-marker
+            // is decided, OR discarded on marker match.
+            textBlockBufferedBytes = concatBytes(textBlockBufferedBytes, rewriteIndexInLine(line, rewriter))
+            bufferingTextBlock = false
+          } else {
+            // Thinking block or other non-text block — forward immediately.
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        // --- message_delta: forward (only arrives when stream ends naturally;
+        //     marker detection cancels the reader before these can arrive) ---
+        if (event.type === 'message_delta') {
+          if (bufferingTextBlock) {
+            flushTextBlock()
+          }
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // --- message_stop: forward (terminal event for the final sub-stream) ---
+        if (event.type === 'message_stop') {
+          if (bufferingTextBlock) {
+            flushTextBlock()
+          }
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // --- message_start: forward ---
+        if (event.type === 'message_start') {
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // --- ping: forward ---
+        controller.enqueue(rewriteIndexInLine(line, rewriter))
       }
-      // If mode flipped to 'passthrough' inside the loop, the outer while
-      // loop will pick it up on the next iteration.
+
+      // If mode flipped to 'passthrough', continue reading in passthrough.
     }
   }
 
   // ----------------------------------------------------------------------
-  // Advisor mode — tool-call interception
+  // Advisor mode — non-streaming
   // ----------------------------------------------------------------------
 
-  /**
-   * Advisor non-stream dispatcher. Loops: call flash with advisor tool,
-   * check the assistant message for an `advisor` tool call, route the
-   * question to pro (without `tools`), build a `tool` result message,
-   * append it to `messages`, and retry flash. Recursion is bounded only by
-   * the model — practical limit is ~2 advisor calls per turn.
-   */
   private async dispatchAdvisorNonStream(
     rawBody: unknown,
     clientHeaders: Record<string, string | string[] | undefined>,
     clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const initialMessages = extractMessages(rawBody) ?? []
-    // Pre-process: rewrite any advisor tool_calls in the inbound history
-    // that arrived without a corresponding `tool` result message into
-    // synthetic user messages (so the deepseek upstream doesn't 400).
-    let workingMessages: ChatCompletionMessage[] = this.rewriteOrphanedAdvisorCalls(initialMessages)
+    let workingMessages: AnthropicMessage[] = this.rewriteOrphanedAdvisorCalls(initialMessages)
     const path: Array<'flash' | 'pro'> = []
     let sawAdvisorCall = false
 
@@ -1411,12 +1450,14 @@ export class EscalateDispatcher {
       }
 
       const flashText = await flashResp.text()
-      const flashParsed = safeParseChatCompletion(flashText)
-      const assistantMsg = flashParsed?.choices?.[0]?.message as ChatCompletionMessage | undefined
-      const finishReason = flashParsed?.choices?.[0]?.finish_reason as string | undefined
+      const flashParsed = parseNonStreamResponse(flashText)
+      const assistantMsg: AnthropicMessage | undefined = flashParsed
+        ? { role: 'assistant', content: flashParsed.content }
+        : undefined
+      const stopReason = flashParsed?.stop_reason
 
       const advisorCall = assistantMsg ? extractAdvisorToolCall(assistantMsg) : null
-      if (!advisorCall || finishReason !== 'tool_calls') {
+      if (!advisorCall || stopReason !== 'tool_use') {
         return {
           finalModel: 'flash',
           reason: sawAdvisorCall ? 'advisor' : 'non-stream',
@@ -1428,30 +1469,28 @@ export class EscalateDispatcher {
         }
       }
 
-      // ---- Advisor call detected: route the question to pro. ----
-      // Only handle the FIRST advisor call per flash response. If flash
-      // emitted multiple calls, the remaining ones are processed by the
-      // recursion loop (flash retries with the tool result, and may call
-      // advisor again). This keeps the message history sequential rather
-      // than appearing as parallel tool calls.
       sawAdvisorCall = true
       path.push('pro')
-      this.logger.info?.(`[escalate] advisor tool call detected (${advisorCall.function.arguments.length} chars) — consulting pro`)
+      this.logger.info?.(`[escalate] advisor tool call detected (input: ${JSON.stringify(advisorCall.input).length} chars) — consulting pro`)
 
       const advisorQuestion = extractAdvisorQuestion(advisorCall)
       this.logger.info?.(`[escalate] advisor question: ${advisorQuestion ?? '(empty)'}`)
 
-      const advisorUserMsg: ChatCompletionMessage | null = advisorQuestion
+      const advisorUserMsg: AnthropicMessage | null = advisorQuestion
         ? { role: 'user', content: `[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] ${advisorQuestion}` }
         : null
 
-      // Strip tool_calls from the assistant message before sending to pro.
-      const hasContent = assistantMsg &&
-        (typeof assistantMsg.content === 'string' ? assistantMsg.content.length > 0 : assistantMsg.content !== null && assistantMsg.content !== undefined)
-      const assistantForPro: ChatCompletionMessage | null = hasContent
-        ? { role: 'assistant', content: assistantMsg.content }
+      // Strip tool_use blocks from the assistant message before sending to pro.
+      const textBlocks = Array.isArray(assistantMsg?.content)
+        ? assistantMsg!.content.filter((b) => b.type !== 'tool_use')
+        : []
+      const hasContent = textBlocks.length > 0 &&
+        textBlocks.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.length > 0)
+      const assistantForPro: AnthropicMessage | null = hasContent
+        ? { role: 'assistant', content: textBlocks }
         : null
-      const proMessages: ChatCompletionMessage[] = [
+
+      const proMessages: AnthropicMessage[] = [
         ...workingMessages,
         ...(assistantForPro ? [assistantForPro] : []),
         ...(advisorUserMsg ? [advisorUserMsg] : []),
@@ -1473,87 +1512,57 @@ export class EscalateDispatcher {
       }
 
       const proText = await proResp.text()
-      const proParsed = safeParseChatCompletion(proText)
-      const proReasoningRaw = proParsed?.choices?.[0]?.message?.['reasoning_content']
-      const proReasoning = typeof proReasoningRaw === 'string' && proReasoningRaw.length > 0
-        ? proReasoningRaw
-        : null
-      const proContentRaw = proParsed?.choices?.[0]?.message?.['content']
-      const proContent = typeof proContentRaw === 'string'
-        ? proContentRaw
-        : (proContentRaw == null ? '' : JSON.stringify(proContentRaw))
-      const proFullContent = proReasoning
-        ? `${proReasoning}
-
-${proContent}`
-        : proContent
+      const proParsed = parseNonStreamResponse(proText)
+      const proThinking = proParsed ? extractTextFromBlocks(proParsed.content.filter((b) => b.type === 'thinking')) : ''
+      const proContentRaw = proParsed ? extractTextFromBlocks(proParsed.content) : ''
+      const proFullContent = proThinking
+        ? `${proThinking}\n\n${proContentRaw}`
+        : proContentRaw
       this.logger.info?.(`[escalate] pro response (${proFullContent.length} chars): ${proFullContent.slice(0, 200)}${proFullContent.length > 200 ? '...' : ''}`)
 
-      const toolResult: ChatCompletionMessage = {
-        role: 'tool',
-        tool_call_id: advisorCall.id,
-        content: proFullContent,
+      const toolResult: AnthropicMessage = buildToolResultMessage(advisorCall.id, proFullContent)
+
+      // Build assistant tool_use message for the advisor call.
+      const assistantToolUse = buildAssistantToolUseMessage(
+        advisorCall.id,
+        advisorCall.name,
+        JSON.stringify(advisorCall.input),
+      )
+
+      // Preserve non-advisor content blocks from the assistant message.
+      const allBlocks = Array.isArray(assistantMsg?.content) ? assistantMsg!.content : []
+      const nonAdvisorBlocks = allBlocks.filter(
+        (b) => !(b.type === 'tool_use' && b.name === ADVISOR_TOOL_NAME)
+      )
+      const toolUseMsg: AnthropicMessage = {
+        role: 'assistant',
+        content: [
+          ...nonAdvisorBlocks,
+          ...(Array.isArray(assistantToolUse.content) ? assistantToolUse.content : []),
+        ],
       }
 
-      // Append the advisor call + its tool result. Non-advisor tool
-      // calls from the same assistant message are preserved (e.g. if
-      // flash also called read_file in the same turn). The remaining
-      // advisor calls are handled by recursion.
-      // Preserve reasoning_content — DeepSeek requires it to be passed
-      // back to the API in subsequent requests (thinking mode).
-      const flashReasoning = assistantMsg?.['reasoning_content']
-      const allToolCalls = Array.isArray(assistantMsg?.tool_calls) ? assistantMsg!.tool_calls! : []
-      const nonAdvisorCalls = allToolCalls.filter(
-        (tc) => tc?.function?.name !== ADVISOR_TOOL_NAME,
-      )
-      const firstCallOnly: ChatCompletionMessage = {
-        role: 'assistant',
-        content: assistantMsg?.content ?? null,
-        tool_calls: [
-          ...nonAdvisorCalls,
-          {
-            id: advisorCall.id,
-            type: 'function' as const,
-            function: { name: advisorCall.function.name, arguments: advisorCall.function.arguments },
-          },
-        ],
-        ...(typeof flashReasoning === 'string' && flashReasoning.length > 0
-          ? { reasoning_content: flashReasoning }
-          : {}),
-      }
-      workingMessages = [...workingMessages, firstCallOnly, toolResult]
+      workingMessages = [...workingMessages, toolUseMsg, toolResult]
     }
   }
 
-  /**
-   * Advisor streaming dispatcher. Loops flash turns, peeking each for an
-   * `advisor` tool call. On detection:
-   *   1. Inject a "consulting advisor" separator into the reasoning stream.
-   *   2. Stream pro's analysis into the reasoning stream (the think panel).
-   *   3. Inject a "back to flash" separator.
-   *   4. Call flash again with the tool result appended, and pump its
-   *      stream to the client.
-   *
-   * If flash never calls advisor, the buffered content is flushed and we
-   * passthrough. Recursion (multiple advisor calls in one turn) is supported.
-   */
+  // ----------------------------------------------------------------------
+  // Advisor mode — streaming
+  // ----------------------------------------------------------------------
+
   private async dispatchAdvisorStream(
     rawBody: unknown,
     clientHeaders: Record<string, string | string[] | undefined>,
     clientSignal?: AbortSignal
   ): Promise<DispatchResult> {
     const initialMessages = extractMessages(rawBody) ?? []
-    // Pre-process: rewrite any advisor tool_calls in the inbound history
-    // that arrived without a corresponding `tool` result message into
-    // synthetic user messages.
-    let workingMessages: ChatCompletionMessage[] = this.rewriteOrphanedAdvisorCalls(initialMessages)
+    let workingMessages: AnthropicMessage[] = this.rewriteOrphanedAdvisorCalls(initialMessages)
     const path: Array<'flash' | 'pro'> = []
     const initialStatus = { value: 200 as number }
     const initialHeaders = { value: {} as Record<string, string> }
 
     const dispatcher = this
 
-    // Local abort controller linked to clientSignal.
     const localAbort = new AbortController()
     const localSignal = localAbort.signal
     const onLocalAbort = () => {
@@ -1571,16 +1580,21 @@ ${proContent}`
 
     const passthrough = new ReadableStream<Uint8Array>({
       async start(controller) {
+        // Use a shared index rewriter for the entire stream (all flash turns,
+        // advisor separators, pro streams, etc.) — defined outside try so
+        // the catch block can also use it.
+        const rewriter = new ContentBlockIndexRewriter()
+        rewriter.reset()
         try {
-          // Outer loop: each iteration is one flash turn.
           // eslint-disable-next-line no-constant-condition
           while (true) {
+            const isFirstFlashCall = path.length === 0
             path.push('flash')
             const flashBody = dispatcher.buildFlashAdvisorBody(rawBody, workingMessages)
             const flashResp = await dispatcher.callUpstream(flashBody, clientHeaders, localSignal)
             if (!flashResp.ok || !flashResp.body) {
               const errText = flashResp.body ? await flashResp.text().catch(() => '') : ''
-              controller.enqueue(buildProxyErrorEvent(flashResp.status, errText, dispatcher.config.flashModel))
+              controller.enqueue(buildProtoProxyError(flashResp.status, errText, dispatcher.config.flashModel, rewriter))
               controller.close()
               return
             }
@@ -1589,10 +1603,9 @@ ${proContent}`
 
             const flashReader = flashResp.body.getReader()
             currentReader = flashReader
-            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader)
+            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader, rewriter, !isFirstFlashCall)
             if (peekResult.outcome === 'passthrough') {
               currentReader = null
-              // No advisor call — flash answered directly; flush & close.
               controller.close()
               return
             }
@@ -1610,23 +1623,26 @@ ${proContent}`
               return
             }
             path.push('pro')
-            dispatcher.logger.info?.(`[escalate] advisor tool call detected in stream (${advisorCall.function.arguments.length} chars) — consulting pro`)
+            dispatcher.logger.info?.(`[escalate] advisor tool call detected in stream (input: ${JSON.stringify(advisorCall.input).length} chars) — consulting pro`)
 
             const advisorQuestion = extractAdvisorQuestion(advisorCall)
             dispatcher.logger.info?.(`[escalate] advisor question: ${advisorQuestion ?? '(empty)'}`)
 
-            const advisorUserMsg: ChatCompletionMessage | null = advisorQuestion
+            const advisorUserMsg: AnthropicMessage | null = advisorQuestion
               ? { role: 'user', content: `[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] ${advisorQuestion}` }
               : null
 
-            // Strip tool_calls from the assistant message before sending to pro.
-            const hasContent2 = typeof assistantMsg.content === 'string'
-              ? assistantMsg.content.length > 0
-              : assistantMsg.content !== null && assistantMsg.content !== undefined
-            const assistantForPro2: ChatCompletionMessage | null = hasContent2
-              ? { role: 'assistant', content: assistantMsg.content }
+            // Strip tool_use blocks before sending to pro.
+            const textBlocks = Array.isArray(assistantMsg.content)
+              ? assistantMsg.content.filter((b) => b.type !== 'tool_use')
+              : []
+            const hasContent2 = textBlocks.length > 0 &&
+              textBlocks.some((b) => b.type === 'text' && typeof b.text === 'string' && b.text.length > 0)
+            const assistantForPro2: AnthropicMessage | null = hasContent2
+              ? { role: 'assistant', content: textBlocks }
               : null
-            const proMessages: ChatCompletionMessage[] = [
+
+            const proMessages: AnthropicMessage[] = [
               ...workingMessages,
               ...(assistantForPro2 ? [assistantForPro2] : []),
               ...(advisorUserMsg ? [advisorUserMsg] : []),
@@ -1636,54 +1652,45 @@ ${proContent}`
             const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
             if (!proResp.ok || !proResp.body) {
               const errText = proResp.body ? await proResp.text().catch(() => '') : ''
-              controller.enqueue(buildProxyErrorEvent(proResp.status, errText, dispatcher.config.proModel))
+              controller.enqueue(buildProtoProxyError(proResp.status, errText, dispatcher.config.proModel, rewriter))
               controller.close()
               return
             }
 
-            controller.enqueue(buildAdvisorBeginEvent(advisorQuestion ?? undefined, dispatcher.config.proModel))
+            controller.enqueue(buildProtoAdvisorBegin(advisorQuestion ?? undefined, dispatcher.config.proModel, rewriter))
             const proReader = proResp.body.getReader()
             currentReader = proReader
-            const proContent = await dispatcher.streamProAsReasoning(proReader, controller)
+            const proContent = await dispatcher.streamProAsReasoning(proReader, controller, rewriter)
             currentReader = null
             dispatcher.logger.info?.(`[escalate] pro response (${proContent.length} chars): ${proContent.slice(0, 200)}${proContent.length > 200 ? '...' : ''}`)
-            controller.enqueue(buildAdvisorEndEvent(dispatcher.config.proModel))
+            controller.enqueue(buildProtoAdvisorEnd(dispatcher.config.proModel, rewriter))
 
-            const toolResult: ChatCompletionMessage = {
-              role: 'tool',
-              tool_call_id: advisorCall.id,
-              content: proContent,
-            }
+            const toolResult: AnthropicMessage = buildToolResultMessage(advisorCall.id, proContent)
 
-            // Append advisor call + tool result. Preserve non-advisor
-            // tool calls from the same assistant message, and
-            // reasoning_content for DeepSeek thinking mode requirement.
-            const streamReasoning = assistantMsg['reasoning_content']
-            const allTCs = Array.isArray(assistantMsg.tool_calls) ? assistantMsg.tool_calls : []
-            const nonAdvisorTCs = allTCs.filter(
-              (tc: { function?: { name?: string } }) => tc?.function?.name !== ADVISOR_TOOL_NAME,
+            // Build assistant tool_use message for advisor call.
+            const assistantToolUse = buildAssistantToolUseMessage(
+              advisorCall.id,
+              advisorCall.name,
+              JSON.stringify(advisorCall.input),
             )
-            const firstCallOnly2: ChatCompletionMessage = {
+
+            const allBlocks = Array.isArray(assistantMsg.content) ? assistantMsg.content : []
+            const nonAdvisorTCs = allBlocks.filter(
+              (b) => !(b.type === 'tool_use' && b.name === ADVISOR_TOOL_NAME),
+            )
+            const toolUseMsg: AnthropicMessage = {
               role: 'assistant',
-              content: assistantMsg.content ?? null,
-              tool_calls: [
+              content: [
                 ...nonAdvisorTCs,
-                {
-                  id: advisorCall.id,
-                  type: 'function' as const,
-                  function: { name: advisorCall.function.name, arguments: advisorCall.function.arguments },
-                },
+                ...(Array.isArray(assistantToolUse.content) ? assistantToolUse.content : []),
               ],
-              ...(typeof streamReasoning === 'string' && streamReasoning.length > 0
-                ? { reasoning_content: streamReasoning }
-                : {}),
             }
-            workingMessages = [...workingMessages, firstCallOnly2, toolResult]
-            // Loop continues — call flash again with the tool result.
+
+            workingMessages = [...workingMessages, toolUseMsg, toolResult]
           }
         } catch (err) {
           try {
-            controller.enqueue(buildProxyErrorEvent(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel))
+            controller.enqueue(buildProtoProxyError(500, err instanceof Error ? err.message : String(err), dispatcher.config.flashModel, rewriter))
           } catch { /* noop */ }
           try { controller.close() } catch { /* noop */ }
         }
@@ -1705,50 +1712,70 @@ ${proContent}`
     }
   }
 
+  // ----------------------------------------------------------------------
+  // Peek a flash SSE stream for an advisor tool call (Anthropic format)
+  // ----------------------------------------------------------------------
+
   /**
    * Peek a flash SSE stream for an `advisor` tool call:
-   *   - Forward `delta.reasoning_content` immediately.
-   *   - Accumulate `delta.tool_calls` across chunks.
-   *   - Track `finish_reason` and decide once both conditions are met
-   *     (advisor tool name seen AND finish_reason === 'tool_calls').
-   *   - On advisor decision: cancel the reader and return the accumulated
-   *     assistant message so the caller can replay it as an assistant
-   *     message in the next pro call.
-   *   - On natural stream end without advisor call: flush buffered content
-   *     to the controller and return 'passthrough'.
+   *   - Forward `thinking_delta` immediately.
+   *   - Accumulate `input_json_delta` across chunks for tool_use blocks.
+   *   - Track `content_block_start` for tool_use blocks.
+   *   - Track `message_delta` for `stop_reason === 'tool_use'`.
+   *   - Detect advisor when both conditions met.
+   *   - On advisor: cancel the reader and return the accumulated assistant message.
+   *   - On natural stream end without advisor: return 'passthrough'.
    */
   private async peekAdvisorStream(
     controller: ReadableStreamDefaultController<Uint8Array>,
-    reader: ReadableStreamDefaultReader<Uint8Array>
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    rewriter: ContentBlockIndexRewriter,
+    swallowMessageStart: boolean = false
   ): Promise<
     | { outcome: 'passthrough' }
-    | { outcome: 'advisor'; assistantMsg: ChatCompletionMessage }
+    | { outcome: 'advisor'; assistantMsg: AnthropicMessage }
     | { outcome: 'error' }
   > {
+    rewriter.beginSubStream()
     const sseBuf = new SseLineBuffer()
-    // Buffer for data lines with deltas (content, tool_calls, finish_reason).
-    // Flushed on passthrough; discarded when advisor is detected.
-    //
-    // We must also buffer the empty-line separators that belong to content
-    // events; otherwise the separators get forwarded immediately (by the
-    // !line.isData branch) while the content data itself is deferred, which
-    // reorders the SSE stream and causes consecutive content events to lose
-    // their \n\n delimiters.
+    // Buffer bytes that haven't been forwarded yet (text_delta blocks,
+    // content_block_start/stop for text/tool_use blocks, etc.)
     let passthroughBytes: Uint8Array | null = null
-    let reasoningAcc = ''
-    const toolCalls = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>()
-    let sawAdvisorToolName = false
-    let finishReason: string | null = null
-    // When a content/tool_call/finish_reason line is buffered the next
-    // empty line (event separator) must also be buffered so the pairs stay
-    // in order.  Reasoning lines are forwarded live so their separators
-    // are forwarded live; a reasoning line resets this flag.
-    let bufMode = false
+    let stopReason: string | null = null
+    // Track tool_use blocks by index for input accumulation
+    const toolUseInputs = new Map<number, { id: string; name: string; inputAcc: string }>()
+    // Whether we're currently inside a text/tool_use block (buffering its events)
+    let inTextBlock = false
+    // Whether we're inside a message_delta / message_stop event sequence —
+    // these must be fully buffered (event: + data: + blank lines) so they
+    // can be discarded when advisor is detected, or forwarded atomically on
+    // passthrough.
+    let inTerminationEvent = false
+    // Deferred event: line — we wait for the corresponding data: line to decide
+    // whether to forward (thinking) or buffer (text/tool_use). This keeps
+    // event: and data: paired in the output.
+    let pendingEventLine: SseLine | null = null
+    // Accumulated text from flash's pre-advisor text block. In the advisor
+    // scenario (flash emits text THEN calls advisor), this text is a transition
+    // phrase and must be rewritten into a thinking block instead of being
+    // forwarded as final answer text.
+    let pendingTextAcc: string[] = []
+    let hasPendingTextBlock = false
+
+    const flushPendingEvent = (buffer: boolean) => {
+      if (pendingEventLine !== null) {
+        if (buffer) {
+          passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(pendingEventLine, rewriter))
+        } else {
+          controller.enqueue(rewriteIndexInLine(pendingEventLine, rewriter))
+        }
+        pendingEventLine = null
+      }
+    }
 
     const flushPassthrough = () => {
       if (passthroughBytes !== null) {
-        // Ensure the last buffered event is properly terminated per SSE spec.
-        controller.enqueue(Buffer.concat([passthroughBytes, Buffer.from('\n', 'utf-8')]))
+        controller.enqueue(passthroughBytes)
         passthroughBytes = null
       }
     }
@@ -1756,6 +1783,32 @@ ${proContent}`
     while (true) {
       const { value, done } = await reader.read()
       if (done) {
+        // Check for advisor tool_use even when stop_reason is not 'tool_use'
+        // (the model may have called advisor but also generated text).
+        let hasAdvisorAtEnd = false
+        for (const [, entry] of toolUseInputs) {
+          if (entry.name === ADVISOR_TOOL_NAME) {
+            hasAdvisorAtEnd = true
+            break
+          }
+        }
+        if (hasAdvisorAtEnd) {
+          rewriter.restoreCheckpoint()
+          // Build the assistant message from accumulated data
+          const contentBlocks: AnthropicContentBlock[] = []
+          const sorted = Array.from(toolUseInputs.entries()).sort(([a], [b]) => a - b)
+          for (const [, entry] of sorted) {
+            let parsedInput: unknown
+            try { parsedInput = JSON.parse(entry.inputAcc) } catch { parsedInput = { raw: entry.inputAcc } }
+            contentBlocks.push({ type: 'tool_use', id: entry.id, name: entry.name, input: parsedInput })
+          }
+          const assistantMsg: AnthropicMessage = { role: 'assistant', content: contentBlocks }
+          try { await reader.cancel() } catch { /* noop */ }
+          return { outcome: 'advisor', assistantMsg }
+        }
+        // Discard any saved checkpoint — the buffered events are being
+        // committed (forwarded), so the allocated indices are valid.
+        rewriter.discardCheckpoint()
         flushPassthrough()
         return { outcome: 'passthrough' }
       }
@@ -1766,107 +1819,248 @@ ${proContent}`
         const line = lines[li]
 
         if (!line.isData) {
-          // Empty line (SSE event separator).  If we are currently buffering
-          // content/tool_call lines, defer this separator as well so it stays
-          // adjacent to the data it belongs to.
-          if (bufMode) {
-            passthroughBytes = concatBytes(passthroughBytes, line.bytes)
-          } else {
-            controller.enqueue(line.bytes)
-          }
-          continue
-        }
-        if (line.done) {
-          // `data: [DONE]` — if we are currently buffering content/tool_call
-          // lines, defer [DONE] as well so it stays after the buffered data.
-          if (bufMode) {
-            passthroughBytes = concatBytes(passthroughBytes, line.bytes)
-          } else {
-            controller.enqueue(line.bytes)
-          }
-          continue
-        }
-        if (!line.delta) {
-          // Non-delta data line (e.g. cost event `{"choices":[],"cost":"0"}`).
-          // If we are currently buffering, defer it so it stays in order with
-          // the buffered content.
-          if (bufMode) {
-            passthroughBytes = concatBytes(passthroughBytes, line.bytes)
-          } else {
-            controller.enqueue(line.bytes)
-          }
-          continue
-        }
-
-        const delta = line.delta as {
-          content?: string
-          reasoning_content?: string
-          role?: string
-          tool_calls?: Array<{
-            index?: number
-            id?: string
-            type?: 'function'
-            function?: { name?: string; arguments?: string }
-          }>
-          finish_reason?: unknown
-        }
-
-        let lineBuffered = false
-
-        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
-          reasoningAcc += delta.reasoning_content
-          controller.enqueue(line.bytes)
-          bufMode = false  // reasoning resets buffering mode
-        }
-
-        if (typeof delta.content === 'string') {
-          passthroughBytes = concatBytes(passthroughBytes, line.bytes)
-          lineBuffered = true
-          bufMode = true
-        }
-
-        if (Array.isArray(delta.tool_calls)) {
-          if (!lineBuffered) passthroughBytes = concatBytes(passthroughBytes, line.bytes)
-          lineBuffered = true
-          bufMode = true
-          for (const tc of delta.tool_calls) {
-            const idx = typeof tc.index === 'number' ? tc.index : 0
-            const existing = toolCalls.get(idx) ?? {
-              id: '',
-              type: 'function' as const,
-              function: { name: '', arguments: '' },
+          // content_block_* event: lines: only keep if immediately followed by
+          // a data: line. Orphaned ones (no data: follows) are dropped entirely.
+          if (line.isEvent && (
+            line.eventType === 'content_block_start' ||
+            line.eventType === 'content_block_delta' ||
+            line.eventType === 'content_block_stop'
+          )) {
+            const nextLine = li + 1 < lines.length ? lines[li + 1] : null
+            if (nextLine && nextLine.isData) {
+              pendingEventLine = line
+            } else {
+              // Orphaned — silently drop
             }
-            if (typeof tc.id === 'string' && tc.id.length > 0) existing.id = tc.id
-            if (tc.function) {
-              if (typeof tc.function.name === 'string' && tc.function.name.length > 0) {
-                existing.function.name = tc.function.name
-                if (tc.function.name === ADVISOR_TOOL_NAME) sawAdvisorToolName = true
-              }
-              if (typeof tc.function.arguments === 'string') {
-                existing.function.arguments += tc.function.arguments
-              }
+            continue
+          }
+
+          // Swallow message_start event: line for intermediate sub-streams.
+          if (swallowMessageStart && line.eventType === 'message_start') {
+            continue
+          }
+          // Enter termination-event buffering for message_delta / message_stop.
+          if (line.eventType === 'message_delta' || line.eventType === 'message_stop') {
+            inTerminationEvent = true
+          }
+          if (inTextBlock || inTerminationEvent) {
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+            // A blank line (neither event nor data) ends the current event sequence
+            if (!line.isEvent && !line.eventType) {
+              inTerminationEvent = false
             }
-            toolCalls.set(idx, existing)
+          } else {
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        if (!line.anthropicEvent) {
+          flushPendingEvent(inTextBlock)
+          if (inTextBlock) {
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          } else {
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        const event = line.anthropicEvent
+
+        // thinking_delta → forward immediately
+        const thinkText = isThinkingDelta(line)
+        if (thinkText !== undefined) {
+          // If we were buffering a text block, flush it first.
+          if (inTextBlock) {
+            flushPassthrough()
+            inTextBlock = false
+          }
+          flushPendingEvent(false)
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // text_delta → buffer
+        const txt = isTextDelta(line)
+        if (txt !== undefined) {
+          flushPendingEvent(true)
+          inTextBlock = true
+          hasPendingTextBlock = true
+          pendingTextAcc.push(txt)
+          passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // content_block_start
+        if (event.type === 'content_block_start') {
+          if (event.content_block.type === 'thinking') {
+            // Thinking block — flush any buffered text and forward immediately.
+            if (inTextBlock) {
+              flushPassthrough()
+              inTextBlock = false
+            }
+            // Flush pending event: line AFTER flushPassthrough so the event:
+            // line stays in the right position relative to buffered content.
+            flushPendingEvent(false)
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          } else if (event.content_block.type === 'tool_use') {
+            // Tool_use block — start tracking input accumulation.
+            // Treat like a text block for the purpose of event buffering
+            // so event: lines don't leak when data: lines are buffered.
+            if (inTextBlock) {
+              if (hasPendingTextBlock) {
+                // advisor 场景：flash 先输出 text 再调 advisor —— text 是过渡语，
+                // 重写为 thinking block（出现在客户端思考面板，而非最终回答）。
+                rewriter.restoreCheckpoint()
+                passthroughBytes = null
+                const thinkingText = pendingTextAcc.join('')
+                if (thinkingText.length > 0) {
+                  controller.enqueue(buildThinkingBlockBytes(thinkingText, rewriter))
+                }
+                pendingTextAcc = []
+                hasPendingTextBlock = false
+              } else {
+                flushPassthrough()
+              }
+              inTextBlock = false
+            }
+            // Flush pending event: line AFTER any early flushPassthrough,
+            // so it stays in the same buffer as the data: line below.
+            flushPendingEvent(true)
+            inTextBlock = true
+            const idx = event.index
+            const block = event.content_block
+            // Save a checkpoint before the first tool_use block so we can
+            // roll back its indices if advisor is detected and the buffered
+            // events are discarded.
+            if (toolUseInputs.size === 0) {
+              rewriter.saveCheckpoint()
+            }
+            if (!toolUseInputs.has(idx)) {
+              toolUseInputs.set(idx, { id: block.id ?? '', name: block.name ?? '', inputAcc: '' })
+            }
+            // Buffer this line — it will be flushed on passthrough.
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          } else {
+            // text block start — flash 第一轮的 text。在 advisor 场景下这是
+            // 过渡语（flash 先说话再调 advisor），需重写为 thinking；在
+            // passthrough 场景下是最终答案，原样输出。保存 checkpoint 以便
+            // advisor 场景回滚 index 后重写为单个 thinking block。
+            rewriter.saveCheckpoint()
+            flushPendingEvent(true)
+            inTextBlock = true
+            hasPendingTextBlock = true
+            pendingTextAcc = []
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        // content_block_delta for input_json_delta
+        if (event.type === 'content_block_delta') {
+          if (event.delta.type === 'input_json_delta' && event.delta.partial_json) {
+            flushPendingEvent(true)
+            const existing = toolUseInputs.get(event.index) ?? { id: '', name: '', inputAcc: '' }
+            existing.inputAcc += event.delta.partial_json
+            toolUseInputs.set(event.index, existing)
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+            continue
+          }
+          // Other deltas (text_delta, thinking_delta handled above, signature_delta)
+          flushPendingEvent(inTextBlock)
+          if (inTextBlock) {
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          } else {
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        // content_block_stop
+        if (event.type === 'content_block_stop') {
+          flushPendingEvent(inTextBlock)
+          if (inTextBlock) {
+            // Text block or tool_use block — buffer (keep inTextBlock true
+            // so the trailing blank separator is also buffered, not forwarded).
+            passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          } else {
+            // Thinking block — forward immediately.
+            controller.enqueue(rewriteIndexInLine(line, rewriter))
+          }
+          continue
+        }
+
+        // message_delta — capture stop_reason AND buffer bytes (forwarded on passthrough;
+        // swallowed when advisor is detected because reader is cancelled). Also enter
+        // termination-event mode so the preceding event: line and trailing blank line
+        // are buffered too.
+        if (event.type === 'message_delta') {
+          flushPendingEvent(true)
+          inTerminationEvent = true
+          stopReason = event.delta.stop_reason
+          passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // message_stop — buffer bytes; same termination-event handling as above.
+        if (event.type === 'message_stop') {
+          flushPendingEvent(true)
+          inTerminationEvent = true
+          passthroughBytes = concatBytes(passthroughBytes, rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // message_start — forward (or swallow entirely for intermediate sub-streams
+        // like the flash retry after advisor consultation)
+        if (event.type === 'message_start') {
+          if (swallowMessageStart) {
+            continue // swallow — don't buffer, don't forward
+          }
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+          continue
+        }
+
+        // ping etc.
+        controller.enqueue(rewriteIndexInLine(line, rewriter))
+      }
+
+      // Check advisor detection condition
+      if (stopReason === 'tool_use') {
+        // Re-evaluate: check if ANY accumulated tool_use block is named 'advisor'
+        let hasAdvisor = false
+        for (const [, entry] of toolUseInputs) {
+          if (entry.name === ADVISOR_TOOL_NAME) {
+            hasAdvisor = true
+            break
           }
         }
+        if (hasAdvisor && stopReason === 'tool_use') {
+          // Roll back the index counter — the tool_use block events were
+          // buffered and will be discarded; their allocated indices should
+          // not leave a gap in the client-visible sequence.
+          rewriter.restoreCheckpoint()
+          // Build the assistant message from accumulated data
+          const contentBlocks: AnthropicContentBlock[] = []
+          // Sort by index to maintain order
+          const sorted = Array.from(toolUseInputs.entries()).sort(([a], [b]) => a - b)
+          for (const [, entry] of sorted) {
+            let parsedInput: unknown
+            try {
+              parsedInput = JSON.parse(entry.inputAcc)
+            } catch {
+              parsedInput = { raw: entry.inputAcc }
+            }
+            contentBlocks.push({
+              type: 'tool_use',
+              id: entry.id,
+              name: entry.name,
+              input: parsedInput,
+            })
+          }
 
-        if (typeof delta.finish_reason === 'string' && delta.finish_reason.length > 0) {
-          finishReason = delta.finish_reason
-          // The finish_reason line itself may not have been buffered yet
-          // (e.g. delta: {}). Buffer it so it reaches the client on passthrough.
-          if (!lineBuffered) { passthroughBytes = concatBytes(passthroughBytes, line.bytes); bufMode = true }
-        }
-
-        if (sawAdvisorToolName && finishReason === 'tool_calls') {
-          const assistantMsg: ChatCompletionMessage = {
+          const assistantMsg: AnthropicMessage = {
             role: 'assistant',
-            content: null,
-            tool_calls: Array.from(toolCalls.values()).map((tc) => ({
-              id: tc.id || undefined,
-              type: 'function',
-              function: { name: tc.function.name, arguments: tc.function.arguments },
-            })),
-            ...(reasoningAcc.length > 0 ? { reasoning_content: reasoningAcc } : {}),
+            content: contentBlocks,
           }
           try { await reader.cancel() } catch { /* noop */ }
           return { outcome: 'advisor', assistantMsg }
@@ -1875,69 +2069,105 @@ ${proContent}`
     }
   }
 
+  // ----------------------------------------------------------------------
+  // Stream pro's response as reasoning (Anthropic format)
+  // ----------------------------------------------------------------------
+
   /**
-   * Stream pro's response into the controller's reasoning_content stream. Pro
-   * is consulted as a passive advisor — we just want its full analysis shown
-   * in the think panel. Both pro's `reasoning_content` AND `content` are
-   * rewritten into the reasoning stream so the user sees pro's reasoning
-   * followed by pro's conclusion, all in the think panel.
+   * Stream pro's response into the controller's think panel. Pro is consulted
+   * as a passive advisor — both thinking_delta AND text_delta are rewritten
+   * into the thinking content block stream.
    *
-   * Returns the combined reasoning + content text so the dispatcher can
-   * put the full analysis into the `tool` result message for flash.
+   * Returns the combined text for the tool result message.
    */
   private async streamProAsReasoning(
     reader: ReadableStreamDefaultReader<Uint8Array>,
-    controller: ReadableStreamDefaultController<Uint8Array>
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    rewriter: ContentBlockIndexRewriter
   ): Promise<string> {
+    rewriter.beginSubStream()
     const sseBuf = new SseLineBuffer()
-    let reasoningAcc = ''
+    let thinkingAcc = ''
     let contentAcc = ''
+    // When true we swallow all lines (event: + data: + blank) until the blank
+    // line separator that terminates the current SSE event. This ensures
+    // message_delta / message_stop / message_start from the pro sub-stream
+    // are completely invisible to the client.
+    let swallowing = false
+
     while (true) {
       const { value, done } = await reader.read()
       if (done) {
-        // Combine reasoning + content so flash sees pro's full analysis.
-        return reasoningAcc ? `${reasoningAcc}\n\n${contentAcc}` : contentAcc
+        return thinkingAcc ? `${thinkingAcc}\n\n${contentAcc}` : contentAcc
       }
       if (!value || value.length === 0) continue
       const { lines } = sseBuf.feed(value)
-      for (const line of lines) {
-        // pro 子流的 `data: [DONE]` 绝不能转发给客户端 —— 它会让
-        // 客户端误以为整个 SSE 流结束并停止读取，导致后续的 advisor
-        // end 分隔符 + flash retry 的内容全部丢失。pro 的 [DONE] 只
-        // 标记 pro 子流结束，整个客户端流由 flash retry 的最终
-        // [DONE]（在 passthrough 时转发）终止。
-        if (line.done) continue
-        if (!line.isData || !line.delta) {
-          controller.enqueue(line.bytes)
+      for (let li = 0; li < lines.length; li++) {
+        const line = lines[li]
+        // Drop orphaned content_block event: lines (no following data:).
+        if (isOrphanedContentBlockEvent(lines, li)) continue
+        // Pro sub-stream's message_stop / message_delta / message_start must NOT
+        // be forwarded to the client — they would terminate the client stream
+        // prematurely or confuse it with duplicate message_start events.
+        if (line.anthropicEvent) {
+          const event = line.anthropicEvent
+
+          if (event.type === 'message_stop' || event.type === 'message_delta' || event.type === 'message_start') {
+            swallowing = true
+            continue // swallow the data: line
+          }
+
+          if (event.type === 'content_block_delta') {
+            if (event.delta.type === 'thinking_delta' && event.delta.thinking) {
+              thinkingAcc += event.delta.thinking
+              controller.enqueue(rewriteIndexInLine(line, rewriter))
+              continue
+            }
+            if (event.delta.type === 'text_delta' && event.delta.text) {
+              contentAcc += event.delta.text
+              // Rewrite text → thinking (appear in think panel).
+              const rewrittenPayload = JSON.stringify({
+                type: 'content_block_delta',
+                index: rewriter.rewriteBlockIndex(event.index, false),
+                delta: { type: 'thinking_delta', thinking: event.delta.text },
+              })
+              controller.enqueue(Buffer.from(`data: ${rewrittenPayload}\n`, 'utf-8'))
+              continue
+            }
+          }
+
+          // pro 的 text block → 重写为客户端 thinking block（type: text → thinking）
+          if (event.type === 'content_block_start' && event.content_block.type === 'text') {
+            const rewrittenPayload = JSON.stringify({
+              type: 'content_block_start',
+              index: rewriter.rewriteBlockIndex(event.index, true),
+              content_block: { type: 'thinking', thinking: '' },
+            })
+            controller.enqueue(Buffer.from(`data: ${rewrittenPayload}\n`, 'utf-8'))
+            continue
+          }
+        }
+
+        // Swallow event: lines and blank lines that belong to swallowed events.
+        if (line.eventType === 'message_delta' || line.eventType === 'message_stop' || line.eventType === 'message_start') {
+          swallowing = true
           continue
         }
-        const delta = line.delta as { content?: string; reasoning_content?: string }
-        // Forward reasoning_content as-is AND accumulate for the tool result.
-        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content.length > 0) {
-          reasoningAcc += delta.reasoning_content
+        if (swallowing) {
+          // Blank line (neither data nor event) terminates the swallowed event.
+          if (!line.isData && !line.isEvent) {
+            swallowing = false
+          }
+          continue
+        }
+
+        // Forward all other lines (event:, blank lines, content_block_start/stop, etc.)
+        // but rewrite content_block indices.
+        if (rewriter && line.anthropicEvent) {
+          controller.enqueue(rewriteIndexInLine(line, rewriter))
+        } else {
           controller.enqueue(line.bytes)
         }
-        // Rewrite content -> reasoning_content (so it shows in the think panel).
-        if (typeof delta.content === 'string' && delta.content.length > 0) {
-                  contentAcc += delta.content
-                  try {
-                    const original = line.rawLine.startsWith('data:') ? line.rawLine.slice(5).trim() : ''
-                    const parsed = JSON.parse(original) as { choices?: Array<{ delta?: Record<string, unknown> }> }
-                    const c0 = parsed.choices?.[0]
-                    if (c0 && c0.delta) {
-                      const newDelta: Record<string, unknown> = { ...c0.delta, reasoning_content: delta.content }
-                      delete newDelta['content']
-                      // Preserve all top-level fields (id/object/created/model/...)
-                      // from the original chunk, only swapping content -> reasoning_content.
-                      const newPayload = JSON.stringify({ ...parsed, choices: [{ ...c0, delta: newDelta }] })
-                      controller.enqueue(Buffer.from(`data: ${newPayload}\n`, 'utf-8'))
-                    } else {
-                      controller.enqueue(line.bytes)
-                    }
-                  } catch {
-                    controller.enqueue(line.bytes)
-                  }
-                }
       }
     }
   }
@@ -1945,8 +2175,6 @@ ${proContent}`
 
 /** Build the singleton undici Pool for a given config. */
 export function buildEscalatePool(apiBase: string, opts?: { connections?: number; keepAliveTimeout?: number }): Pool {
-  // undici Pool expects the origin (scheme + host + port), not a full URL.
-  // Strip the path portion so `/v1/chat/completions` doesn't get rejected.
   const base = normalizeBase(apiBase)
   let origin = base
   const schemeEnd = base.indexOf('://')

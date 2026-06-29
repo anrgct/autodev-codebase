@@ -2,12 +2,13 @@
  * Escalate HTTP proxy — `createServer` + `eventHandler`-based router built on h3.
  *
  * Routes:
- *   - `POST /v1/chat/completions` — main entry point; injects contract, peeks for NEEDS_PRO, escalates.
- *   - `POST /chat/completions`    — alias, since some clients omit the `/v1` prefix.
- *   - `GET  /health`              — health check, returns `{ ok: true, model: { flash, pro } }`.
- *   - `GET  /v1/models`           — passthrough to upstream.
- *   - `* /v1/*`                   — generic passthrough to the upstream.
- *   - `* /*`                      — fallback 404 with a helpful hint.
+ *   - `POST /v1/messages`              — main entry point (Anthropic Messages API).
+ *   - `POST /v1/chat/completions`      — alias for backward compat (OpenAI clients).
+ *   - `POST /chat/completions`         — alias, since some clients omit the `/v1` prefix.
+ *   - `GET  /health`                   — health check, returns `{ ok: true, model: { flash, pro } }`.
+ *   - `GET  /v1/models`                 — passthrough to upstream.
+ *   - `* /v1/*`                         — generic passthrough to the upstream.
+ *   - `* /*`                            — fallback 404 with a helpful hint.
  *
  * The server is intentionally minimal: every endpoint is an `eventHandler`,
  * every I/O function is `defineEventHandler`/h3-native, and streaming uses
@@ -70,10 +71,13 @@ export async function startEscalateServer(opts: EscalateServerOptions): Promise<
     upstream: opts.config.apiBase,
   })))
 
-  // ----- /v1/chat/completions -----
+  // ----- /v1/messages (Anthropic Messages API) -----
   const chatHandler: EventHandler = async (event) => {
     return handleChat(event, dispatcher, logger)
   }
+  // Primary route: Anthropic Messages API format.
+  router.post('/v1/messages', chatHandler)
+  // Aliases for backward compat (OpenAI clients).
   router.post('/v1/chat/completions', chatHandler)
   // Some clients omit the `/v1` prefix; support both.
   router.post('/chat/completions', chatHandler)
@@ -227,12 +231,13 @@ async function handlePassthrough(
   config: EscalateConfig,
   logger: NonNullable<EscalateServerOptions['logger']>
 ): Promise<unknown> {
-  // `apiBase` already includes the version prefix (e.g. `https://api.deepseek.com/v1`).
-  // We just append the rest of the path under that prefix.
+  // Passthrough route is `/v1/**`; `**` captures everything after `/v1/`.
+  // We manually prepend `/v1/` because `apiBase` no longer includes the version
+  // prefix — that prefix is added by `callUpstream` at `/v1/messages`.
   // h3's radix3-based router exposes the `**` catch-all under the `_` key
   // (single underscore) when no name is given via `**name`.
   const targetPath = (getRouterParam(event, '_') ?? '').toString()
-  const url = `${config.apiBase.replace(/\/+$/, '')}/${targetPath}`.replace(/\/+$/, '')
+  const url = `${config.apiBase.replace(/\/+$/, '')}/v1/${targetPath}`.replace(/\/+$/, '')
   const headers = collectClientHeaders(event)
   // Replace Authorization if apiKey is set.
   if (config.apiKey) headers['authorization'] = `Bearer ${config.apiKey}`
@@ -296,6 +301,7 @@ export function buildEscalateApp(config: EscalateConfig, logger?: EscalateServer
     upstream: config.apiBase,
   })))
   const chatHandler: EventHandler = async (event) => handleChat(event, dispatcher, logger ?? {})
+  router.post('/v1/messages', chatHandler)
   router.post('/v1/chat/completions', chatHandler)
   router.post('/chat/completions', chatHandler)
   app.use(router)

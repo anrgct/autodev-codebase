@@ -96,6 +96,8 @@ function makeConfig(): EscalateConfig {
     port: 0,
     host: '127.0.0.1',
     stickyProTtlMs: 0,
+    thinkingBudget: 8000,
+    maxTokens: 4096,
   }
 }
 

@@ -67,11 +67,11 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
   if (options.host) cliOverrides['escalateHost'] = options.host
 
   // Merge: CLI > ConfigProvider (global+project+default)
-  const apiBase = String(cliOverrides['escalateApiBase'] ?? fullConfig.escalateApiBase ?? 'https://api.deepseek.com/v1')
+  const apiBase = String(cliOverrides['escalateApiBase'] ?? fullConfig.escalateApiBase)
   const apiKey = cliOverrides['escalateApiKey'] ?? fullConfig.escalateApiKey ?? undefined
-  const flashModel = String(cliOverrides['escalateFlashModel'] ?? fullConfig.escalateFlashModel ?? 'deepseek-v4-flash')
-  const proModel = String(cliOverrides['escalateProModel'] ?? fullConfig.escalateProModel ?? 'deepseek-v4-pro')
-  const host = String(cliOverrides['escalateHost'] ?? fullConfig.escalateHost ?? 'localhost')
+  const flashModel = String(cliOverrides['escalateFlashModel'] ?? fullConfig.escalateFlashModel)
+  const proModel = String(cliOverrides['escalateProModel'] ?? fullConfig.escalateProModel)
+  const host = String(cliOverrides['escalateHost'] ?? fullConfig.escalateHost)
 
   const portRaw = cliOverrides['escalatePort'] ?? fullConfig.escalatePort
   const port = typeof portRaw === 'number' ? portRaw : parseInt(String(portRaw), 10) || 8080
@@ -83,7 +83,15 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
   const stickyNum = typeof stickyProTtlMsRaw === 'number' ? stickyProTtlMsRaw : parseInt(String(stickyProTtlMsRaw), 10)
   const stickyProTtlMs = Number.isFinite(stickyNum) && stickyNum >= 0 ? stickyNum : 300000
 
-  const escalationMode = (fullConfig.escalateMode ?? 'self-report') as 'self-report' | 'advisor'
+  const escalationMode = fullConfig.escalateMode as 'self-report' | 'advisor'
+
+  const thinkingBudget = typeof fullConfig.escalateThinkingBudget === 'number'
+    ? fullConfig.escalateThinkingBudget
+    : 8000
+
+  const maxTokens = typeof fullConfig.escalateMaxTokens === 'number'
+    ? fullConfig.escalateMaxTokens
+    : 4096
 
   return {
     mode: escalationMode,
@@ -94,6 +102,8 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
     port,
     host,
     stickyProTtlMs,
+    thinkingBudget,
+    maxTokens,
   }
 }
 
@@ -109,13 +119,15 @@ function printStartupBanner(cfg: EscalateConfig, port: number): void {
   console.log(`  Upstream API : ${cfg.apiBase}`)
   console.log(`  Mode         : ${cfg.mode}  (${cfg.mode === 'self-report' ? "model self-reports <<<NEEDS_PRO>>> marker" : "virtual 'advisor' tool — flash calls it, proxy routes to pro"})`)
   console.log(`  Flash model  : ${cfg.flashModel}  (first attempt)`)
-  console.log(`  Pro model    : ${cfg.proModel}    (<<<NEEDS_PRO>>> escalation)`)
+  console.log(`  Pro model    : ${cfg.proModel}    (needs stronger tier)`)
   console.log(`  API key      : ${cfg.apiKey ? '(configured)' : '(forwarded from client)'}`)
   console.log(`  Sticky pro   : ${cfg.stickyProTtlMs > 0 ? `${cfg.stickyProTtlMs}ms TTL` : 'disabled'}`)
+  console.log(`  Thinking bud : ${cfg.thinkingBudget}`)
+  console.log(`  Max tokens   : ${cfg.maxTokens}`)
   console.log(bar)
   console.log('')
-  console.log('  Point any OpenAI-compatible client at this URL. Example:')
-  console.log(`    export OPENAI_API_BASE=http://${cfg.host}:${port}/v1`)
+  console.log('  Point any Anthropic-compatible client at this URL. Example:')
+  console.log(`    export ANTHROPIC_BASE_URL=http://${cfg.host}:${port}`)
   console.log('')
   console.log('  Health check:')
   console.log(`    curl http://${cfg.host}:${port}/health`)
@@ -188,10 +200,10 @@ export function createEscalateCommand(): Command {
   const command = new Command('escalate')
 
   command
-    .description('Start a local HTTP proxy that auto-escalates flash → pro on <<<NEEDS_PRO>>> markers')
+    .description('Start a local HTTP proxy that auto-escalates flash → pro (self-report markers or advisor tool)')
     .option('--port <port>', 'Listening port (default: 8080)')
     .option('--host <host>', 'Listening host (default: localhost)')
-    .option('--api-base <url>', 'Upstream OpenAI-compatible API base URL (default: https://api.deepseek.com/v1)')
+    .option('--api-base <url>', 'Upstream Anthropic-compatible API base URL (default: https://api.deepseek.com/anthropic)')
     .option('--api-key <key>', 'Upstream API key (if not set, forwards client Authorization header)')
     .option('--flash-model <id>', 'Flash (cheap) model ID (default: deepseek-v4-flash)')
     .option('--pro-model <id>', 'Pro (strong) model ID (default: deepseek-v4-pro)')

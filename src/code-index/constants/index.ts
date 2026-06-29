@@ -48,8 +48,8 @@ export const DEFAULT_CONFIG: CodeIndexConfig = {
   summarizerRetryDelayMs: 1000,
 
   // Escalate proxy defaults
-  escalateMode: 'self-report',
-  escalateApiBase: 'https://api.deepseek.com/v1',
+  escalateMode: 'advisor',
+  escalateApiBase: 'https://api.deepseek.com/anthropic',
   escalateFlashModel: 'deepseek-v4-flash',
   escalateProModel: 'deepseek-v4-pro',
   escalatePort: 8080,

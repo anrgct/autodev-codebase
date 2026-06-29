@@ -263,6 +263,8 @@ export interface CodeIndexConfig {
   escalatePort?: number
   escalateHost?: string
   escalateStickyProTtlMs?: number
+  escalateThinkingBudget?: number
+  escalateMaxTokens?: number
 
   // QRRanker shared tuning: number of decode steps to average attention over.
   // 0 = default (prefill-only, PURE_SYMBOL_LINE_PENALTY=0.01 cleans up symbol lines).

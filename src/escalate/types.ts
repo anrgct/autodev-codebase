@@ -35,6 +35,17 @@ export interface EscalateConfig {
    * Set to 0 to disable sticky pro entirely.
    */
   stickyProTtlMs: number
+  /**
+   * Anthropic thinking budget tokens. When the client request does NOT include
+   * a `thinking` field, the proxy injects one with this budget (default: 8000).
+   * When the client DOES include `thinking`, it is passed through unchanged.
+   */
+  thinkingBudget: number
+  /**
+   * Default max_tokens for Anthropic Messages API (required field).
+   * Used when the client request does not include `max_tokens`.
+   */
+  maxTokens: number
 }
 
 /**
