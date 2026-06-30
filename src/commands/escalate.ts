@@ -93,6 +93,8 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
     ? fullConfig.escalateMaxTokens
     : 4096
 
+  const forceAdvisor = fullConfig.escalateForceAdvisor === true
+
   return {
     mode: escalationMode,
     apiBase,
@@ -104,6 +106,7 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
     stickyProTtlMs,
     thinkingBudget,
     maxTokens,
+    forceAdvisor,
   }
 }
 
@@ -124,6 +127,7 @@ function printStartupBanner(cfg: EscalateConfig, port: number): void {
   console.log(`  Sticky pro   : ${cfg.stickyProTtlMs > 0 ? `${cfg.stickyProTtlMs}ms TTL` : 'disabled'}`)
   console.log(`  Thinking bud : ${cfg.thinkingBudget}`)
   console.log(`  Max tokens   : ${cfg.maxTokens}`)
+  console.log(`  Force advisor: ${cfg.forceAdvisor ? 'ON (preset-question pre-consultation)' : 'off'}`)
   console.log(bar)
   console.log('')
   console.log('  Point any Anthropic-compatible client at this URL. Example:')

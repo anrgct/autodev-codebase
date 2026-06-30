@@ -98,6 +98,7 @@ function makeConfig(): EscalateConfig {
     stickyProTtlMs: 0,
     thinkingBudget: 8000,
     maxTokens: 4096,
+    forceAdvisor: false,
   }
 }
 

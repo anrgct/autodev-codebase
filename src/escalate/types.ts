@@ -46,6 +46,14 @@ export interface EscalateConfig {
    * Used when the client request does not include `max_tokens`.
    */
   maxTokens: number
+  /**
+   * Forced-advisor switch (advisor mode only, default false). When enabled,
+   * the proxy deterministically fakes an advisor tool_call with a preset
+   * question at fixed moments (user turn / tool error / every N tools)
+   * BEFORE the flash loop, so pro is guaranteed to be consulted. See
+   * docs/plans/260630-force-advisor.md.
+   */
+  forceAdvisor: boolean
 }
 
 /**

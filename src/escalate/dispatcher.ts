@@ -50,11 +50,14 @@ import {
   buildAdvisorEndEvent as buildProtoAdvisorEnd,
   buildTierSwitchEvent as buildProtoTierSwitch,
   buildProxyErrorEvent as buildProtoProxyError,
+  buildMessageStartEvent as buildProtoMessageStart,
   parseNonStreamResponse,
   extractTextFromBlocks,
+  extractThinkingFromBlocks,
   extractFirstToolUse,
   buildToolResultMessage,
   buildAssistantToolUseMessage,
+  ensureAssistantThinkingBlocks,
   buildUserTextMessage,
   buildAssistantTextMessage,
   ContentBlockIndexRewriter,
@@ -66,9 +69,9 @@ import type { DispatchResult, EscalateConfig } from './types'
 import { StickyStore } from './sticky'
 
 /**
- * Default upstream request timeout (2 minutes).
+ * Default upstream request timeout (5 minutes).
  */
-const UPSTREAM_TIMEOUT_MS = 120_000
+const UPSTREAM_TIMEOUT_MS = 300_000
 
 /**
  * Hard ceiling on how much text we accumulate in the streaming peek loop
@@ -266,6 +269,91 @@ export function extractAllAdvisorToolCalls(
       name: b.name,
       input: (b.input as Record<string, unknown>) ?? {},
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Forced-advisor trigger detection (stateless, based on messages shape)
+// ---------------------------------------------------------------------------
+
+/**
+ * Preset questions for forced-advisor triggers. Hardcoded per spec — the
+ * whole point of forced mode is a deterministic question, not one the model
+ * composes. See docs/plans/260630-force-advisor.md.
+ */
+const FORCE_ADVISOR_USER_TURN_QUESTION = '用户指令的核心需求与歧义？'
+const FORCE_ADVISOR_TOOL_ERROR_QUESTION = '工具报错的根因与修复建议？'
+const FORCE_ADVISOR_TOOL_COUNT_QUESTION = '当前方向和进度评估与下一步建议？'
+const FORCE_ADVISOR_TOOL_COUNT_INTERVAL = 5
+
+export type ForcedAdvisorTrigger =
+  | { type: 'user-turn'; question: string }
+  | { type: 'tool-error'; question: string }
+  | { type: 'tool-count'; question: string }
+
+/**
+ * Count real (non-advisor) `tool_use` blocks across all messages. Advisor
+ * tool_use blocks (forced or voluntary) are excluded so they don't pollute
+ * the "every N real tools" cadence.
+ */
+export function countRealToolUses(messages: AnthropicMessage[]): number {
+  let n = 0
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue
+    for (const b of m.content) {
+      if (b.type === 'tool_use' && b.name !== ADVISOR_TOOL_NAME) n++
+    }
+  }
+  return n
+}
+
+/**
+ * Heuristic: does this `tool_result` block represent an error? Anthropic
+ * defines an `is_error` flag, but most clients only put error text in the
+ * content. Conservative pattern match on the content string. Tunable.
+ */
+export function isToolResultError(block: AnthropicContentBlock): boolean {
+  if (block.is_error === true) return true
+  const c = block.content
+  if (typeof c === 'string') {
+    if (/^\s*(error|err):\s/i.test(c)) return true
+    if (c.includes('<error>')) return true
+  }
+  return false
+}
+
+/**
+ * Detect whether the proxy should force an advisor consultation BEFORE
+ * entering the flash loop. Purely a function of the messages shape —
+ * stateless (see docs/plans/260630-force-advisor.md decision 2 for why the
+ * trailing-message shape is sufficient for de-duplication).
+ *
+ * Priority: tool-error > tool-count; user-turn is mutually exclusive with the
+ * tool-* rules (they key off different trailing shapes). At most one trigger.
+ */
+export function detectForcedAdvisor(messages: AnthropicMessage[]): ForcedAdvisorTrigger | null {
+  if (!Array.isArray(messages) || messages.length === 0) return null
+  const last = messages[messages.length - 1]
+  if (!last || last.role !== 'user') return null
+
+  const blocks = Array.isArray(last.content) ? last.content : []
+  const toolResults = blocks.filter((b) => b.type === 'tool_result')
+
+  if (toolResults.length === 0) {
+    // Trailing user message without tool_result → a fresh user turn (rule 1).
+    return { type: 'user-turn', question: FORCE_ADVISOR_USER_TURN_QUESTION }
+  }
+
+  // Trailing user message carries tool_result(s) → we're inside a tool loop.
+  // Rule 3 (error) takes priority over rule 2 (count).
+  if (toolResults.some((b) => isToolResultError(b))) {
+    return { type: 'tool-error', question: FORCE_ADVISOR_TOOL_ERROR_QUESTION }
+  }
+
+  const n = countRealToolUses(messages)
+  if (n > 0 && n % FORCE_ADVISOR_TOOL_COUNT_INTERVAL === 0) {
+    return { type: 'tool-count', question: FORCE_ADVISOR_TOOL_COUNT_QUESTION }
+  }
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -610,6 +698,12 @@ export class EscalateDispatcher {
 
     // Ensure required max_tokens field is present
     const safeBody = { ...body }
+    // Normalize history so reasoning models (e.g. DeepSeek) accept it: every
+    // assistant message must carry a thinking block in thinking mode. Clients
+    // frequently drop the thinking block when replaying prior tool turns.
+    if (Array.isArray(safeBody['messages'])) {
+      safeBody['messages'] = ensureAssistantThinkingBlocks(safeBody['messages'] as AnthropicMessage[])
+    }
     if (typeof safeBody['max_tokens'] !== 'number') {
       safeBody['max_tokens'] = this.config.maxTokens
     }
@@ -1431,6 +1525,68 @@ export class EscalateDispatcher {
     const path: Array<'flash' | 'pro'> = []
     let sawAdvisorCall = false
 
+    // ---- Forced advisor: optional deterministic pre-consultation ----
+    // When enabled, the proxy fakes an advisor tool_call with a preset question
+    // and consults pro BEFORE the flash loop, so flash starts its first round
+    // already seeing an advisor result in history. pro is guaranteed to be
+    // consulted and the question is the deterministic preset. See
+    // docs/plans/260630-force-advisor.md.
+    if (this.config.forceAdvisor) {
+      const trigger = detectForcedAdvisor(workingMessages)
+      if (trigger) {
+        path.push('pro')
+        this.logger.info?.(`[escalate] forced advisor (${trigger.type}) — consulting pro: ${trigger.question}`)
+        const forcedCall: NormalizedToolCall = {
+          id: `forced_${randomUUID()}`,
+          name: ADVISOR_TOOL_NAME,
+          input: { question: trigger.question },
+        }
+        const advisorUserMsg: AnthropicMessage = {
+          role: 'user',
+          content: `[Forced advisor — You are pro model in advisor mode, the flash model is about to answer the user. Based on the conversation above, give flash concise actionable guidance; you have 0 tool so DO NOT CALL ANY TOOLS. Task: ${trigger.question}]`,
+        }
+        const proMessages: AnthropicMessage[] = [...workingMessages, advisorUserMsg]
+        const proBody = this.buildProAdvisorBody(rawBody, proMessages)
+        const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
+        if (!proResp.ok) {
+          const errBuf = Buffer.from(await proResp.arrayBuffer())
+          return {
+            finalModel: 'flash',
+            reason: 'advisor',
+            path,
+            status: proResp.status,
+            headers: buildResponseHeaders(proResp.headers, annotationHeaders({ finalModel: 'flash', path })),
+            body: errBuf,
+            isStream: false,
+          }
+        }
+        const proText = await proResp.text()
+        const proParsed = parseNonStreamResponse(proText)
+        const proThinking = proParsed ? extractThinkingFromBlocks(proParsed.content) : ''
+        const proContentRaw = proParsed ? extractTextFromBlocks(proParsed.content) : ''
+        const proFullContent = proThinking ? `${proThinking}\n\n${proContentRaw}` : proContentRaw
+        this.logger.info?.(`[escalate] forced advisor pro response (${proFullContent.length} chars): ${proFullContent.slice(0, 200)}${proFullContent.length > 200 ? '...' : ''}`)
+
+        const toolResult = buildToolResultMessage(forcedCall.id, proFullContent)
+        const assistantToolUse = buildAssistantToolUseMessage(forcedCall.id, forcedCall.name, JSON.stringify(forcedCall.input))
+        // DeepSeek (and other reasoning models) reject an assistant message in
+        // thinking mode that lacks a thinking block ("reasoning_content must be
+        // passed back"). The forced tool_use is fabricated by the proxy — flash
+        // hasn't produced a turn yet — so attach pro's thinking as the
+        // reasoning_content to satisfy the upstream constraint.
+        const forcedThinking = proThinking || proFullContent
+        const toolUseMsg: AnthropicMessage = {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: forcedThinking },
+            ...(Array.isArray(assistantToolUse.content) ? assistantToolUse.content : []),
+          ],
+        }
+        workingMessages = [...workingMessages, toolUseMsg, toolResult]
+        sawAdvisorCall = true
+      }
+    }
+
     while (true) {
       path.push('flash')
 
@@ -1586,6 +1742,64 @@ export class EscalateDispatcher {
         const rewriter = new ContentBlockIndexRewriter()
         rewriter.reset()
         try {
+          let messageStartSent = false
+          // ---- Forced advisor: pre-consultation (streaming) ----
+          // Mirror of the non-stream path: fake an advisor tool_call, consult
+          // pro, splice the result into history before the flash loop. The
+          // streaming wrinkle: we must synthesize the client stream's
+          // message_start ourselves (no flash first round has run yet), and
+          // tell the first flash peek to swallow its own message_start.
+          if (dispatcher.config.forceAdvisor) {
+            const trigger = detectForcedAdvisor(workingMessages)
+            if (trigger) {
+              path.push('pro')
+              dispatcher.logger.info?.(`[escalate] forced advisor (${trigger.type}) — consulting pro: ${trigger.question}`)
+              const forcedCall: NormalizedToolCall = {
+                id: `forced_${randomUUID()}`,
+                name: ADVISOR_TOOL_NAME,
+                input: { question: trigger.question },
+              }
+              const advisorUserMsg: AnthropicMessage = {
+                role: 'user',
+                content: `[Forced advisor — You are pro model in advisor mode, the flash model is about to answer the user. Based on the conversation above, give flash concise actionable guidance; you have 0 tool so DO NOT CALL ANY TOOLS. Task: ${trigger.question}]`,
+              }
+              const proMessages: AnthropicMessage[] = [...workingMessages, advisorUserMsg]
+              const proBody = dispatcher.buildProAdvisorBody(rawBody, proMessages)
+              const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
+              if (!proResp.ok || !proResp.body) {
+                const errText = proResp.body ? await proResp.text().catch(() => '') : ''
+                controller.enqueue(buildProtoMessageStart(dispatcher.config.flashModel))
+                controller.enqueue(buildProtoProxyError(proResp.status, errText, dispatcher.config.proModel, rewriter))
+                controller.close()
+                return
+              }
+              controller.enqueue(buildProtoMessageStart(dispatcher.config.flashModel))
+              messageStartSent = true
+              controller.enqueue(buildProtoAdvisorBegin(trigger.question, dispatcher.config.proModel, rewriter))
+              const proReader = proResp.body.getReader()
+              currentReader = proReader
+              const proResult = await dispatcher.streamProAsReasoning(proReader, controller, rewriter)
+              currentReader = null
+              const proContent = proResult.thinking ? `${proResult.thinking}\n\n${proResult.text}` : proResult.text
+              dispatcher.logger.info?.(`[escalate] forced advisor pro response (${proContent.length} chars): ${proContent.slice(0, 200)}${proContent.length > 200 ? '...' : ''}`)
+              controller.enqueue(buildProtoAdvisorEnd(dispatcher.config.proModel, rewriter))
+
+              const toolResult = buildToolResultMessage(forcedCall.id, proContent)
+              const assistantToolUse = buildAssistantToolUseMessage(forcedCall.id, forcedCall.name, JSON.stringify(forcedCall.input))
+              // See non-stream path: attach pro's thinking as reasoning_content
+              // so DeepSeek-style reasoning models accept the fabricated
+              // assistant tool_use message.
+              const forcedThinking = proResult.thinking || proContent
+              const toolUseMsg: AnthropicMessage = {
+                role: 'assistant',
+                content: [
+                  { type: 'thinking', thinking: forcedThinking },
+                  ...(Array.isArray(assistantToolUse.content) ? assistantToolUse.content : []),
+                ],
+              }
+              workingMessages = [...workingMessages, toolUseMsg, toolResult]
+            }
+          }
           // eslint-disable-next-line no-constant-condition
           while (true) {
             const isFirstFlashCall = path.length === 0
@@ -1603,7 +1817,7 @@ export class EscalateDispatcher {
 
             const flashReader = flashResp.body.getReader()
             currentReader = flashReader
-            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader, rewriter, !isFirstFlashCall)
+            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader, rewriter, messageStartSent || !isFirstFlashCall)
             if (peekResult.outcome === 'passthrough') {
               currentReader = null
               controller.close()
@@ -1660,8 +1874,9 @@ export class EscalateDispatcher {
             controller.enqueue(buildProtoAdvisorBegin(advisorQuestion ?? undefined, dispatcher.config.proModel, rewriter))
             const proReader = proResp.body.getReader()
             currentReader = proReader
-            const proContent = await dispatcher.streamProAsReasoning(proReader, controller, rewriter)
+            const proResult = await dispatcher.streamProAsReasoning(proReader, controller, rewriter)
             currentReader = null
+            const proContent = proResult.thinking ? `${proResult.thinking}\n\n${proResult.text}` : proResult.text
             dispatcher.logger.info?.(`[escalate] pro response (${proContent.length} chars): ${proContent.slice(0, 200)}${proContent.length > 200 ? '...' : ''}`)
             controller.enqueue(buildProtoAdvisorEnd(dispatcher.config.proModel, rewriter))
 
@@ -2078,13 +2293,17 @@ export class EscalateDispatcher {
    * as a passive advisor — both thinking_delta AND text_delta are rewritten
    * into the thinking content block stream.
    *
-   * Returns the combined text for the tool result message.
+   * Returns pro's thinking and text separately. Callers that need a single
+   * concatenated string (for a tool_result) can recombine them; callers that
+   * need the thinking verbatim (e.g. to attach a reasoning_content block to a
+   * fabricated assistant message for DeepSeek-style reasoning models) can use
+   * the `thinking` field directly.
    */
   private async streamProAsReasoning(
     reader: ReadableStreamDefaultReader<Uint8Array>,
     controller: ReadableStreamDefaultController<Uint8Array>,
     rewriter: ContentBlockIndexRewriter
-  ): Promise<string> {
+  ): Promise<{ text: string; thinking: string }> {
     rewriter.beginSubStream()
     const sseBuf = new SseLineBuffer()
     let thinkingAcc = ''
@@ -2098,7 +2317,7 @@ export class EscalateDispatcher {
     while (true) {
       const { value, done } = await reader.read()
       if (done) {
-        return thinkingAcc ? `${thinkingAcc}\n\n${contentAcc}` : contentAcc
+        return { text: contentAcc, thinking: thinkingAcc }
       }
       if (!value || value.length === 0) continue
       const { lines } = sseBuf.feed(value)

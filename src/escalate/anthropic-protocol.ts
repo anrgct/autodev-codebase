@@ -11,6 +11,8 @@
  *   6. Tool result / assistant tool_use message construction
  */
 
+import { randomUUID } from 'node:crypto'
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -32,6 +34,8 @@ export interface AnthropicContentBlock {
   input?: unknown
   content?: string | Array<unknown>
   tool_use_id?: string
+  /** Anthropic tool_result error flag (set when the tool failed). */
+  is_error?: boolean
 }
 
 /** An Anthropic message (in the `messages` array). */
@@ -373,8 +377,8 @@ export function getStopReason(event: AnthropicStreamEvent): 'end_turn' | 'tool_u
  */
 export function buildAdvisorBeginEvent(question: string | undefined, model: string, rewriter: ContentBlockIndexRewriter): Uint8Array {
   const label = question
-    ? `[proxy: consulting advisor (pro): ${question}]`
-    : '[proxy: consulting advisor (pro)]'
+    ? `[proxy: consulting advisor (pro): ${question} — do not repeat this marker]`
+    : '[proxy: consulting advisor (pro) — do not repeat this marker]'
   const thinkingText = `\n\n--- ${label} ---\n\n`
   const idx = rewriter.allocate()
   const event1 = `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: { type: 'thinking', thinking: '' } })}\n\n`
@@ -388,7 +392,7 @@ export function buildAdvisorBeginEvent(question: string | undefined, model: stri
  * block marking the end of pro consultation.
  */
 export function buildAdvisorEndEvent(model: string, rewriter: ContentBlockIndexRewriter): Uint8Array {
-  const thinkingText = `\n\n--- [proxy: back to flash with advisor analysis] ---\n\n`
+  const thinkingText = `\n\n--- [proxy: back to flash with advisor analysis — do not repeat this marker] ---\n\n`
   const idx = rewriter.allocate()
   const event1 = `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: { type: 'thinking', thinking: '' } })}\n\n`
   const event2 = `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta: { type: 'thinking_delta', thinking: thinkingText } })}\n\n`
@@ -423,6 +427,30 @@ export function buildProxyErrorEvent(status: number, message: string, model: str
   const event4 = `event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } })}\n\n`
   const event5 = `event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`
   return Buffer.from(event1 + event2 + event3 + event4 + event5, 'utf-8')
+}
+
+/**
+ * Build a synthetic `message_start` SSE event. Used by forced-advisor mode
+ * when the proxy injects a pro consultation BEFORE the first flash stream —
+ * the client stream needs a `message_start` before any `content_block_*`, but
+ * there is no flash first-round stream to source it from. The model field is
+ * set to the flash model since flash ultimately produces the final answer.
+ */
+export function buildMessageStartEvent(model: string): Uint8Array {
+  const event = `event: message_start\ndata: ${JSON.stringify({
+    type: 'message_start',
+    message: {
+      id: `msg_${randomUUID()}`,
+      type: 'message',
+      role: 'assistant',
+      content: [],
+      model,
+      stop_reason: null,
+      stop_sequence: null,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  })}\n\n`
+  return Buffer.from(event, 'utf-8')
 }
 
 // ---------------------------------------------------------------------------
@@ -561,6 +589,35 @@ export function buildToolResultMessage(
     role: 'user',
     content: [buildToolResultContent(toolUseId, content)],
   }
+}
+
+/**
+ * Ensure every assistant message carries a `thinking` content block.
+ *
+ * Some upstream providers (e.g. DeepSeek's reasoning models) reject requests
+ * in thinking mode when an assistant message in the history lacks a
+ * reasoning_content block ("The reasoning_content in the thinking mode must
+ * be passed back to the API"). Clients often drop the thinking block when
+ * replaying prior turns (tool_use rounds, etc.), so the proxy re-adds an
+ * empty one at the head of any assistant message that is missing it. The
+ * empty thinking content is accepted by these providers as a no-op
+ * reasoning step.
+ *
+ * Only assistant messages are touched; user/system messages pass through.
+ * Messages that already contain a thinking block are left unchanged.
+ */
+export function ensureAssistantThinkingBlocks(messages: AnthropicMessage[]): AnthropicMessage[] {
+  return messages.map((m) => {
+    if (m.role !== 'assistant') return m
+    const blocks: AnthropicContentBlock[] = Array.isArray(m.content)
+      ? m.content
+      : [{ type: 'text', text: typeof m.content === 'string' ? m.content : '' }]
+    if (blocks.some((b) => b.type === 'thinking')) return m
+    return {
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: '' }, ...blocks],
+    }
+  })
 }
 
 /**

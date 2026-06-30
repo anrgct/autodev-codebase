@@ -26,6 +26,7 @@ export default defineConfig({
       'dist/**',
       'build/**',
       '.git/**',
+      'vendor/link/**',
       '.autodev-cache/**',
       // Skip worktree snapshots — they have stale source (e.g. old
       // MAX_FILE_SIZE_BYTES) and would shadow the active test runs.

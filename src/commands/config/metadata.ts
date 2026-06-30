@@ -207,6 +207,7 @@ export const CONFIG_KEY_METADATA: Record<ConfigKey, ConfigKeyMetadata> = {
 
   escalateThinkingBudget: { type: 'integer', minValue: 0, description: 'Anthropic thinking budget tokens (default: 8000). Used when client does not provide thinking.' },
   escalateMaxTokens: { type: 'integer', minValue: 1, description: 'Default max_tokens for Anthropic Messages API (default: 4096). Used when client does not provide max_tokens.' },
+  escalateForceAdvisor: { type: 'boolean', description: 'Advisor mode only. When true, the proxy deterministically fakes an advisor tool_call with a preset question at fixed moments (user turn / tool error / every 5 tools) before the flash loop, so pro is always consulted. Default: false.' },
 
   // QRRanker shared tuning: average attention over N decode steps.
   // 0 = default (prefill-only, no decode cost). 20+ = prefill + N decode.

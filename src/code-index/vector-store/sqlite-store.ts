@@ -1052,12 +1052,15 @@ function reciprocalRankFusion(
  * containing a hyphen must be quoted to prevent FTS5 from misparsing.
  */
 /**
- * Regex matching tokens that are safe as FTS5 barewords: only ASCII
- * alphanumeric characters and underscores. Any token containing
- * punctuation symbols (`.`, `?`, `'`, `#`, `@`, `/`, `>`, `,`, etc.)
- * must be quoted to prevent FTS5 syntax errors.
+ * Regex matching tokens that are safe as FTS5 barewords: Unicode letters,
+ * numbers, and underscores. Any token containing punctuation symbols
+ * (`.`, `?`, `'`, `#`, `@`, `/`, `>`, `,`, etc.) must be quoted to
+ * prevent FTS5 syntax errors.
+ *
+ * Uses Unicode property escapes to support CJK and other non-ASCII
+ * scripts, which are valid barewords in FTS5 with the unicode61 tokenizer.
  */
-const FTS5_BAREWORD_SAFE = /^[a-zA-Z0-9_]+$/
+const FTS5_BAREWORD_SAFE = /^[\p{L}\p{N}_]+$/u
 
 /**
  * Turn the user-supplied search string into an FTS5 query that mirrors

@@ -39,6 +39,50 @@ vi.mock('../../tree-sitter/languageParser', () => ({
   loadRequiredLanguageParsers: vi.fn()
 }));
 
+// Mock createNodeDependencies to avoid real config I/O (used by
+// createSummarizerForOutline / createStorageForOutline) when summarize=true
+vi.mock('../adapters/nodejs', () => ({
+  createNodeDependencies: vi.fn(() => ({
+    configProvider: {
+      loadConfig: vi.fn().mockResolvedValue(undefined),
+      getConfig: vi.fn().mockReturnValue({}),
+      get: vi.fn(),
+      getProvider: vi.fn(),
+      setConfig: vi.fn(),
+      load: vi.fn().mockResolvedValue(undefined),
+    },
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    storage: {},
+  })),
+}));
+
+// Mock CodeIndexServiceFactory so createSummarizer returns a fast mock
+vi.mock('../code-index/service-factory', () => ({
+  CodeIndexServiceFactory: vi.fn().mockImplementation(() => ({
+    createSummarizer: vi.fn().mockResolvedValue({
+      summarize: vi.fn().mockResolvedValue({ summary: 'Mock summary text' }),
+      summarizeBatch: vi.fn().mockResolvedValue({ summaries: [{ summary: 'Mock summary text' }] }),
+    }),
+  })),
+}));
+
+// Also mock the config-manager to avoid potential hangs in CodeIndexConfigManager.initialize()
+vi.mock('../../code-index/config-manager', () => ({
+  CodeIndexConfigManager: vi.fn().mockImplementation(() => ({
+    initialize: vi.fn().mockResolvedValue(undefined),
+    summarizerConfig: {
+      provider: 'test',
+      model: 'test-model',
+      language: 'English',
+      batchSize: 10,
+      concurrency: 2,
+      maxRetries: 1,
+      retryDelayMs: 100,
+    },
+    get: vi.fn(),
+  })),
+}));
+
 const mockPathUtils = {
   isAbsolute: (path: string) => path.startsWith('/'),
   join: (...parts: string[]) => parts.join('/'),

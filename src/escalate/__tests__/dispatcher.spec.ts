@@ -28,7 +28,7 @@
  *  21. Pro body has no tools
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { EscalateDispatcher } from '../dispatcher'
+import { EscalateDispatcher, detectForcedAdvisor } from '../dispatcher'
 import type { EscalateConfig } from '../types'
 
 const FLASH = 'deepseek-v4-flash'
@@ -46,6 +46,7 @@ function makeConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
     stickyProTtlMs: 0,
     thinkingBudget: 8000,
     maxTokens: 4096,
+    forceAdvisor: false,
     ...overrides,
   }
 }
@@ -799,12 +800,12 @@ describe('EscalateDispatcher', () => {
 
       // Verify sequential messages: each flash retry only has ONE tool result
       const retry1 = JSON.parse(captured[2].init.body!)
-      const toolMsgs1 = retry1.messages.filter((m: { role: string }) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result')
+      const toolMsgs1 = retry1.messages.filter((m: { role: string, content?: any }) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result')
       expect(toolMsgs1).toHaveLength(1)
       expect(toolMsgs1[0].content[0].tool_use_id).toBe('call_a')
 
       const retry2 = JSON.parse(captured[4].init.body!)
-      const toolMsgs2 = retry2.messages.filter((m: { role: string }) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result')
+      const toolMsgs2 = retry2.messages.filter((m: { role: string, content?: any }) => m.role === 'user' && Array.isArray(m.content) && m.content[0]?.type === 'tool_result')
       expect(toolMsgs2).toHaveLength(2)
       expect(toolMsgs2[0].content[0].tool_use_id).toBe('call_a')
       expect(toolMsgs2[1].content[0].tool_use_id).toBe('call_b')
@@ -1160,9 +1161,13 @@ describe('EscalateDispatcher', () => {
         try { return JSON.parse(l.slice(5)).type === 'message_stop' } catch { return false }
       })
       expect(stopLines).toHaveLength(1)
-      const lastStopIdx = dataLines.findLastIndex(l => {
-        try { return JSON.parse(l.slice(5)).type === 'message_stop' } catch { return false }
-      })
+      // Manual reverse search instead of findLastIndex (needs ES2023 lib).
+      let lastStopIdx = -1
+      for (let i = 0; i < dataLines.length; i++) {
+        try {
+          if (JSON.parse(dataLines[i].slice(5)).type === 'message_stop') lastStopIdx = i
+        } catch { /* not a valid JSON data line */ }
+      }
       expect(lastStopIdx).toBe(dataLines.length - 1)
 
       expect(captured).toHaveLength(3)
@@ -1261,6 +1266,260 @@ describe('EscalateDispatcher', () => {
       expect(toolMsg.content[0].type).toBe('tool_result')
       expect(toolMsg.content[0].tool_use_id).toBe('c1')
       expect(toolMsg.content[0].content).toBe('PRO CONTENT')
+    })
+  })
+
+  // --------------------------------------------------------------------
+  // Forced advisor (forceAdvisor: true) — deterministic pre-consultation
+  // --------------------------------------------------------------------
+  describe('forced advisor trigger detection (pure)', () => {
+    it('user-turn: trailing user message with string content', () => {
+      const trigger = detectForcedAdvisor([{ role: 'user', content: 'hello' }] as never)
+      expect(trigger).toEqual({ type: 'user-turn', question: '用户指令的核心需求与歧义？' })
+    })
+
+    it('user-turn: trailing user with text content block (no tool_result)', () => {
+      const trigger = detectForcedAdvisor([
+        { role: 'user', content: [{ type: 'text', text: 'hi' }] },
+      ] as never)
+      expect(trigger?.type).toBe('user-turn')
+    })
+
+    it('tool-error: trailing tool_result with is_error=true', () => {
+      const trigger = detectForcedAdvisor([
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'boom', is_error: true }] },
+      ] as never)
+      expect(trigger).toEqual({ type: 'tool-error', question: '工具报错的根因与修复建议？' })
+    })
+
+    it('tool-error: trailing tool_result content starts with "Error:"', () => {
+      const trigger = detectForcedAdvisor([
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Error: file not found' }] },
+      ] as never)
+      expect(trigger?.type).toBe('tool-error')
+    })
+
+    it('tool-count: exactly 5 real tool_use → trigger', () => {
+      const msgs: unknown[] = [{ role: 'user', content: 'q' }]
+      for (let i = 0; i < 5; i++) {
+        msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: `r${i}`, name: 'read_file', input: {} }] })
+        msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `r${i}`, content: 'ok' }] })
+      }
+      const trigger = detectForcedAdvisor(msgs as never)
+      expect(trigger).toEqual({ type: 'tool-count', question: '当前方向和进度评估与下一步建议？' })
+    })
+
+    it('tool-count: advisor tool_use is excluded from the count', () => {
+      // 4 real tool_use + 1 advisor tool_use → real count = 4, not divisible by 5
+      const msgs: unknown[] = [{ role: 'user', content: 'q' }]
+      for (let i = 0; i < 4; i++) {
+        msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: `r${i}`, name: 'read_file', input: {} }] })
+        msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `r${i}`, content: 'ok' }] })
+      }
+      msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'adv', name: 'advisor', input: {} }] })
+      msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'adv', content: 'pro said' }] })
+      expect(detectForcedAdvisor(msgs as never)).toBeNull()
+    })
+
+    it('tool-count: 3 real tool_use → no trigger', () => {
+      const msgs: unknown[] = [{ role: 'user', content: 'q' }]
+      for (let i = 0; i < 3; i++) {
+        msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: `r${i}`, name: 'grep', input: {} }] })
+        msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `r${i}`, content: 'ok' }] })
+      }
+      expect(detectForcedAdvisor(msgs as never)).toBeNull()
+    })
+
+    it('priority: tool-error beats tool-count (5 tools + last is error)', () => {
+      const msgs: unknown[] = [{ role: 'user', content: 'q' }]
+      for (let i = 0; i < 4; i++) {
+        msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: `r${i}`, name: 'read_file', input: {} }] })
+        msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `r${i}`, content: 'ok' }] })
+      }
+      msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: 'r4', name: 'read_file', input: {} }] })
+      msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'r4', content: 'Error: x', is_error: true }] })
+      expect(detectForcedAdvisor(msgs as never)?.type).toBe('tool-error')
+    })
+
+    it('no trigger: trailing assistant message', () => {
+      expect(detectForcedAdvisor([{ role: 'assistant', content: 'x' }] as never)).toBeNull()
+    })
+
+    it('no trigger: empty messages', () => {
+      expect(detectForcedAdvisor([] as never)).toBeNull()
+    })
+  })
+
+  describe('forced advisor (forceAdvisor: true)', () => {
+    function makeForcedConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
+      return makeConfig({ mode: 'advisor', forceAdvisor: true, ...overrides })
+    }
+
+    it('non-stream: user-turn triggers a pro pre-consultation before the flash loop', async () => {
+      // pro pre-consultation response
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'PRO ANALYSIS' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      // flash final answer
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'final answer' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+
+      const d = new EscalateDispatcher({ config: makeForcedConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      expect(out.finalModel).toBe('flash')
+      expect(out.reason).toBe('advisor')
+      expect(out.path).toEqual(['pro', 'flash'])
+      const body = JSON.parse((out.body as Buffer).toString('utf-8'))
+      expect(body.content[0].text).toBe('final answer')
+
+      // captured[0] = pro pre-consultation, captured[1] = flash
+      expect(captured).toHaveLength(2)
+      const proBody = JSON.parse(captured[0].init.body!)
+      expect(proBody.model).toBe(PRO)
+      const proMessages = proBody.messages
+      expect(proMessages[0].content).toBe('q')
+      expect(proMessages[1].content).toContain('用户指令的核心需求与歧义？')
+
+      // Flash sees the forced tool_use + tool_result spliced into history.
+      const flashBody = JSON.parse(captured[1].init.body!)
+      expect(flashBody.model).toBe(FLASH)
+      const fm = flashBody.messages
+      expect(fm[0].content).toBe('q')
+      expect(fm[1].role).toBe('assistant')
+      const forcedToolUse = fm[1].content.find((b: { type?: string; name?: string; input?: { question?: string } }) => b.type === 'tool_use' && b.name === 'advisor')
+      expect(forcedToolUse).toBeDefined()
+      expect(forcedToolUse.input.question).toBe('用户指令的核心需求与歧义？')
+      expect(fm[2].role).toBe('user')
+      expect(fm[2].content[0].type).toBe('tool_result')
+      expect(fm[2].content[0].content).toBe('PRO ANALYSIS')
+    })
+
+    it('non-stream: forceAdvisor=false does not trigger pre-consultation', async () => {
+      queueResponse(anThrowResponse('direct answer'))
+      const d = new EscalateDispatcher({ config: makeConfig({ mode: 'advisor', forceAdvisor: false }), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+      expect(captured).toHaveLength(1)
+      expect(out.path).toEqual(['flash'])
+    })
+
+    it('non-stream: tool-error trigger uses the error preset question', async () => {
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'PRO DEBUG' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'recovered' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      const d = new EscalateDispatcher({ config: makeForcedConfig(), fetchImpl: fetchMock as never })
+      await d.dispatch({
+        messages: [
+          { role: 'user', content: 'q' },
+          { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
+          { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Error: boom', is_error: true }] },
+        ],
+      }, false, {})
+      const proBody = JSON.parse(captured[0].init.body!)
+      expect(proBody.messages[proBody.messages.length - 1].content).toContain('工具报错的根因与修复建议？')
+    })
+
+    // ---- streaming helpers (local copies) ----
+    function mkSseStream(chunks: string[]): ReadableStream<Uint8Array> {
+      const enc = new TextEncoder()
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const c of chunks) controller.enqueue(enc.encode(c))
+          controller.close()
+        },
+      })
+    }
+    async function drainStream(stream: ReadableStream<Uint8Array>): Promise<string> {
+      const reader = stream.getReader()
+      const dec = new TextDecoder()
+      let acc = ''
+      for (let i = 0; i < 500; i++) {
+        const { value, done } = await reader.read()
+        if (done) break
+        acc += dec.decode(value, { stream: true })
+      }
+      return acc
+    }
+    function parseSse(sseText: string): { content: string; thinking: string } {
+      let content = ''
+      let thinking = ''
+      for (const line of sseText.split('\n')) {
+        if (line.startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(line.slice(6))
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') content += parsed.delta.text || ''
+            else if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'thinking_delta') thinking += parsed.delta.thinking || ''
+          } catch { /* ignore */ }
+        }
+      }
+      return { content, thinking }
+    }
+
+    it('stream: user-turn synthesizes message_start, injects pro analysis into think, pumps flash retry', async () => {
+      const proStream = mkSseStream([
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_p","type":"message","role":"assistant","content":[],"model":"pro","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PRO ANALYSIS"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ])
+      const flashStream = mkSseStream([
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_f","type":"message","role":"assistant","content":[],"model":"flash","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":0,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"FINAL"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ])
+      queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeForcedConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }], stream: true }, true, {})
+
+      expect(out.isStream).toBe(true)
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, thinking } = parseSse(acc)
+
+      // Forced pro analysis is rewritten into the think panel.
+      expect(thinking).toContain('PRO ANALYSIS')
+      expect(thinking).toContain('consulting advisor')
+      // Flash final answer is the only content.
+      expect(content).toBe('FINAL')
+      expect(content).not.toContain('PRO ANALYSIS')
+
+      // Exactly one message_start (synthesized) and one message_stop (flash's,
+      // at the very end). pro's message_start/message_stop must NOT leak.
+      const dataLines = acc.split('\n').map(l => l.trim()).filter(l => l.startsWith('data:'))
+      const startCount = dataLines.filter(l => { try { return JSON.parse(l.slice(6)).type === 'message_start' } catch { return false } }).length
+      const stopCount = dataLines.filter(l => { try { return JSON.parse(l.slice(6)).type === 'message_stop' } catch { return false } }).length
+      expect(startCount).toBe(1)
+      expect(stopCount).toBe(1)
+
+      // captured[0] = pro, captured[1] = flash
+      expect(captured).toHaveLength(2)
+      const proBody = JSON.parse(captured[0].init.body!)
+      expect(proBody.model).toBe(PRO)
+      expect(proBody.messages[1].content).toContain('用户指令的核心需求与歧义？')
     })
   })
 })
