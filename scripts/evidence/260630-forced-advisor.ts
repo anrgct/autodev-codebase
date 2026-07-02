@@ -11,13 +11,13 @@
  *
  * | 规则       | 触发条件                                          | 预设 question          |
  * |------------|---------------------------------------------------|------------------------|
- * | user-turn  | 末尾 user 且 content 不含 `tool_result`           | 「我的用户指令理解对吗？」 |
- * | tool-error | 末尾 user 含 `tool_result` 且该 result 为 error   | 「为什么工具报错？」     |
- * | tool-count | 末尾 user 含 `tool_result` 且真实 tool_use %5==0  | 「我的思路对吗？」       |
+ * | user-turn  | 末尾 user 且 content 不含 `tool_result`           | 「用户指令的核心需求？是否有歧义？」 |
+ * | tool-error | 末尾 user 含 `tool_result` 且该 result 为 error   | 「工具报错的原因？修复建议？」     |
+ * | tool-count | 末尾 user 含 `tool_result` 且真实 tool_use %5==0  | 「当前方向是否正确？下一步建议？」  |
  *
  * ## 验证点（每个用例）
  *
- * - SSE think 面板出现 `--- [proxy: consulting advisor (pro): <预设question>] ---` 分隔符
+ * - SSE think 面板出现 `<proxy-advisor-consult question="<预设question>">` 标签
  *   → 证明 forced 触发成功，且 question 是预设值（不是 flash 自编的）
  * - think 面板含 pro 的分析内容（pro 被咨询）
  * - `message_start` 仅 1 次（forced 合成的，flash 第一轮的 message_start 被吞）
@@ -90,9 +90,9 @@ const { proxyUrl: PROXY_URL, apiKey: API_KEY, mode: MODE, forceAdvisor: FORCE_AD
 // ---------------------------------------------------------------------------
 
 const PRESET_QUESTIONS = {
-  'user-turn': '用户指令的核心需求与歧义？',
-  'tool-error': '工具报错的根因与修复建议？',
-  'tool-count': '当前方向和进度评估与下一步建议？',
+  'user-turn': '用户指令的核心需求？是否有歧义？',
+  'tool-error': '工具报错的原因？修复建议？',
+  'tool-count': '当前方向是否正确？下一步建议？',
 } as const
 
 type RuleType = keyof typeof PRESET_QUESTIONS
@@ -158,8 +158,8 @@ function analyzeSse(raw: string): Analysis {
     }
   }
 
-  // 提取 advisor 分隔符里的 question：[proxy: consulting advisor (pro): <question>]
-  const questionRe = /\[proxy: consulting advisor \(pro\):\s*([^\]]+?)(?:\s*—[^—\]]*)?\]/g
+  // 提取 advisor XML 标签里的 question：<proxy-advisor-consult question="<question>">
+  const questionRe = /<proxy-advisor-consult\s+question="([^"]*)">/g
   let m: RegExpExecArray | null
   while ((m = questionRe.exec(thinking)) !== null) {
     advisorQuestions.push(m[1].trim())
@@ -250,7 +250,7 @@ async function runTest(tc: TestCase): Promise<boolean> {
   console.error(`  think 摘要 : ${a.thinking.slice(0, 120).replace(/\n/g, ' ')}${a.thinking.length > 120 ? '...' : ''}`)
   console.error(`  content 摘要: ${a.content.slice(0, 120).replace(/\n/g, ' ')}${a.content.length > 120 ? '...' : ''}`)
   // pro 原文不应泄漏到 content（应只出现在 think）
-  const proLeak = a.content.includes('proxy:') || a.content.includes('consulting advisor')
+  const proLeak = a.content.includes('proxy-advisor-consult')
   if (proLeak) console.error(`  ⚠️ content 含 proxy 分隔符（可能泄漏）`)
 
   // 保存日志

@@ -29,6 +29,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EscalateDispatcher, detectForcedAdvisor } from '../dispatcher'
+import { stripAdvisorMarkersFromThinking, ADVISOR_CONSULT_TAG } from '../anthropic-protocol'
+import type { AnthropicMessage, AnthropicContentBlock } from '../anthropic-protocol'
 import type { EscalateConfig } from '../types'
 
 const FLASH = 'deepseek-v4-flash'
@@ -1146,9 +1148,9 @@ describe('EscalateDispatcher', () => {
       // Pro thinking + content are injected into the think panel.
       expect(thinking).toContain('pro thinking')
       expect(thinking).toContain('PRO ANSWER')
-      // Advisor begin/end separators visible.
-      expect(thinking).toContain('consulting advisor')
-      expect(thinking).toContain('back to flash')
+      // Advisor begin/end separators visible (XML sentinel tags).
+      expect(thinking).toContain('<proxy-advisor-consult')
+      expect(thinking).toContain('</proxy-advisor-consult>')
       // Final flash answer is the only content (pro's content was rewritten as thinking).
       expect(content).toBe('FINAL')
       expect(content).not.toContain('PRO ANSWER')
@@ -1275,7 +1277,7 @@ describe('EscalateDispatcher', () => {
   describe('forced advisor trigger detection (pure)', () => {
     it('user-turn: trailing user message with string content', () => {
       const trigger = detectForcedAdvisor([{ role: 'user', content: 'hello' }] as never)
-      expect(trigger).toEqual({ type: 'user-turn', question: '用户指令的核心需求与歧义？' })
+      expect(trigger).toEqual({ type: 'user-turn', question: '用户指令的核心需求？是否有歧义？' })
     })
 
     it('user-turn: trailing user with text content block (no tool_result)', () => {
@@ -1291,7 +1293,7 @@ describe('EscalateDispatcher', () => {
         { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'boom', is_error: true }] },
       ] as never)
-      expect(trigger).toEqual({ type: 'tool-error', question: '工具报错的根因与修复建议？' })
+      expect(trigger).toEqual({ type: 'tool-error', question: '工具报错的原因？修复建议？' })
     })
 
     it('tool-error: trailing tool_result content starts with "Error:"', () => {
@@ -1308,7 +1310,7 @@ describe('EscalateDispatcher', () => {
         msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `r${i}`, content: 'ok' }] })
       }
       const trigger = detectForcedAdvisor(msgs as never)
-      expect(trigger).toEqual({ type: 'tool-count', question: '当前方向和进度评估与下一步建议？' })
+      expect(trigger).toEqual({ type: 'tool-count', question: '当前方向是否正确？是否有错漏？下一步建议？' })
     })
 
     it('tool-count: advisor tool_use is excluded from the count', () => {
@@ -1388,7 +1390,7 @@ describe('EscalateDispatcher', () => {
       expect(proBody.model).toBe(PRO)
       const proMessages = proBody.messages
       expect(proMessages[0].content).toBe('q')
-      expect(proMessages[1].content).toContain('用户指令的核心需求与歧义？')
+      expect(proMessages[1].content).toContain('用户指令的核心需求？是否有歧义？')
 
       // Flash sees the forced tool_use + tool_result spliced into history.
       const flashBody = JSON.parse(captured[1].init.body!)
@@ -1398,10 +1400,42 @@ describe('EscalateDispatcher', () => {
       expect(fm[1].role).toBe('assistant')
       const forcedToolUse = fm[1].content.find((b: { type?: string; name?: string; input?: { question?: string } }) => b.type === 'tool_use' && b.name === 'advisor')
       expect(forcedToolUse).toBeDefined()
-      expect(forcedToolUse.input.question).toBe('用户指令的核心需求与歧义？')
+      expect(forcedToolUse.input.question).toBe('用户指令的核心需求？是否有歧义？')
       expect(fm[2].role).toBe('user')
       expect(fm[2].content[0].type).toBe('tool_result')
       expect(fm[2].content[0].content).toBe('PRO ANALYSIS')
+    })
+
+    it('non-stream: forced tool_use carries an EMPTY thinking block — pro reasoning must not leak into flash own-reasoning slot', async () => {
+      // pro pre-consultation returns BOTH thinking and text. The thinking must
+      // NOT be echoed into the fabricated assistant thinking block (that would
+      // leak the large model's framing into flash's reasoning slot). It travels
+      // only via the tool_result.
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'PRO PRIVATE REASONING' }, { type: 'text', text: 'PRO GUIDANCE' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      queueResponse(anThrowResponse('final answer'))
+
+      const d = new EscalateDispatcher({ config: makeForcedConfig(), fetchImpl: fetchMock as never })
+      await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
+
+      // captured[1] = flash call
+      const flashBody = JSON.parse(captured[1].init.body!)
+      const forcedAssistant = flashBody.messages[1]
+      expect(forcedAssistant.role).toBe('assistant')
+      const thinkingBlock = forcedAssistant.content.find((b: { type: string }) => b.type === 'thinking')
+      expect(thinkingBlock).toBeDefined()
+      // EMPTY — satisfies the DeepSeek reasoning_content constraint without leaking pro
+      expect(thinkingBlock.thinking).toBe('')
+      // pro's reasoning is nowhere in flash's own (fabricated) assistant message
+      expect(JSON.stringify(forcedAssistant)).not.toContain('PRO PRIVATE REASONING')
+      // ...but it IS available to flash via the tool_result (proper tool semantics)
+      const toolResult = flashBody.messages[2].content[0]
+      expect(toolResult.type).toBe('tool_result')
+      expect(toolResult.content).toContain('PRO GUIDANCE')
     })
 
     it('non-stream: forceAdvisor=false does not trigger pre-consultation', async () => {
@@ -1434,7 +1468,7 @@ describe('EscalateDispatcher', () => {
         ],
       }, false, {})
       const proBody = JSON.parse(captured[0].init.body!)
-      expect(proBody.messages[proBody.messages.length - 1].content).toContain('工具报错的根因与修复建议？')
+      expect(proBody.messages[proBody.messages.length - 1].content).toContain('工具报错的原因？修复建议？')
     })
 
     // ---- streaming helpers (local copies) ----
@@ -1502,7 +1536,7 @@ describe('EscalateDispatcher', () => {
 
       // Forced pro analysis is rewritten into the think panel.
       expect(thinking).toContain('PRO ANALYSIS')
-      expect(thinking).toContain('consulting advisor')
+      expect(thinking).toContain('<proxy-advisor-consult')
       // Flash final answer is the only content.
       expect(content).toBe('FINAL')
       expect(content).not.toContain('PRO ANALYSIS')
@@ -1519,7 +1553,83 @@ describe('EscalateDispatcher', () => {
       expect(captured).toHaveLength(2)
       const proBody = JSON.parse(captured[0].init.body!)
       expect(proBody.model).toBe(PRO)
-      expect(proBody.messages[1].content).toContain('用户指令的核心需求与歧义？')
+      expect(proBody.messages[1].content).toContain('用户指令的核心需求？是否有歧义？')
     })
+  })
+
+  // --------------------------------------------------------------------
+  // Advisor marker stripping (path A) — sentinels replayed by the client
+  // in assistant thinking history must be removed before any upstream call.
+  // --------------------------------------------------------------------
+  it('strips advisor sentinel markers replayed in client history before the upstream call', async () => {
+    queueResponse(anThrowResponse('ok'))
+    const d = new EscalateDispatcher({ config: makeConfig(), fetchImpl: fetchMock as never })
+    await d.dispatch({
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'thinking', thinking: `my real thought <${ADVISOR_CONSULT_TAG} question="why">leaked pro analysis</${ADVISOR_CONSULT_TAG}> my tail` }],
+        },
+        { role: 'user', content: 'continue' },
+      ],
+    }, false, {})
+    const sent = JSON.parse(captured[0].init.body!)
+    const t = sent.messages[0].content[0].thinking
+    expect(t).not.toContain(ADVISOR_CONSULT_TAG)
+    expect(t).not.toContain('leaked pro analysis')
+    // flash's own reasoning around the block is preserved
+    expect(t).toContain('my real thought')
+    expect(t).toContain('my tail')
+  })
+})
+
+// ----------------------------------------------------------------------
+// stripAdvisorMarkersFromThinking — pure function
+// ----------------------------------------------------------------------
+describe('stripAdvisorMarkersFromThinking', () => {
+  const TAG = ADVISOR_CONSULT_TAG
+
+  it('removes a single advisor block, keeps surrounding reasoning', () => {
+    const msgs: AnthropicMessage[] = [{
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: `before <${TAG} question="q">pro leak</${TAG}> after` }],
+    }]
+    const out = stripAdvisorMarkersFromThinking(msgs)
+    const t = (out[0].content as AnthropicContentBlock[])[0].thinking!
+    expect(t).not.toContain(TAG)
+    expect(t).not.toContain('pro leak')
+    expect(t).toContain('before')
+    expect(t).toContain('after')
+  })
+
+  it('removes multiple non-overlapping blocks', () => {
+    const msgs: AnthropicMessage[] = [{
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: `a<${TAG}>x</${TAG}>b<${TAG} question="y">z</${TAG}>c` }],
+    }]
+    expect((stripAdvisorMarkersFromThinking(msgs)[0].content as AnthropicContentBlock[])[0].thinking).toBe('abc')
+  })
+
+  it('leaves clean thinking and non-assistant messages untouched (same refs)', () => {
+    const userMsg: AnthropicMessage = { role: 'user', content: 'hi' }
+    const cleanAssistant: AnthropicMessage = { role: 'assistant', content: [{ type: 'thinking', thinking: 'clean' }] }
+    const out = stripAdvisorMarkersFromThinking([userMsg, cleanAssistant])
+    expect(out[0]).toBe(userMsg)
+    expect(out[1]).toBe(cleanAssistant)
+  })
+
+  it('does not mutate the input messages', () => {
+    const original = `x<${TAG}>y</${TAG}>z`
+    const msgs: AnthropicMessage[] = [{ role: 'assistant', content: [{ type: 'thinking', thinking: original }] }]
+    stripAdvisorMarkersFromThinking(msgs)
+    expect((msgs[0].content as AnthropicContentBlock[])[0].thinking).toBe(original)
+  })
+
+  it('is a no-op on a thinking block without any marker', () => {
+    const msgs: AnthropicMessage[] = [{
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: 'just normal reasoning' }],
+    }]
+    expect(stripAdvisorMarkersFromThinking(msgs)[0]).toBe(msgs[0])
   })
 })

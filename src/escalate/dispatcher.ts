@@ -58,6 +58,7 @@ import {
   buildToolResultMessage,
   buildAssistantToolUseMessage,
   ensureAssistantThinkingBlocks,
+  stripAdvisorMarkersFromThinking,
   buildUserTextMessage,
   buildAssistantTextMessage,
   ContentBlockIndexRewriter,
@@ -280,10 +281,40 @@ export function extractAllAdvisorToolCalls(
  * whole point of forced mode is a deterministic question, not one the model
  * composes. See docs/plans/260630-force-advisor.md.
  */
-const FORCE_ADVISOR_USER_TURN_QUESTION = '用户指令的核心需求与歧义？'
-const FORCE_ADVISOR_TOOL_ERROR_QUESTION = '工具报错的根因与修复建议？'
-const FORCE_ADVISOR_TOOL_COUNT_QUESTION = '当前方向和进度评估与下一步建议？'
+const FORCE_ADVISOR_USER_TURN_QUESTION = '用户指令的核心需求？是否有歧义？'
+const FORCE_ADVISOR_TOOL_ERROR_QUESTION = '工具报错的原因？修复建议？'
+const FORCE_ADVISOR_TOOL_COUNT_QUESTION = '当前方向是否正确？是否有错漏？下一步建议？'
 const FORCE_ADVISOR_TOOL_COUNT_INTERVAL = 5
+
+/**
+ * Prefix of the user message the proxy fakes when consulting pro as a forced
+ * advisor. It primes pro to act as a guide for the flash model (not answer
+ * the user directly) and to refrain from tool calls. The dynamic preset
+ * question (one of the FORCE_ADVISOR_*_QUESTION constants above) is appended
+ * by `buildForcedAdvisorPrompt`.
+ */
+const FORCED_ADVISOR_PROMPT_PREFIX =
+  'Forced advisor — You are pro model in advisor mode, the flash model is about to answer the user. ' +
+  'Based on the conversation above, give flash concise actionable guidance; ' +
+  'you have 0 tool so DO NOT CALL ANY TOOLS. Task:'
+
+/** Build the user message that consults pro as a forced advisor (pro side). */
+function buildForcedAdvisorPrompt(question: string): AnthropicMessage {
+  return { role: 'user', content: `[${FORCED_ADVISOR_PROMPT_PREFIX} ${question}]` }
+}
+
+/**
+ * Prefix of the user message the proxy sends to pro when FLASH voluntarily
+ * calls the advisor tool (the non-forced path). Contrast with
+ * FORCED_ADVISOR_PROMPT_PREFIX, which is used when the proxy fakes the call.
+ */
+const ADVISOR_CONSULT_PROMPT_PREFIX =
+  'Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix'
+
+/** Build the user message that consults pro for a voluntary (flash-initiated) advisor call. */
+function buildAdvisorConsultPrompt(question: string): AnthropicMessage {
+  return { role: 'user', content: `[${ADVISOR_CONSULT_PROMPT_PREFIX}] ${question}` }
+}
 
 export type ForcedAdvisorTrigger =
   | { type: 'user-turn'; question: string }
@@ -702,7 +733,12 @@ export class EscalateDispatcher {
     // assistant message must carry a thinking block in thinking mode. Clients
     // frequently drop the thinking block when replaying prior tool turns.
     if (Array.isArray(safeBody['messages'])) {
-      safeBody['messages'] = ensureAssistantThinkingBlocks(safeBody['messages'] as AnthropicMessage[])
+      const msgs = safeBody['messages'] as AnthropicMessage[]
+      // First ensure every assistant message carries a thinking block
+      // (DeepSeek rejects history lacking reasoning_content), then strip any
+      // advisor sentinel blocks a client replayed back so models never see the
+      // fabricated consultation in their own reasoning history.
+      safeBody['messages'] = stripAdvisorMarkersFromThinking(ensureAssistantThinkingBlocks(msgs))
     }
     if (typeof safeBody['max_tokens'] !== 'number') {
       safeBody['max_tokens'] = this.config.maxTokens
@@ -1541,10 +1577,7 @@ export class EscalateDispatcher {
           name: ADVISOR_TOOL_NAME,
           input: { question: trigger.question },
         }
-        const advisorUserMsg: AnthropicMessage = {
-          role: 'user',
-          content: `[Forced advisor — You are pro model in advisor mode, the flash model is about to answer the user. Based on the conversation above, give flash concise actionable guidance; you have 0 tool so DO NOT CALL ANY TOOLS. Task: ${trigger.question}]`,
-        }
+        const advisorUserMsg = buildForcedAdvisorPrompt(trigger.question)
         const proMessages: AnthropicMessage[] = [...workingMessages, advisorUserMsg]
         const proBody = this.buildProAdvisorBody(rawBody, proMessages)
         const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
@@ -1572,9 +1605,12 @@ export class EscalateDispatcher {
         // DeepSeek (and other reasoning models) reject an assistant message in
         // thinking mode that lacks a thinking block ("reasoning_content must be
         // passed back"). The forced tool_use is fabricated by the proxy — flash
-        // hasn't produced a turn yet — so attach pro's thinking as the
-        // reasoning_content to satisfy the upstream constraint.
-        const forcedThinking = proThinking || proFullContent
+        // hasn't produced a turn yet — so attach an EMPTY thinking block to
+        // satisfy the constraint. Pro's analysis travels exclusively via the
+        // tool_result below; echoing it into reasoning_content would place the
+        // large model's (third-person, "guide flash") framing into flash's own
+        // reasoning slot, confusing its role identity.
+        const forcedThinking = ''
         const toolUseMsg: AnthropicMessage = {
           role: 'assistant',
           content: [
@@ -1633,7 +1669,7 @@ export class EscalateDispatcher {
       this.logger.info?.(`[escalate] advisor question: ${advisorQuestion ?? '(empty)'}`)
 
       const advisorUserMsg: AnthropicMessage | null = advisorQuestion
-        ? { role: 'user', content: `[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] ${advisorQuestion}` }
+        ? buildAdvisorConsultPrompt(advisorQuestion)
         : null
 
       // Strip tool_use blocks from the assistant message before sending to pro.
@@ -1759,10 +1795,7 @@ export class EscalateDispatcher {
                 name: ADVISOR_TOOL_NAME,
                 input: { question: trigger.question },
               }
-              const advisorUserMsg: AnthropicMessage = {
-                role: 'user',
-                content: `[Forced advisor — You are pro model in advisor mode, the flash model is about to answer the user. Based on the conversation above, give flash concise actionable guidance; you have 0 tool so DO NOT CALL ANY TOOLS. Task: ${trigger.question}]`,
-              }
+              const advisorUserMsg = buildForcedAdvisorPrompt(trigger.question)
               const proMessages: AnthropicMessage[] = [...workingMessages, advisorUserMsg]
               const proBody = dispatcher.buildProAdvisorBody(rawBody, proMessages)
               const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
@@ -1786,10 +1819,11 @@ export class EscalateDispatcher {
 
               const toolResult = buildToolResultMessage(forcedCall.id, proContent)
               const assistantToolUse = buildAssistantToolUseMessage(forcedCall.id, forcedCall.name, JSON.stringify(forcedCall.input))
-              // See non-stream path: attach pro's thinking as reasoning_content
-              // so DeepSeek-style reasoning models accept the fabricated
-              // assistant tool_use message.
-              const forcedThinking = proResult.thinking || proContent
+              // See non-stream path: an EMPTY thinking block satisfies the
+              // DeepSeek reasoning_content constraint. Pro's analysis travels
+              // only via the tool_result; putting it into flash's own reasoning
+              // slot would leak the large model's framing and confuse identity.
+              const forcedThinking = ''
               const toolUseMsg: AnthropicMessage = {
                 role: 'assistant',
                 content: [
@@ -1843,7 +1877,7 @@ export class EscalateDispatcher {
             dispatcher.logger.info?.(`[escalate] advisor question: ${advisorQuestion ?? '(empty)'}`)
 
             const advisorUserMsg: AnthropicMessage | null = advisorQuestion
-              ? { role: 'user', content: `[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] ${advisorQuestion}` }
+              ? buildAdvisorConsultPrompt(advisorQuestion)
               : null
 
             // Strip tool_use blocks before sending to pro.

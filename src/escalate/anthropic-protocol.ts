@@ -371,15 +371,86 @@ export function getStopReason(event: AnthropicStreamEvent): 'end_turn' | 'tool_u
 // Synthetic event construction
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Advisor think-panel sentinels
+// ---------------------------------------------------------------------------
+// XML tags that wrap pro's analysis when it is streamed into the client's
+// think panel. They are ALSO stripped from assistant message history before
+// every upstream call (`stripAdvisorMarkersFromThinking`) so models never see
+// the fabricated consultation echoed back in their own reasoning — which
+// would otherwise let them mimic the markers and conflate the pro/flash
+// roles. The tag name is deliberately uncommon so a model is unlikely to
+// emit it spontaneously. Change it here once and both injection + stripping
+// stay in sync.
+export const ADVISOR_CONSULT_TAG = 'proxy-advisor-consult'
+
+/** Escape a string so it is safe inside an XML attribute value. */
+function escapeXmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+/** Open-tag text injected into the think panel to begin an advisor block. */
+export function advisorConsultOpenText(question: string | undefined): string {
+  const attr = question ? ` question="${escapeXmlAttr(question)}"` : ''
+  return `\n\n<${ADVISOR_CONSULT_TAG}${attr}>\n\n`
+}
+
+/** Close-tag text injected into the think panel to end an advisor block. */
+export function advisorConsultCloseText(): string {
+  return `\n\n</${ADVISOR_CONSULT_TAG}>\n\n`
+}
+
+/**
+ * Remove every advisor consultation block (open tag + pro analysis + close
+ * tag) from a reasoning string. Non-greedy; handles multiple blocks.
+ */
+export function stripAdvisorMarkersFromText(text: string): string {
+  if (!text) return text
+  const re = new RegExp(
+    `<${ADVISOR_CONSULT_TAG}\\b[^>]*>[\\s\\S]*?<\\/${ADVISOR_CONSULT_TAG}>`,
+    'g',
+  )
+  return text.replace(re, '')
+}
+
+/**
+ * Walk messages and strip advisor sentinel blocks from every assistant
+ * thinking block. Companion to `ensureAssistantThinkingBlocks`; both run in
+ * `callUpstream` before the request leaves the proxy, so the model never
+ * sees its own "reasoning" padded with a fabricated advisor turn.
+ */
+export function stripAdvisorMarkersFromThinking(messages: AnthropicMessage[]): AnthropicMessage[] {
+  return messages.map((m) => {
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) return m
+    let changed = false
+    const content = m.content.map((b) => {
+      if (
+        b.type === 'thinking' &&
+        typeof b.thinking === 'string' &&
+        b.thinking.includes(`<${ADVISOR_CONSULT_TAG}`)
+      ) {
+        const stripped = stripAdvisorMarkersFromText(b.thinking)
+        if (stripped !== b.thinking) {
+          changed = true
+          return { ...b, thinking: stripped }
+        }
+      }
+      return b
+    })
+    return changed ? { ...m, content } : m
+  })
+}
+
 /**
  * Build a synthetic SSE event chunk for advisor begin — injected as a thinking
  * content block so it appears in the client's thinking panel.
  */
 export function buildAdvisorBeginEvent(question: string | undefined, model: string, rewriter: ContentBlockIndexRewriter): Uint8Array {
-  const label = question
-    ? `[proxy: consulting advisor (pro): ${question} — do not repeat this marker]`
-    : '[proxy: consulting advisor (pro) — do not repeat this marker]'
-  const thinkingText = `\n\n--- ${label} ---\n\n`
+  const thinkingText = advisorConsultOpenText(question)
   const idx = rewriter.allocate()
   const event1 = `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: { type: 'thinking', thinking: '' } })}\n\n`
   const event2 = `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta: { type: 'thinking_delta', thinking: thinkingText } })}\n\n`
@@ -392,7 +463,7 @@ export function buildAdvisorBeginEvent(question: string | undefined, model: stri
  * block marking the end of pro consultation.
  */
 export function buildAdvisorEndEvent(model: string, rewriter: ContentBlockIndexRewriter): Uint8Array {
-  const thinkingText = `\n\n--- [proxy: back to flash with advisor analysis — do not repeat this marker] ---\n\n`
+  const thinkingText = advisorConsultCloseText()
   const idx = rewriter.allocate()
   const event1 = `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: idx, content_block: { type: 'thinking', thinking: '' } })}\n\n`
   const event2 = `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: idx, delta: { type: 'thinking_delta', thinking: thinkingText } })}\n\n`

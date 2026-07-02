@@ -114,7 +114,7 @@ flash retry stream:
 
   [flash 原生 think...]
 
-  --- [proxy: consulting advisor] ---
+  <proxy-advisor-consult question="<question>">
 
     ## 分析过程
     (pro 的 reasoning_content)
@@ -122,7 +122,7 @@ flash retry stream:
     ## 结论
     (pro 的 content)
 
-  --- [proxy: back to flash] ---
+  </proxy-advisor-consult>
 
   (flash retry 的 reasoning_content)    ← flash 综合 pro 分析的 think
 
@@ -397,6 +397,21 @@ SyntaxError: Unexpected non-whitespace character after JSON at position 319
 **修复：** 非流式和流式路径均输出两条 info 日志：
 - `[escalate] advisor question: ...`
 - `[escalate] pro response (N chars): ...`
+
+### 2026-07-01 — 修订: advisor 标记 XML 化 + 回传剥离 + 常量抽离
+
+**问题（路径 A — 客户端回传污染）：** proxy 注入客户端 think 面板的 advisor 分隔标记（`--- [proxy: consulting advisor (pro): Q] ---` … `--- [proxy: back to flash ...] ---`）被 agentic 客户端存进 assistant 消息 thinking 历史，下一轮原样发回。`callUpstream` 此前只调 `ensureAssistantThinkingBlocks`（补空 thinking），从不剥离这些标记 → flash/pro 反复看到"自己"的推理里嵌着伪造的 advisor 咨询 → 模仿标记、伪造咨询流程，pro 的第三人称视角（"给 flash 指导"）也让 flash 角色错乱。
+
+**修复：**
+1. **标记 XML 化 + 常量化：** think 面板分隔标记从 `--- [proxy: consulting advisor ...] ---` 改为 XML 配对标签 `<proxy-advisor-consult question="...">` … `</proxy-advisor-consult>`。标签名抽离为顶部常量 `ADVISOR_CONSULT_TAG`（`anthropic-protocol.ts`），注入（`buildAdvisorBeginEvent`/`buildAdvisorEndEvent`）与剥离共用同一常量；`escapeXmlAttr` 处理 question 属性转义。
+2. **路径 A — 出口剥离：** 新增 `stripAdvisorMarkersFromThinking(messages)`，在 `callUpstream`（所有上游请求唯一出口）`ensureAssistantThinkingBlocks` 之后调用，把任何 assistant thinking block 里 `<proxy-advisor-consult …>…</proxy-advisor-consult>` 整段删掉，只保留模型自己的推理。flash/pro 再也看不到伪造咨询。
+3. **forced / 原生 advisor prompt 前缀常量化：** forced 的 `FORCED_ADVISOR_PROMPT_PREFIX`（`[Forced advisor — … Task: ${q}]`）与原生（flash 自愿调）的 `ADVISOR_CONSULT_PROMPT_PREFIX`（`[Advisor consultation - …] ${q}`）各抽成顶部常量 + 构造 helper（`buildForcedAdvisorPrompt` / `buildAdvisorConsultPrompt`），消除内联魔术字符串。
+
+**改动文件：** `src/escalate/anthropic-protocol.ts`（`ADVISOR_CONSULT_TAG` + helper + strip 函数 + begin/end event 复用）；`src/escalate/dispatcher.ts`（`callUpstream` 出口剥离；两处 prompt 前缀常量化）。
+
+**验证：** type-check escalate 零错误；escalate 全套 7 文件 / 173 测试通过（含新增 7 个：路径 A 集成 1 + `stripAdvisorMarkersFromThinking` 纯函数 5 + 路径 B 详见 260630 同日修订）。
+
+**注：** 上方决策 3 时间线已同步为 XML 标记展示。历史修订记录里的旧标记描述保留为当时记录。
 
 ## 总结
 
