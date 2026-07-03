@@ -194,7 +194,8 @@ export const advisorToolDefinition: AnthropicTool = {
     `WHEN NOT: trivial lookups, single-line edits, typo fixes, or anything you already know with high confidence.\n\n` +
     `HOW: call the tool DIRECTLY without preamble or transitional phrases (don't say "let me consult…" first). ` +
     `Pass a specific \`question\` highlighting what you want weighed in on — pro sees the full conversation. ` +
-    `Synthesize pro's analysis into your answer; you may call ${ADVISOR_TOOL_NAME} multiple times per turn for independent questions.`,
+    `Synthesize pro's analysis into your answer; you may call ${ADVISOR_TOOL_NAME} multiple times per turn for independent questions. ` +
+    `After receiving an advisor result, briefly restate its key points in your own thinking before continuing.`,
   input_schema: {
     type: 'object',
     properties: {
@@ -204,6 +205,37 @@ export const advisorToolDefinition: AnthropicTool = {
       },
     },
     required: ['question'],
+  },
+}
+
+/**
+ * A no-op tool given EXCLUSIVELY to the pro model in advisor mode. Pro is a
+ * passive advisor with no real tools, but agentic models habitually try to
+ * call tools (search/read/run) and spin in their reasoning ("let me search
+ * the codebase...") when none are available. Offering ONE dummy tool they
+ * can call to signal "done" satisfies that impulse and short-circuits the
+ * loop.
+ *
+ * The proxy IGNORES any `finish` tool_call from pro — pro's advice is always
+ * taken from its text/thinking content (extractTextFromBlocks skips
+ * tool_use blocks). The tool exists purely as a pressure-release valve for
+ * models that feel compelled to emit a tool_call.
+ */
+export const proFinishToolDefinition: AnthropicTool = {
+  name: 'finish',
+  description:
+    'You are an ADVISOR — you have NO other tools. You cannot search, read files, run code, or inspect the codebase. ' +
+    'Base your analysis solely on the conversation above, write your recommendation as normal text, ' +
+    'then call this tool with done=true to signal you are done. Do NOT plan or attempt any other tool call — it will fail.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      done: {
+        type: 'boolean',
+        description: 'Set to true to signal completion.',
+      },
+    },
+    required: ['done'],
   },
 }
 

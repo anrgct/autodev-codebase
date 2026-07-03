@@ -35,6 +35,7 @@ import {
   ADVISOR_TOOL_NAME,
   injectAdvisorTool,
   injectContract,
+  proFinishToolDefinition,
   type AnthropicMessage,
   type AnthropicClientRequestBody,
 } from './contract'
@@ -678,9 +679,11 @@ export class EscalateDispatcher {
   }
 
   /**
-   * Build a pro body for advisor mode: target the pro model and STRIP ALL
-   * tools. Pro is a passive advisor — it should NOT have access to the
-   * `advisor` tool definition or any client tools.
+   * Build a pro body for advisor mode: target the pro model, strip all client
+   * tools, and inject ONE no-op `finish` tool. Pro is a passive advisor — it
+   * must NOT have access to the `advisor` tool or any client tools. The dummy
+   * `finish` tool exists only so agentic models have a tool to call instead
+   * of spinning in their reasoning; see `proFinishToolDefinition`.
    */
   private buildProAdvisorBody(
     rawBody: unknown,
@@ -702,6 +705,13 @@ export class EscalateDispatcher {
     if (typeof rest['max_tokens'] !== 'number') {
       rest['max_tokens'] = this.config.maxTokens
     }
+    // Give pro ONE no-op `finish` tool. Pro must NOT receive client tools or
+    // the advisor tool, but agentic models spin in their reasoning ("let me
+    // search the code...") when they have no tools at all. A single dummy
+    // tool they can call to signal "done" satisfies that impulse. Any
+    // `finish` tool_call is IGNORED — pro's advice is taken from its
+    // text/thinking content (extractTextFromBlocks skips tool_use blocks).
+    rest['tools'] = [proFinishToolDefinition]
     return rest
   }
 
@@ -2347,6 +2357,10 @@ export class EscalateDispatcher {
     // message_delta / message_stop / message_start from the pro sub-stream
     // are completely invisible to the client.
     let swallowing = false
+    // Indices of pro content blocks of type `tool_use` (e.g. the dummy
+    // `finish` tool_call). These must NOT leak into the client stream — we
+    // swallow their content_block_start/delta/stop events entirely.
+    const toolUseIndices = new Set<number>()
 
     while (true) {
       const { value, done } = await reader.read()
@@ -2397,6 +2411,24 @@ export class EscalateDispatcher {
               content_block: { type: 'thinking', thinking: '' },
             })
             controller.enqueue(Buffer.from(`data: ${rewrittenPayload}\n`, 'utf-8'))
+            continue
+          }
+
+          // pro's tool_use blocks (e.g. the dummy `finish` tool_call) must
+          // NOT leak to the client stream. Swallow the whole block: its
+          // content_block_start, content_block_delta (input_json_delta), and
+          // content_block_stop.
+          if (event.type === 'content_block_start' && event.content_block.type === 'tool_use') {
+            toolUseIndices.add(event.index)
+            swallowing = true
+            continue
+          }
+          if (
+            (event.type === 'content_block_delta' || event.type === 'content_block_stop') &&
+            toolUseIndices.has(event.index)
+          ) {
+            if (event.type === 'content_block_stop') toolUseIndices.delete(event.index)
+            swallowing = true
             continue
           }
         }

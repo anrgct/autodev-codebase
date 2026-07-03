@@ -413,6 +413,26 @@ SyntaxError: Unexpected non-whitespace character after JSON at position 319
 
 **注：** 上方决策 3 时间线已同步为 XML 标记展示。历史修订记录里的旧标记描述保留为当时记录。
 
+### 2026-07-02 — 修订: pro 端注入 dummy `finish` tool + 流式 tool_use 透穿修复
+
+**问题：** advisor 模式下 `buildProAdvisorBody` strip 了所有 tools，pro 作为纯文本顾问。但 agentic 模型在**无任何工具**时会陷入 reasoning 空转——反复输出"让我用工具实际检查代码""让我搜索与分割相关的增强代码""我将探索代码库以查找关键文件"等计划性废话，既消耗 token 又不产出有效建议。
+
+**根因：** 这类模型的训练使其强烈倾向于"调工具收集信息再回答"。messages 里带着客户端的 tool_call/tool_result 历史，强化了"本对话有工具可用"的预期。但 body 里 tools 被完全 strip，模型在"想调工具"与"无工具可调"之间反复打转，无法收敛到"直接给文本建议"。
+
+**修复：** 给 pro 注入**一个** dummy tool `finish`（`proFinishToolDefinition`，`contract.ts`），带 `done: boolean` 参数（required）：
+- description 明确告知"你是 ADVISOR，没有其他工具，不能搜索/读取/运行代码，基于对话上下文分析，写完文本建议后调用 finish（done=true）表示完成"。
+- pro 调用 finish 只是"压力释放阀"——满足它必须发 tool_call 的冲动，避免在 reasoning 里空转。
+- proxy **完全忽略** pro 的 finish tool_call：非流式走 `extractTextFromBlocks` + `extractThinkingFromBlocks`（只取 text/thinking，跳过 tool_use block）；pro 的建议永远来自文本内容。
+
+**透穿修复（流式）：** 初版上线后发现 finish tool_call 在**流式路径**透穿到客户端——`streamProAsReasoning` 的"转发所有其他行"fallback 把 pro 的 tool_use block 事件（content_block_start type=tool_use / input_json_delta / content_block_stop）原样转发给了客户端 SSE 流。修复：新增 `toolUseIndices` 集合，检测到 content_block_start 的 type=tool_use 时记录 index 并进入 swallowing，该 index 的后续 delta/stop 全部吞掉不转发。非流式路径本就只取 text block，不受影响。
+
+**改动文件：**
+- `src/escalate/contract.ts` — 新增 `proFinishToolDefinition`（name `finish`，`done: boolean` required）。
+- `src/escalate/dispatcher.ts` — `buildProAdvisorBody` 注入 finish tool；`streamProAsReasoning` 新增 `toolUseIndices` 过滤 tool_use block（透穿修复）。
+- `src/escalate/__tests__/dispatcher.spec.ts` — 3 处 `proBody.tools` 断言更新；新增 2 个测试：（1）非流式 pro 返回 text + finish tool_call → proxy 忽略 tool_call，tool_result 只含 text，finish 不泄漏进 flash history；（2）流式 pro 返回 text + finish tool_use block → 客户端 SSE 流不含 finish/tool_use（透穿修复验证）。
+
+**验证：** type-check escalate 零错误；escalate 全套 7 文件 / 175 测试通过（新增 2），零回归。
+
 ## 总结
 
 ### 核心设计要点

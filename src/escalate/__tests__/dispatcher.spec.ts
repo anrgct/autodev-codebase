@@ -25,7 +25,7 @@
  *  18. Advisor non-stream: orphaned tool_use rewrite
  *  19. Advisor stream: pass through no tool_use
  *  20. Advisor stream: intercept tool_use, inject pro
- *  21. Pro body has no tools
+ *  21. Pro body has only the dummy finish tool
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EscalateDispatcher, detectForcedAdvisor } from '../dispatcher'
@@ -671,9 +671,10 @@ describe('EscalateDispatcher', () => {
 
       const proBody = JSON.parse(captured[1].init.body!)
       expect(proBody.model).toBe(PRO)
-      // Pro is a passive advisor — NO tools (not even advisor). Flash owns
-      // the advisor tool exclusively.
-      expect(proBody.tools).toBeUndefined()
+      // Pro is a passive advisor — only the dummy `finish` tool, no advisor
+      // or client tools.
+      expect(proBody.tools).toHaveLength(1)
+      expect(proBody.tools[0].name).toBe('finish')
       expect(proBody.tool_choice).toBeUndefined()
       const proMessages = proBody.messages
       // The advisor question is surfaced as a user message appended after
@@ -979,11 +980,12 @@ describe('EscalateDispatcher', () => {
     })
 
     // ══════════════════════════════════════════════════════════════════
-    // VERIFY FIX: pro has NO tools → returns content → tool result has content
+    // VERIFY FIX: pro has no advisor/client tools (only dummy finish) → returns content → tool result has content
     //
-    // buildProAdvisorBody() now strips ALL tools. Pro cannot call advisor.
-    // Pro sees user's question and returns analysis as content, which the
-    // dispatcher puts into the tool result for flash to synthesize.
+    // buildProAdvisorBody() strips client tools and gives pro only the no-op
+    // `finish` tool. Pro cannot call advisor. Pro sees user's question and
+    // returns analysis as content, which the dispatcher puts into the tool
+    // result for flash to synthesize.
     // ══════════════════════════════════════════════════════════════════
     it('pro returns content normally (no advisor tool → no tool_calls loop)', async () => {
       // Step 1: flash calls advisor
@@ -1022,11 +1024,56 @@ describe('EscalateDispatcher', () => {
       const body = JSON.parse((out.body as Buffer).toString('utf-8'))
       expect(body.content[0].text).toContain('顾问分析')
 
-      // Pro body MUST NOT have any tools
+      // Pro body has only the dummy `finish` tool (no advisor/client tools)
       const proBody = JSON.parse(captured[1].init.body!)
       expect(proBody.model).toBe(PRO)
-      expect(proBody.tools).toBeUndefined()
+      expect(proBody.tools).toHaveLength(1)
+      expect(proBody.tools[0].name).toBe('finish')
       expect(proBody.tool_choice).toBeUndefined()
+    })
+
+    it('pro returns text + finish tool_call → proxy ignores the tool_call, uses text as advice', async () => {
+      // Step 1: flash calls advisor
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'tool_use', id: 'call_flash_1', name: 'advisor', input: { question: '怎么重构' } }],
+        stop_reason: 'tool_use', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+
+      // Step 2: pro returns text AND a `finish` tool_call (agentic impulse).
+      // The proxy must IGNORE the finish tool_call and take the text as advice.
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [
+          { type: 'text', text: 'PRO: 重构建议是提取公共模块。' },
+          { type: 'tool_use', id: 'toolu_finish', name: 'finish', input: { done: true } }
+        ],
+        stop_reason: 'tool_use', stop_sequence: null, model: PRO, usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+
+      // Step 3: flash retry synthesises
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: '综合：重构建议是提取公共模块。' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH, usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      await d.dispatch({ messages: [{ role: 'user', content: '怎么重构这个模块' }] }, false, {})
+
+      // tool_result contains pro's TEXT only (finish tool_call ignored)
+      const flashRetryBody = JSON.parse(captured[2].init.body!)
+      const msgs = flashRetryBody.messages
+      const toolResultMsg = msgs[msgs.length - 1]
+      expect(toolResultMsg.content[0].type).toBe('tool_result')
+      expect(toolResultMsg.content[0].content).toBe('PRO: 重构建议是提取公共模块。')
+      // The `finish` tool_call must NOT leak into flash's message history
+      const hasFinish = msgs.some((m: { content?: unknown[] }) =>
+        Array.isArray(m.content) && m.content.some((b) => {
+          const block = b as { type?: string; name?: string }
+          return block.type === 'tool_use' && block.name === 'finish'
+        }))
+      expect(hasFinish).toBe(false)
     })
   })
 
@@ -1175,6 +1222,51 @@ describe('EscalateDispatcher', () => {
       expect(captured).toHaveLength(3)
     })
 
+    it('stream: pro finish tool_use block is swallowed, not leaked to client', async () => {
+      const flashStream = mkSseStream([
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c1","name":"advisor","input":{}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":10}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ])
+      // pro returns text AND a `finish` tool_use block — the tool_use block
+      // must be swallowed by streamProAsReasoning, never reaching the client.
+      const proStream = mkSseStream([
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"PRO ANALYSIS"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_f","name":"finish","input":{"done":true}}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ])
+      const flashRetryStream = mkSseStream([
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"FINAL"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ])
+      queueResponse(flashStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(proStream, { headers: { 'content-type': 'text/event-stream' } })
+      queueResponse(flashRetryStream, { headers: { 'content-type': 'text/event-stream' } })
+
+      const d = new EscalateDispatcher({ config: makeAdvisorConfig(), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }], stream: true }, true, {})
+
+      const acc = await drainStream(out.body as ReadableStream<Uint8Array>)
+      const { content, thinking } = parseSse(acc)
+
+      // pro's text analysis still reaches the think panel
+      expect(thinking).toContain('PRO ANALYSIS')
+      expect(content).toBe('FINAL')
+      // The dummy `finish` tool_use block must NOT leak into the client stream
+      expect(acc).not.toContain('finish')
+      expect(acc).not.toContain('tool_use')
+    })
+
     it('pro call has no tools and no tool_choice', async () => {
       const flashStream = mkSseStream([
         'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c1","name":"advisor","input":{}}}\n\n',
@@ -1215,8 +1307,9 @@ describe('EscalateDispatcher', () => {
 
       const proBody = JSON.parse(captured[1].init.body!)
       expect(proBody.model).toBe(PRO)
-      // Pro is a passive advisor — NO tools at all.
-      expect(proBody.tools).toBeUndefined()
+      // Pro is a passive advisor — only the dummy `finish` tool.
+      expect(proBody.tools).toHaveLength(1)
+      expect(proBody.tools[0].name).toBe('finish')
       expect(proBody.tool_choice).toBeUndefined()
       // Advisor question is surfaced as a user message
       const proMsgs = proBody.messages
