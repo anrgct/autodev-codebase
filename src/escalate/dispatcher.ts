@@ -285,32 +285,50 @@ export function extractAllAdvisorToolCalls(
 const FORCE_ADVISOR_USER_TURN_QUESTION = '用户指令的核心需求？是否有歧义？'
 const FORCE_ADVISOR_TOOL_ERROR_QUESTION = '工具报错的原因？修复建议？'
 const FORCE_ADVISOR_TOOL_COUNT_QUESTION = '当前方向是否正确？是否有错漏？下一步建议？'
+const FORCE_ADVISOR_TASK_DONE_QUESTION = '任务完成了吗？'
 const FORCE_ADVISOR_TOOL_COUNT_INTERVAL = 5
 
-/**
- * Prefix of the user message the proxy fakes when consulting pro as a forced
- * advisor. It primes pro to act as a guide for the flash model (not answer
- * the user directly) and to refrain from tool calls. The dynamic preset
- * question (one of the FORCE_ADVISOR_*_QUESTION constants above) is appended
- * by `buildForcedAdvisorPrompt`.
- */
-const FORCED_ADVISOR_PROMPT_PREFIX =
-  'Forced advisor — You are pro model in advisor mode, the flash model is about to answer the user. ' +
-  'Based on the conversation above, give flash concise actionable guidance; ' +
-  'you have 0 tool so DO NOT CALL ANY TOOLS. Task:'
+/** Valid forced-advisor rule names (comma-separated config string values). */
+export const FORCE_ADVISOR_RULE_NAMES = ['user-turn', 'tool-error', 'tool-count', 'task-done'] as const
+export type ForcedAdvisorRuleName = (typeof FORCE_ADVISOR_RULE_NAMES)[number]
 
-/** Build the user message that consults pro as a forced advisor (pro side). */
-function buildForcedAdvisorPrompt(question: string): AnthropicMessage {
-  return { role: 'user', content: `[${FORCED_ADVISOR_PROMPT_PREFIX} ${question}]` }
+
+/**
+ * Build the user message that consults pro as a forced advisor, with a context
+ * string tailored to the trigger type. Each trigger has different timing:
+ *
+ *   user-turn   — flash is about to start answering a fresh user message
+ *   tool-error  — a tool just errored, flash needs recovery guidance
+ *   tool-count  — flash is mid-tool-loop, evaluate direction
+ *   task-done   — flash already answered (post-response), verify completion
+ */
+function buildForcedAdvisorPromptByType(
+  type: ForcedAdvisorTrigger['type'],
+  question: string
+): AnthropicMessage {
+  const context = {
+    'user-turn':
+      'You are pro model in advisor mode, the flash model is about to answer the user. ' +
+      'Based on the conversation above, give flash concise actionable guidance.',
+    'tool-error':
+      'A tool just returned an error. You are pro model in advisor mode. ' +
+      'Help flash understand the root cause and how to recover.',
+    'tool-count':
+      'Flash has been working through tool calls. You are pro model in advisor mode. ' +
+      'Evaluate whether the current approach is on track and what to do next.',
+    'task-done':
+      'Flash has just answered the user. You are pro model in advisor mode. ' +
+      'Verify whether the task is fully complete or if something is missing.',
+  }[type]
+  return { role: 'user', content: `[Forced advisor — ${context} Task: ${question}]` }
 }
 
 /**
  * Prefix of the user message the proxy sends to pro when FLASH voluntarily
- * calls the advisor tool (the non-forced path). Contrast with
- * FORCED_ADVISOR_PROMPT_PREFIX, which is used when the proxy fakes the call.
+ * calls the advisor tool (the non-forced path).
  */
 const ADVISOR_CONSULT_PROMPT_PREFIX =
-  'Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix'
+  'Advisor consultation — analyze and answer, do not repeat this prefix'
 
 /** Build the user message that consults pro for a voluntary (flash-initiated) advisor call. */
 function buildAdvisorConsultPrompt(question: string): AnthropicMessage {
@@ -321,6 +339,7 @@ export type ForcedAdvisorTrigger =
   | { type: 'user-turn'; question: string }
   | { type: 'tool-error'; question: string }
   | { type: 'tool-count'; question: string }
+  | { type: 'task-done'; question: string }
 
 /**
  * Count real (non-advisor) `tool_use` blocks across all messages. Advisor
@@ -386,6 +405,42 @@ export function detectForcedAdvisor(messages: AnthropicMessage[]): ForcedAdvisor
     return { type: 'tool-count', question: FORCE_ADVISOR_TOOL_COUNT_QUESTION }
   }
   return null
+}
+
+const FORCE_ADVISOR_RULE_SET = new Set<ForcedAdvisorRuleName>(FORCE_ADVISOR_RULE_NAMES)
+
+/**
+ * Resolve the raw `forceAdvisor` config value to an enabled rules set.
+ *
+ * - `true` → `'all'` (every rule is enabled)
+ * - `false` → `false` (forced advisor disabled)
+ * - comma-separated string like `"user-turn,tool-error"` → a `Set` of those rules
+ *
+ * Invalid rule names in the string are silently ignored.
+ */
+export function resolveForceAdvisorRules(forceAdvisor: boolean | string): 'all' | Set<ForcedAdvisorRuleName> | false {
+  if (forceAdvisor === false || forceAdvisor === 'false') return false
+  if (forceAdvisor === true || forceAdvisor === 'true') return 'all'
+  if (typeof forceAdvisor === 'string') {
+    const names = forceAdvisor.split(',').map((s) => s.trim()).filter(Boolean)
+    const result = new Set<ForcedAdvisorRuleName>()
+    for (const name of names) {
+      if (FORCE_ADVISOR_RULE_SET.has(name as ForcedAdvisorRuleName)) {
+        result.add(name as ForcedAdvisorRuleName)
+      }
+    }
+    return result.size > 0 ? result : false
+  }
+  return false
+}
+
+/** Check whether a detected trigger is allowed by the current enabled-rules config. */
+export function isTriggerEnabled(
+  trigger: ForcedAdvisorTrigger,
+  enabledRules: 'all' | Set<ForcedAdvisorRuleName>
+): boolean {
+  if (enabledRules === 'all') return true
+  return enabledRules.has(trigger.type)
 }
 
 // ---------------------------------------------------------------------------
@@ -1577,9 +1632,10 @@ export class EscalateDispatcher {
     // already seeing an advisor result in history. pro is guaranteed to be
     // consulted and the question is the deterministic preset. See
     // docs/plans/260630-force-advisor.md.
-    if (this.config.forceAdvisor) {
+    const forcedEnabledRules = resolveForceAdvisorRules(this.config.forceAdvisor)
+    if (forcedEnabledRules) {
       const trigger = detectForcedAdvisor(workingMessages)
-      if (trigger) {
+      if (trigger && isTriggerEnabled(trigger, forcedEnabledRules)) {
         path.push('pro')
         this.logger.info?.(`[escalate] forced advisor (${trigger.type}) — consulting pro: ${trigger.question}`)
         const forcedCall: NormalizedToolCall = {
@@ -1587,7 +1643,7 @@ export class EscalateDispatcher {
           name: ADVISOR_TOOL_NAME,
           input: { question: trigger.question },
         }
-        const advisorUserMsg = buildForcedAdvisorPrompt(trigger.question)
+        const advisorUserMsg = buildForcedAdvisorPromptByType(trigger.type, trigger.question)
         const proMessages: AnthropicMessage[] = [...workingMessages, advisorUserMsg]
         const proBody = this.buildProAdvisorBody(rawBody, proMessages)
         const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
@@ -1633,6 +1689,8 @@ export class EscalateDispatcher {
       }
     }
 
+    let taskDoneTriggered = false
+
     while (true) {
       path.push('flash')
 
@@ -1659,7 +1717,69 @@ export class EscalateDispatcher {
       const stopReason = flashParsed?.stop_reason
 
       const advisorCall = assistantMsg ? extractAdvisorToolCall(assistantMsg) : null
+
+      // ---- Forced advisor: task-done post-processing ----
+      // When flash answers without any tool_use (task finished), consult pro
+      // to verify completion. The forced tool_use + tool_result is spliced
+      // into workingMessages and flash retries with pro's guidance.
+      // `taskDoneTriggered` ensures this happens at most once per request.
       if (!advisorCall || stopReason !== 'tool_use') {
+        const flashContent = assistantMsg?.content
+        const hasToolUse = Array.isArray(flashContent) && flashContent.some((b: AnthropicContentBlock) => b.type === 'tool_use')
+        if (
+          !hasToolUse &&
+          forcedEnabledRules &&
+          isTriggerEnabled({ type: 'task-done', question: FORCE_ADVISOR_TASK_DONE_QUESTION }, forcedEnabledRules) &&
+          !taskDoneTriggered
+        ) {
+          taskDoneTriggered = true
+          this.logger.info?.(`[escalate] forced advisor (task-done) — flash answered without tools, consulting pro: ${FORCE_ADVISOR_TASK_DONE_QUESTION}`)
+          const forcedCall: NormalizedToolCall = {
+            id: `forced_${randomUUID()}`,
+            name: ADVISOR_TOOL_NAME,
+            input: { question: FORCE_ADVISOR_TASK_DONE_QUESTION },
+          }
+          const advisorUserMsg = buildForcedAdvisorPromptByType('task-done', FORCE_ADVISOR_TASK_DONE_QUESTION)
+          const proMessages: AnthropicMessage[] = [...workingMessages, assistantMsg!, advisorUserMsg]
+          const proBody = this.buildProAdvisorBody(rawBody, proMessages)
+          const proResp = await this.callUpstream(proBody, clientHeaders, clientSignal)
+          if (!proResp.ok) {
+            const errBuf = Buffer.from(await proResp.arrayBuffer())
+            return {
+              finalModel: 'flash',
+              reason: 'advisor',
+              path,
+              status: proResp.status,
+              headers: buildResponseHeaders(proResp.headers, annotationHeaders({ finalModel: 'flash', path })),
+              body: errBuf,
+              isStream: false,
+            }
+          }
+          const proText = await proResp.text()
+          const proParsed = parseNonStreamResponse(proText)
+          const proThinking = proParsed ? extractThinkingFromBlocks(proParsed.content) : ''
+          const proContentRaw = proParsed ? extractTextFromBlocks(proParsed.content) : ''
+          const proFullContent = proThinking ? `${proThinking}
+
+${proContentRaw}` : proContentRaw
+          this.logger.info?.(`[escalate] forced advisor task-done pro response (${proFullContent.length} chars): ${proFullContent.slice(0, 200)}${proFullContent.length > 200 ? '...' : ''}`)
+
+          const toolResult = buildToolResultMessage(forcedCall.id, proFullContent)
+          const assistantToolUse = buildAssistantToolUseMessage(forcedCall.id, forcedCall.name, JSON.stringify(forcedCall.input))
+          const forcedThinking = ''
+          const toolUseMsg: AnthropicMessage = {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: forcedThinking },
+              ...(Array.isArray(assistantToolUse.content) ? assistantToolUse.content : []),
+            ],
+          }
+          workingMessages = [...workingMessages, assistantMsg!, toolUseMsg, toolResult]
+          sawAdvisorCall = true
+          path.push('pro')
+          continue
+        }
+
         return {
           finalModel: 'flash',
           reason: sawAdvisorCall ? 'advisor' : 'non-stream',
@@ -1795,9 +1915,10 @@ export class EscalateDispatcher {
           // streaming wrinkle: we must synthesize the client stream's
           // message_start ourselves (no flash first round has run yet), and
           // tell the first flash peek to swallow its own message_start.
-          if (dispatcher.config.forceAdvisor) {
+          const forcedEnabledRules = resolveForceAdvisorRules(dispatcher.config.forceAdvisor)
+          if (forcedEnabledRules) {
             const trigger = detectForcedAdvisor(workingMessages)
-            if (trigger) {
+            if (trigger && isTriggerEnabled(trigger, forcedEnabledRules)) {
               path.push('pro')
               dispatcher.logger.info?.(`[escalate] forced advisor (${trigger.type}) — consulting pro: ${trigger.question}`)
               const forcedCall: NormalizedToolCall = {
@@ -1805,7 +1926,7 @@ export class EscalateDispatcher {
                 name: ADVISOR_TOOL_NAME,
                 input: { question: trigger.question },
               }
-              const advisorUserMsg = buildForcedAdvisorPrompt(trigger.question)
+              const advisorUserMsg = buildForcedAdvisorPromptByType(trigger.type, trigger.question)
               const proMessages: AnthropicMessage[] = [...workingMessages, advisorUserMsg]
               const proBody = dispatcher.buildProAdvisorBody(rawBody, proMessages)
               const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
@@ -1845,6 +1966,7 @@ export class EscalateDispatcher {
             }
           }
           // eslint-disable-next-line no-constant-condition
+          let taskDoneTriggered = false
           while (true) {
             const isFirstFlashCall = path.length === 0
             path.push('flash')
@@ -1861,13 +1983,81 @@ export class EscalateDispatcher {
 
             const flashReader = flashResp.body.getReader()
             currentReader = flashReader
-            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader, rewriter, messageStartSent || !isFirstFlashCall)
+            // Determine whether task-done detection should be active in peek.
+            // Only when forced is enabled AND task-done is allowed AND hasn't
+            // already been triggered for this request.
+            const enableTaskDoneDetect = !!(forcedEnabledRules &&
+              isTriggerEnabled({ type: 'task-done', question: FORCE_ADVISOR_TASK_DONE_QUESTION }, forcedEnabledRules) &&
+              !taskDoneTriggered)
+            const peekResult = await dispatcher.peekAdvisorStream(controller, flashReader, rewriter, messageStartSent || !isFirstFlashCall, enableTaskDoneDetect)
             if (peekResult.outcome === 'passthrough') {
               currentReader = null
               controller.close()
               return
             }
             if (peekResult.outcome === 'error') {
+              currentReader = null
+              controller.close()
+              return
+            }
+
+            // ---- task-done: flash answered without tools (streaming) ----
+            // Rewrite flash's text into a thinking block, consult pro, and
+            // retry flash. The text was NOT forwarded to the client yet
+            // (peekAdvisorStream discarded its passthroughBytes).
+            if (peekResult.outcome === 'task-done') {
+              if (
+                forcedEnabledRules &&
+                isTriggerEnabled({ type: 'task-done', question: FORCE_ADVISOR_TASK_DONE_QUESTION }, forcedEnabledRules) &&
+                !taskDoneTriggered
+              ) {
+                taskDoneTriggered = true
+                const flashText = Array.isArray(peekResult.assistantMsg.content)
+                  ? extractTextFromBlocks(peekResult.assistantMsg.content)
+                  : (typeof peekResult.assistantMsg.content === 'string' ? peekResult.assistantMsg.content : '')
+                if (flashText) {
+                  controller.enqueue(buildThinkingBlockBytes(flashText, rewriter))
+                }
+                dispatcher.logger.info?.(`[escalate] forced advisor (task-done) — flash answered without tools (stream), consulting pro: ${FORCE_ADVISOR_TASK_DONE_QUESTION}`)
+                const forcedCall: NormalizedToolCall = {
+                  id: `forced_${randomUUID()}`,
+                  name: ADVISOR_TOOL_NAME,
+                  input: { question: FORCE_ADVISOR_TASK_DONE_QUESTION },
+                }
+                const advisorUserMsg = buildForcedAdvisorPromptByType('task-done', FORCE_ADVISOR_TASK_DONE_QUESTION)
+                const flashAssistantMsg = peekResult.assistantMsg
+                const proMessages: AnthropicMessage[] = [...workingMessages, flashAssistantMsg, advisorUserMsg]
+                const proBody = dispatcher.buildProAdvisorBody(rawBody, proMessages)
+                const proResp = await dispatcher.callUpstream(proBody, clientHeaders, localSignal)
+                if (!proResp.ok || !proResp.body) {
+                  const errText = proResp.body ? await proResp.text().catch(() => '') : ''
+                  controller.enqueue(buildProtoProxyError(proResp.status, errText, dispatcher.config.proModel, rewriter))
+                  controller.close()
+                  return
+                }
+                controller.enqueue(buildProtoAdvisorBegin(FORCE_ADVISOR_TASK_DONE_QUESTION, dispatcher.config.proModel, rewriter))
+                const proReader = proResp.body.getReader()
+                currentReader = proReader
+                const proResult = await dispatcher.streamProAsReasoning(proReader, controller, rewriter)
+                currentReader = null
+                const proContent = proResult.thinking ? `${proResult.thinking}\n\n${proResult.text}` : proResult.text
+                dispatcher.logger.info?.(`[escalate] forced advisor task-done pro response (${proContent.length} chars): ${proContent.slice(0, 200)}${proContent.length > 200 ? '...' : ''}`)
+                controller.enqueue(buildProtoAdvisorEnd(dispatcher.config.proModel, rewriter))
+
+                const toolResult = buildToolResultMessage(forcedCall.id, proContent)
+                const assistantToolUse = buildAssistantToolUseMessage(forcedCall.id, forcedCall.name, JSON.stringify(forcedCall.input))
+                const forcedThinking = ''
+                const toolUseMsg: AnthropicMessage = {
+                  role: 'assistant',
+                  content: [
+                    { type: 'thinking', thinking: forcedThinking },
+                    ...(Array.isArray(assistantToolUse.content) ? assistantToolUse.content : []),
+                  ],
+                }
+                workingMessages = [...workingMessages, flashAssistantMsg, toolUseMsg, toolResult]
+                path.push('pro')
+                continue
+              }
               currentReader = null
               controller.close()
               return
@@ -1989,10 +2179,12 @@ export class EscalateDispatcher {
     controller: ReadableStreamDefaultController<Uint8Array>,
     reader: ReadableStreamDefaultReader<Uint8Array>,
     rewriter: ContentBlockIndexRewriter,
-    swallowMessageStart: boolean = false
+    swallowMessageStart: boolean = false,
+    enableTaskDoneDetection: boolean = false
   ): Promise<
     | { outcome: 'passthrough' }
     | { outcome: 'advisor'; assistantMsg: AnthropicMessage }
+    | { outcome: 'task-done'; assistantMsg: AnthropicMessage }
     | { outcome: 'error' }
   > {
     rewriter.beginSubStream()
@@ -2020,6 +2212,11 @@ export class EscalateDispatcher {
     // forwarded as final answer text.
     let pendingTextAcc: string[] = []
     let hasPendingTextBlock = false
+    // Accumulated thinking from flash's thinking blocks (forwarded immediately
+    // to the client, but also captured here so task-done can include it in the
+    // assistant message sent to pro and flash retry. Without this, the retry
+    // would lose flash's own reasoning context.)
+    let pendingThinkingAcc: string[] = []
 
     const flushPendingEvent = (buffer: boolean) => {
       if (pendingEventLine !== null) {
@@ -2064,6 +2261,28 @@ export class EscalateDispatcher {
           const assistantMsg: AnthropicMessage = { role: 'assistant', content: contentBlocks }
           try { await reader.cancel() } catch { /* noop */ }
           return { outcome: 'advisor', assistantMsg }
+        }
+
+        // ---- task-done: stream ended with no tool_use at all (just text ----
+        // and/or thinking). The accumulated content has been buffered but NOT
+        // forwarded to the client yet. We restore the checkpoint and return
+        // the content so the dispatch loop can rewrite it into a thinking
+        // block and consult pro before a flash retry.
+        if (enableTaskDoneDetection && toolUseInputs.size === 0 && (hasPendingTextBlock || pendingThinkingAcc.length > 0)) {
+          rewriter.restoreCheckpoint()
+          passthroughBytes = null
+          const contentBlocks: AnthropicContentBlock[] = []
+          const thinkingText = pendingThinkingAcc.join('')
+          if (thinkingText) {
+            contentBlocks.push({ type: 'thinking', thinking: thinkingText })
+          }
+          const textText = pendingTextAcc.join('')
+          if (textText) {
+            contentBlocks.push({ type: 'text', text: textText })
+          }
+          const assistantMsg: AnthropicMessage = { role: 'assistant', content: contentBlocks }
+          try { await reader.cancel() } catch { /* noop */ }
+          return { outcome: 'task-done', assistantMsg }
         }
         // Discard any saved checkpoint — the buffered events are being
         // committed (forwarded), so the allocated indices are valid.
@@ -2126,7 +2345,7 @@ export class EscalateDispatcher {
 
         const event = line.anthropicEvent
 
-        // thinking_delta → forward immediately
+        // thinking_delta → forward immediately AND accumulate for task-done
         const thinkText = isThinkingDelta(line)
         if (thinkText !== undefined) {
           // If we were buffering a text block, flush it first.
@@ -2136,6 +2355,7 @@ export class EscalateDispatcher {
           }
           flushPendingEvent(false)
           controller.enqueue(rewriteIndexInLine(line, rewriter))
+          pendingThinkingAcc.push(thinkText)
           continue
         }
 

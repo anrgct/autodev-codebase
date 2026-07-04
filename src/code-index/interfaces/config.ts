@@ -265,7 +265,7 @@ export interface CodeIndexConfig {
   escalateStickyProTtlMs?: number
   escalateThinkingBudget?: number
   escalateMaxTokens?: number
-  escalateForceAdvisor?: boolean
+  escalateForceAdvisor?: boolean | string
 
   // QRRanker shared tuning: number of decode steps to average attention over.
   // 0 = default (prefill-only, PURE_SYMBOL_LINE_PENALTY=0.01 cleans up symbol lines).

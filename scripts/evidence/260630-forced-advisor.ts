@@ -1,5 +1,5 @@
 /**
- * 验证：forced advisor 模式（`escalateForceAdvisor: true`）的三条触发规则。
+ * 验证：forced advisor 模式（`escalateForceAdvisor: true`）的四条触发规则。
  *
  * ## 背景
  *
@@ -7,13 +7,14 @@
  * forced advisor 让 proxy 在 flash 循环之前**主动伪造**一次 advisor 调用，
  * 用预设 question 咨询 pro，再把结果注入 messages。pro 必被咨询，question 确定。
  *
- * 三条触发规则（基于 `messages` 末尾状态，stateless）：
+ * 四条触发规则（基于 `messages` 末尾状态，stateless）：
  *
  * | 规则       | 触发条件                                          | 预设 question          |
  * |------------|---------------------------------------------------|------------------------|
  * | user-turn  | 末尾 user 且 content 不含 `tool_result`           | 「用户指令的核心需求？是否有歧义？」 |
  * | tool-error | 末尾 user 含 `tool_result` 且该 result 为 error   | 「工具报错的原因？修复建议？」     |
- * | tool-count | 末尾 user 含 `tool_result` 且真实 tool_use %5==0  | 「当前方向是否正确？下一步建议？」  |
+ * | tool-count | 末尾 user 含 `tool_result` 且真实 tool_use %5==0  | 「当前方向是否正确？是否有错漏？下一步建议？」 |
+ * | task-done  | 末尾 assistant 且 content 不含 `tool_use`          | 「任务完成了吗？」 |
  *
  * ## 验证点（每个用例）
  *
@@ -39,8 +40,9 @@
  *
  * ## 判定标准
  *
- *   三条规则都能在 think 面板匹配到对应的预设 question  → ✅ forced 生效
- *   某规则未出现 advisor 分隔 / question 不匹配          → ❌ 该规则未触发
+ *   每条用例按时间顺序期望一组规则（pre-response 在前，post-response 在后）。
+ *   think 面板中 `<proxy-advisor-consult question="...">` 的顺序和精确集合完全匹配期望 → ✅
+ *   多了/少了/顺序错误/未知 question                     → ❌ 该用例不通过
  *
  * ## 关联
  *
@@ -92,10 +94,24 @@ const { proxyUrl: PROXY_URL, apiKey: API_KEY, mode: MODE, forceAdvisor: FORCE_AD
 const PRESET_QUESTIONS = {
   'user-turn': '用户指令的核心需求？是否有歧义？',
   'tool-error': '工具报错的原因？修复建议？',
-  'tool-count': '当前方向是否正确？下一步建议？',
+  'tool-count': '当前方向是否正确？是否有错漏？下一步建议？',
+  'task-done': '任务完成了吗？',
 } as const
 
 type RuleType = keyof typeof PRESET_QUESTIONS
+
+// 反向映射：question 文本 → 规则名
+const QUESTION_TO_RULE = Object.fromEntries(
+  Object.entries(PRESET_QUESTIONS).map(([rule, q]) => [q, rule as RuleType]),
+) as Record<string, RuleType>
+
+// 规则触发阶段
+const RULE_PHASE: Record<RuleType, 'pre-response' | 'post-response'> = {
+  'user-turn': 'pre-response',
+  'tool-error': 'pre-response',
+  'tool-count': 'pre-response',
+  'task-done': 'post-response',
+}
 
 // ---------------------------------------------------------------------------
 // SSE 分析
@@ -187,13 +203,14 @@ function analyzeSse(raw: string): Analysis {
 
 interface TestCase {
   label: string
-  expectedRule: RuleType
+  /** 期望触发的规则，按出现顺序（pre-response 在前，post-response 在后） */
+  expectedQuestions: RuleType[]
   body: Record<string, unknown>
 }
 
 async function runTest(tc: TestCase): Promise<boolean> {
   console.error(`\n=== ${tc.label} ===`)
-  console.error(`期望规则: ${tc.expectedRule} → 「${PRESET_QUESTIONS[tc.expectedRule]}」`)
+  console.error(`期望规则: ${tc.expectedQuestions.join(', ')} → 「${tc.expectedQuestions.map(r => PRESET_QUESTIONS[r]).join('」+「')}」`)
 
   const resp = await fetch(PROXY_URL, {
     method: 'POST',
@@ -222,17 +239,31 @@ async function runTest(tc: TestCase): Promise<boolean> {
   }
 
   const a = analyzeSse(raw)
-  const expectedQuestion = PRESET_QUESTIONS[tc.expectedRule]
+  const expectedQs = tc.expectedQuestions.map(r => PRESET_QUESTIONS[r])
+  const actualQs = a.advisorQuestions
 
-  // ---- 核心判定：forced 是否触发 + question 是否匹配 ----
-  const forcedTriggered = a.advisorQuestions.length > 0
-  const questionMatched = a.advisorQuestions.some(q => q === expectedQuestion)
+  // ---- 核心判定：精确集合 + 顺序 ----
+  const orderMatched =
+    expectedQs.length === actualQs.length &&
+    expectedQs.every((q, i) => q === actualQs[i])
 
-  console.error(`  forced 触发: ${forcedTriggered ? `✅ (advisor 分隔 ${a.advisorQuestions.length} 个)` : '❌ 未触发'}`)
-  if (forcedTriggered) {
-    console.error(`  advisor questions: ${a.advisorQuestions.map(q => `「${q}」`).join(', ')}`)
-    console.error(`  预设 question 匹配: ${questionMatched ? '✅' : '❌ 不匹配'}`)
-  }
+  const missing = expectedQs.filter(q => !actualQs.includes(q))
+  const unexpected = actualQs.filter(q => {
+    const rule = QUESTION_TO_RULE[q]
+    return !rule || !tc.expectedQuestions.includes(rule)
+  })
+
+  console.error(`  期望: [${tc.expectedQuestions.map(r => `${r}(${RULE_PHASE[r]})`).join(', ')}]`)
+  console.error(`  实际触发 ${actualQs.length} 个:`)
+  actualQs.forEach((q, i) => {
+    const rule = QUESTION_TO_RULE[q] ?? '(未知)'
+    const phase = QUESTION_TO_RULE[q] ? RULE_PHASE[QUESTION_TO_RULE[q]] : '?'
+    const ok = rule !== '(未知)' && tc.expectedQuestions.includes(rule as RuleType)
+    console.error(`    [${i}] ${phase.padEnd(13)} ${rule.padEnd(11)} ${ok ? '✅' : '⚠️未预期'} 「${q}」`)
+  })
+  if (missing.length) console.error(`  ⚠️ 该触发未触发: ${missing.join(', ')}`)
+  if (unexpected.length) console.error(`  ⚠️ 出现未预期: ${unexpected.length} 个`)
+  console.error(`  顺序/集合匹配: ${orderMatched ? '✅' : '❌'} (期望 ${expectedQs.length}, 实际 ${actualQs.length})`)
 
   // ---- 格式合规性 ----
   console.error(`  message_start: ${a.messageStartCount === 1 ? '✅' : '❌'} (${a.messageStartCount} 次, 期望 1)`)
@@ -258,7 +289,7 @@ async function runTest(tc: TestCase): Promise<boolean> {
   fs.writeFileSync(fn, raw)
   console.error(`  日志: ${fn}`)
 
-  const passed = forcedTriggered && questionMatched
+  const passed = orderMatched
     && a.messageStartCount === 1 && a.messageStopCount === 1 && !a.hasDone
   console.error(`  判定: ${passed ? '✅ 通过' : '❌ 失败'}`)
   return passed
@@ -303,9 +334,9 @@ async function main() {
 
   const tests: TestCase[] = [
     {
-      // 规则 1：末尾 user 纯文本 → user-turn
+      // 规则 1：末尾 user 纯文本 → user-turn（+ post-response task-done）
       label: 'rule1-user-turn',
-      expectedRule: 'user-turn',
+      expectedQuestions: ['user-turn', 'task-done'],
       body: {
         model: FLASH_MODEL,
         system: 'You are a helpful assistant. Answer concisely.',
@@ -315,9 +346,9 @@ async function main() {
       },
     },
     {
-      // 规则 3：末尾 tool_result 含 error → tool-error（优先级高于 tool-count）
+      // 规则 3：末尾 tool_result 含 error → tool-error（+ post-response task-done）
       label: 'rule3-tool-error',
-      expectedRule: 'tool-error',
+      expectedQuestions: ['tool-error', 'task-done'],
       body: {
         model: FLASH_MODEL,
         system: 'You are a helpful assistant.',
@@ -331,13 +362,31 @@ async function main() {
       },
     },
     {
-      // 规则 2：5 个真实 tool_use，末尾 tool_result，无 error → tool-count
+      // 规则 2：5 个真实 tool_use，末尾 tool_result，无 error → tool-count（+ post-response task-done）
       label: 'rule2-tool-count',
-      expectedRule: 'tool-count',
+      expectedQuestions: ['tool-count', 'task-done'],
       body: {
         model: FLASH_MODEL,
         system: 'You are a helpful assistant.',
         messages: buildMessages5Tools(),
+        max_tokens: 256,
+        stream: true,
+      },
+    },
+    {
+      // 规则 4：末尾 assistant 无 tool_use → task-done（仅 post-response 触发）
+      // 与 user-turn 的区别：末尾是 assistant 而非纯 user。
+      // detectForcedAdvisor 不会触发（只看 user trailing），
+      // 由 flash loop 中 flash 答完后检测无 tool_use 触发。
+      label: 'rule4-task-done',
+      expectedQuestions: ['task-done'],
+      body: {
+        model: FLASH_MODEL,
+        system: 'You are a helpful assistant.',
+        messages: [
+          { role: 'user', content: '2+2=？只回答数字。' },
+          { role: 'assistant', content: [{ type: 'text', text: '4' }] },
+        ],
         max_tokens: 256,
         stream: true,
       },
@@ -356,7 +405,7 @@ async function main() {
     console.error(`  ${r.label}: ${r.passed ? '✅ 通过' : '❌ 失败'}`)
   }
   const allPassed = results.every(r => r.passed)
-  console.error(`\n总体: ${allPassed ? '✅ 三条 forced 规则全部触发并匹配预设 question' : '❌ 存在未通过项'}`)
+  console.error(`\n总体: ${allPassed ? '✅ 四条 forced 规则全部按预期触发（含 pre+post 组合，顺序正确）' : '❌ 存在未通过项'}`)
   if (!allPassed) process.exitCode = 1
 }
 

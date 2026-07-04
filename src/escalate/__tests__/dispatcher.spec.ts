@@ -28,7 +28,8 @@
  *  21. Pro body has only the dummy finish tool
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { EscalateDispatcher, detectForcedAdvisor } from '../dispatcher'
+import { EscalateDispatcher, detectForcedAdvisor, resolveForceAdvisorRules, isTriggerEnabled } from '../dispatcher'
+import type { ForcedAdvisorTrigger, ForcedAdvisorRuleName } from '../dispatcher'
 import { stripAdvisorMarkersFromThinking, ADVISOR_CONSULT_TAG } from '../anthropic-protocol'
 import type { AnthropicMessage, AnthropicContentBlock } from '../anthropic-protocol'
 import type { EscalateConfig } from '../types'
@@ -684,7 +685,7 @@ describe('EscalateDispatcher', () => {
       expect(proMessages[0].role).toBe('user')
       expect(proMessages[0].content).toBe('q')
       expect(proMessages[1].role).toBe('user')
-      expect(proMessages[1].content).toBe('[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] how to refactor X?')
+      expect(proMessages[1].content).toBe('[Advisor consultation — analyze and answer, do not repeat this prefix] how to refactor X?')
 
       // Advisor mode does NOT inject any system-prompt contract into pro's
       // request — advisor mode is fully decoupled from the self-report
@@ -731,7 +732,7 @@ describe('EscalateDispatcher', () => {
       const proBody = JSON.parse(captured[1].init.body!)
       const proMessages = proBody.messages
       const advisorUserMsg = proMessages.find((m: { role: string; content: string }) =>
-        m.role === 'user' && typeof m.content === 'string' && m.content === '[Advisor consultation - do not call any tools, analyze and answer, do not repeat this prefix] q1')
+        m.role === 'user' && typeof m.content === 'string' && m.content === '[Advisor consultation — analyze and answer, do not repeat this prefix] q1')
       expect(advisorUserMsg).toBeDefined()
     })
 
@@ -1438,8 +1439,26 @@ describe('EscalateDispatcher', () => {
       expect(detectForcedAdvisor(msgs as never)?.type).toBe('tool-error')
     })
 
-    it('no trigger: trailing assistant message', () => {
+    it('no trigger: trailing assistant message (string content)', () => {
+      // String-only assistant messages no longer trigger (detectForcedAdvisor
+      // only fires on trailing-{user} for pre-request detection).
+      // Task-done is handled post-response in the flash loop.
       expect(detectForcedAdvisor([{ role: 'assistant', content: 'x' }] as never)).toBeNull()
+    })
+
+    it('no trigger: trailing assistant with text content block', () => {
+      expect(detectForcedAdvisor([
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: [{ type: 'text', text: 'answer' }] },
+      ] as never)).toBeNull()
+    })
+
+    it('no trigger: trailing assistant with tool_use (model still working)', () => {
+      const trigger = detectForcedAdvisor([
+        { role: 'user', content: 'q' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
+      ] as never)
+      expect(trigger).toBeNull()
     })
 
     it('no trigger: empty messages', () => {
@@ -1447,9 +1466,74 @@ describe('EscalateDispatcher', () => {
     })
   })
 
+  describe('resolveForceAdvisorRules / isTriggerEnabled (pure)', () => {
+    it('true → all', () => {
+      expect(resolveForceAdvisorRules(true)).toBe('all')
+    })
+
+    it('false → false', () => {
+      expect(resolveForceAdvisorRules(false)).toBe(false)
+    })
+
+    it('string "true" → all', () => {
+      expect(resolveForceAdvisorRules('true')).toBe('all')
+    })
+
+    it('string "false" → false', () => {
+      expect(resolveForceAdvisorRules('false')).toBe(false)
+    })
+
+    it('comma-separated names → Set', () => {
+      const r = resolveForceAdvisorRules('user-turn,task-done')
+      expect(r).not.toBe(false)
+      expect(r).not.toBe('all')
+      const s = r as Set<string>
+      expect(s.has('user-turn')).toBe(true)
+      expect(s.has('task-done')).toBe(true)
+      expect(s.has('tool-error')).toBe(false)
+      expect(s.size).toBe(2)
+    })
+
+    it('invalid names are silently ignored', () => {
+      const r = resolveForceAdvisorRules('user-turn,blah,tool-error')
+      expect(r).not.toBe(false)
+      const s = r as Set<string>
+      expect(s.has('user-turn')).toBe(true)
+      expect(s.has('tool-error')).toBe(true)
+      expect(s.has('blah')).toBe(false)
+      expect(s.size).toBe(2)
+    })
+
+    it('only invalid names → false', () => {
+      expect(resolveForceAdvisorRules('invalid1,invalid2')).toBe(false)
+    })
+
+    it('empty string → false', () => {
+      expect(resolveForceAdvisorRules('')).toBe(false)
+    })
+
+    it('isTriggerEnabled: all', () => {
+      const t: ForcedAdvisorTrigger = { type: 'user-turn', question: '?' }
+      expect(isTriggerEnabled(t, 'all')).toBe(true)
+    })
+
+    it('isTriggerEnabled: matching rule in set', () => {
+      const t: ForcedAdvisorTrigger = { type: 'user-turn', question: '?' }
+      expect(isTriggerEnabled(t, new Set<ForcedAdvisorRuleName>(['user-turn', 'tool-error']))).toBe(true)
+    })
+
+    it('isTriggerEnabled: non-matching rule in set', () => {
+      const t: ForcedAdvisorTrigger = { type: 'tool-count', question: '?' }
+      expect(isTriggerEnabled(t, new Set<ForcedAdvisorRuleName>(['user-turn', 'task-done']))).toBe(false)
+    })
+  })
+
   describe('forced advisor (forceAdvisor: true)', () => {
     function makeForcedConfig(overrides: Partial<EscalateConfig> = {}): EscalateConfig {
-      return makeConfig({ mode: 'advisor', forceAdvisor: true, ...overrides })
+      // Default: enable pre-request rules only. Task-done post-processing is
+      // excluded by default so existing tests don't need extra queue items.
+      // Task-done tests override with forceAdvisor: true.
+      return makeConfig({ mode: 'advisor', forceAdvisor: 'user-turn,tool-error,tool-count', ...overrides })
     }
 
     it('non-stream: user-turn triggers a pro pre-consultation before the flash loop', async () => {
@@ -1537,6 +1621,87 @@ describe('EscalateDispatcher', () => {
       const out = await d.dispatch({ messages: [{ role: 'user', content: 'q' }] }, false, {})
       expect(captured).toHaveLength(1)
       expect(out.path).toEqual(['flash'])
+    })
+
+    it('non-stream: task-done trigger (trailing assistant with text)', async () => {
+      // Flow: flash(no tool_use) → task-done → pro consult → flash retry
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'initial answer' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'PRO VERIFY' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: PRO,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      queueResponse(JSON.stringify({
+        type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'yes done' }],
+        stop_reason: 'end_turn', stop_sequence: null, model: FLASH,
+        usage: { input_tokens: 10, output_tokens: 5 },
+      }))
+      const d = new EscalateDispatcher({ config: makeForcedConfig({ forceAdvisor: true }), fetchImpl: fetchMock as never })
+      const out = await d.dispatch({
+        messages: [
+          { role: 'user', content: 'do it' },
+          { role: 'assistant', content: [{ type: 'text', text: 'finished' }] },
+        ],
+      }, false, {})
+      expect(out.path).toEqual(['flash', 'pro', 'flash'])
+      // captured[0] = first flash, captured[1] = pro (task-done), captured[2] = flash retry
+      const proBody = JSON.parse(captured[1].init.body!)
+      expect(proBody.messages[proBody.messages.length - 1].content).toContain('任务完成了吗？')
+
+      // Regression: pro request MUST include flash's original text-less answer
+      // so pro has context of what flash actually said before verifying completion.
+      const proMsgs = proBody.messages
+      const flashTextForPro = proMsgs.find((m: { role?: string; content?: unknown }) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.content) &&
+        m.content.some((b: { type?: string; text?: string }) => b.type === 'text' && b.text === 'initial answer')
+      )
+      expect(flashTextForPro).toBeDefined()
+
+      // Regression: flash retry must see flash's original answer + forced tool_use + tool_result
+      // in history so it can incorporate pro's completion verification.
+      const flashRetryBody = JSON.parse(captured[2].init.body!)
+      const retryMsgs = flashRetryBody.messages
+      const hasAssistantAnswer = retryMsgs.some((m: { role?: string; content?: unknown }) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.content) &&
+        m.content.some((b: { type?: string; text?: string }) => b.type === 'text' && b.text === 'initial answer')
+      )
+      expect(hasAssistantAnswer).toBe(true)
+      const hasForcedToolUse = retryMsgs.some((m: { role?: string; content?: unknown }) =>
+        m.role === 'assistant' &&
+        Array.isArray(m.content) &&
+        m.content.some((b: { type?: string; name?: string }) => b.type === 'tool_use' && b.name === 'advisor')
+      )
+      expect(hasForcedToolUse).toBe(true)
+    })
+
+    it('non-stream: forceAdvisor string filters rules — tool-count skipped when not in the list', async () => {
+      // Only tool-error and user-turn enabled; tool-count should NOT trigger
+      // even though there are 5 real tool_use in history.
+      queueResponse(anThrowResponse('final answer'))
+      const msgs: unknown[] = [{ role: 'user', content: 'q' }]
+      for (let i = 0; i < 5; i++) {
+        msgs.push({ role: 'assistant', content: [{ type: 'tool_use', id: `r${i}`, name: 'read_file', input: {} }] })
+        msgs.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: `r${i}`, content: 'ok' }] })
+      }
+      // With forceAdvisor='tool-error,user-turn', tool-count and task-done are disabled
+      const d = new EscalateDispatcher({
+        config: makeConfig({ mode: 'advisor', forceAdvisor: 'tool-error,user-turn' }),
+        fetchImpl: fetchMock as never,
+      })
+      const out = await d.dispatch({ messages: msgs }, false, {})
+      // Should NOT trigger forced advisor (tool-count is blocked) — goes straight to flash
+      expect(out.path).toEqual(['flash'])
+      // captured[0] = flash (no pro pre-consultation)
+      expect(captured).toHaveLength(1)
     })
 
     it('non-stream: tool-error trigger uses the error preset question', async () => {

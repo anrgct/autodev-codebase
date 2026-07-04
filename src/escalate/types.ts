@@ -49,11 +49,18 @@ export interface EscalateConfig {
   /**
    * Forced-advisor switch (advisor mode only, default false). When enabled,
    * the proxy deterministically fakes an advisor tool_call with a preset
-   * question at fixed moments (user turn / tool error / every N tools)
+   * question at fixed moments (user turn / tool error / every N tools / task done)
    * BEFORE the flash loop, so pro is guaranteed to be consulted. See
    * docs/plans/260630-force-advisor.md.
+   *
+   * Accepts:
+   *  - `true` — enable all rules
+   *  - `false` — disable
+   *  - comma-separated rule name string, e.g. `"user-turn,tool-error"` — only those rules
+   *
+   * Valid rule names: user-turn, tool-error, tool-count, task-done.
    */
-  forceAdvisor: boolean
+  forceAdvisor: boolean | string
 }
 
 /**

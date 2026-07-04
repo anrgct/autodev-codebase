@@ -13,6 +13,7 @@ import { Command } from 'commander'
 import * as path from 'path'
 import * as os from 'os'
 import { startEscalateServer, type EscalateServerHandle } from '../escalate/server'
+import { resolveForceAdvisorRules } from '../escalate/dispatcher'
 import type { EscalateConfig } from '../escalate/types'
 import { NodeFileSystem } from '../adapters/nodejs/file-system'
 import { NodeEventBus } from '../adapters/nodejs/event-bus'
@@ -93,7 +94,11 @@ async function loadEscalateConfig(options: EscalateCommandOptions): Promise<Esca
     ? fullConfig.escalateMaxTokens
     : 4096
 
-  const forceAdvisor = fullConfig.escalateForceAdvisor === true
+  const rawForceAdvisor = fullConfig.escalateForceAdvisor
+  const forceAdvisor: boolean | string =
+    rawForceAdvisor === true ? true
+    : typeof rawForceAdvisor === 'string' ? rawForceAdvisor
+    : false
 
   return {
     mode: escalationMode,
@@ -127,7 +132,13 @@ function printStartupBanner(cfg: EscalateConfig, port: number): void {
   console.log(`  Sticky pro   : ${cfg.stickyProTtlMs > 0 ? `${cfg.stickyProTtlMs}ms TTL` : 'disabled'}`)
   console.log(`  Thinking bud : ${cfg.thinkingBudget}`)
   console.log(`  Max tokens   : ${cfg.maxTokens}`)
-  console.log(`  Force advisor: ${cfg.forceAdvisor ? 'ON (preset-question pre-consultation)' : 'off'}`)
+  const forceAdvisorDisplay = typeof cfg.forceAdvisor === 'string'
+    ? resolveForceAdvisorRules(cfg.forceAdvisor)
+    : cfg.forceAdvisor
+  const forceAdvisorStr = forceAdvisorDisplay === 'all' ? 'ON (all rules)'
+    : forceAdvisorDisplay ? `ON (rules: ${cfg.forceAdvisor})`
+    : 'off'
+  console.log(`  Force advisor: ${forceAdvisorStr}`)
   console.log(bar)
   console.log('')
   console.log('  Point any Anthropic-compatible client at this URL. Example:')
