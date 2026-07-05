@@ -147,6 +147,19 @@ export declare class LlamaContext {
      * Default: start=17, end=25.
      */
     setKqSoftMaxLayerRange(layerStart: number, layerEnd: number): void;
+    /**
+     * Initialize a batch for embedding injection (instead of token IDs).
+     */
+    initBatchEmbd(n_tokens: number): void;
+    /**
+     * Add embedding vectors to the current batch.
+     */
+    addToBatchEmbd(sequenceId: number, firstPos: number, embdFlat: Float32Array, nTokens: number, logitIndexes: Uint32Array): Uint32Array;
+    /**
+     * Get token embedding vectors from the model's token_embd.weight.
+     * Returns flat Float32Array [nTokens * n_embd].
+     */
+    getTokenEmbeddings(tokenIds: Uint32Array): Float32Array;
 }
 export declare class LlamaContextSequence {
     readonly onDispose: EventRelay<void>;

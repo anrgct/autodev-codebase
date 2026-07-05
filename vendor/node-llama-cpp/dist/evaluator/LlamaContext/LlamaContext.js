@@ -507,6 +507,37 @@ export class LlamaContext {
     setKqSoftMaxLayerRange(layerStart, layerEnd) {
         this._ctx.setKqSoftMaxLayerRange(layerStart, layerEnd);
     }
+    /**
+     * Initialize a batch for embedding injection (instead of token IDs).
+     * The batch.embd array is sized for n_tokens * n_embd floats.
+     * Call addToBatchEmbd() to fill it, then decodeBatch().
+     */
+    initBatchEmbd(n_tokens) {
+        this._ensureNotDisposed();
+        this._ctx.initBatchEmbd(n_tokens);
+    }
+    /**
+     * Add embedding vectors to the current batch.
+     * @param {number} sequenceId - The sequence ID
+     * @param {number} firstPos - The first absolute context position
+     * @param {Float32Array} embdFlat - Flat embedding data [nTokens * n_embd]
+     * @param {number} nTokens - Number of tokens to add
+     * @param {Uint32Array} logitIndexes - Which token indexes want logits output
+     * @returns {Uint32Array} - Logit index mapping
+     */
+    addToBatchEmbd(sequenceId, firstPos, embdFlat, nTokens, logitIndexes) {
+        return this._ctx.addToBatchEmbd(sequenceId, firstPos, embdFlat, nTokens, logitIndexes);
+    }
+    /**
+     * Get token embedding vectors from the model's token_embd.weight.
+     * Reads directly from the GGUF file (full vocab, lossless).
+     * @param {Uint32Array} tokenIds - Token IDs to look up
+     * @returns {Float32Array} - Flat array [nTokens * n_embd]
+     */
+    getTokenEmbeddings(tokenIds) {
+        this._ensureNotDisposed();
+        return this._ctx.getTokenEmbeddings(tokenIds);
+    }
     async _decodeTokens({ sequenceId, firstTokenSequenceIndex, tokens, logits, evaluationPriority = defaultEvaluationPriority, tokenMeter, afterBatchAction }, logitDataMapper) {
         return await new Promise((accept, reject) => {
             this._queuedDecodes.push({

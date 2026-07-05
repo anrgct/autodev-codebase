@@ -82,16 +82,22 @@ class AddonContext : public Napi::ObjectWrap<AddonContext> {
         Napi::Value Dispose(const Napi::CallbackInfo& info);
 
         Napi::Value GetContextSize(const Napi::CallbackInfo& info);
-        Napi::Value InitBatch(const Napi::CallbackInfo& info);
-        Napi::Value DisposeBatch(const Napi::CallbackInfo& info);
-        Napi::Value AddToBatch(const Napi::CallbackInfo& info);
+       	Napi::Value InitBatch(const Napi::CallbackInfo& info);
+       	Napi::Value InitBatchEmbd(const Napi::CallbackInfo& info);
+       	Napi::Value DisposeBatch(const Napi::CallbackInfo& info);
+       	Napi::Value AddToBatch(const Napi::CallbackInfo& info);
+       	Napi::Value AddToBatchEmbd(const Napi::CallbackInfo& info);
+       	Napi::Value GetTokenEmbeddings(const Napi::CallbackInfo& info);
         Napi::Value DisposeSequence(const Napi::CallbackInfo& info);
         Napi::Value RemoveTokenCellsFromSequence(const Napi::CallbackInfo& info);
         Napi::Value ShiftSequenceTokenCells(const Napi::CallbackInfo& info);
         Napi::Value GetSequenceKvCacheMinPosition(const Napi::CallbackInfo& info);
         Napi::Value GetSequenceKvCacheMaxPosition(const Napi::CallbackInfo& info);
         Napi::Value DecodeBatch(const Napi::CallbackInfo& info);
-        Napi::Value SampleToken(const Napi::CallbackInfo& info);
+	        Napi::Value SampleToken(const Napi::CallbackInfo& info);
+
+	        // Debug: dump raw logits at batch token index i
+	        Napi::Value GetLogitsRow(const Napi::CallbackInfo& info);
 
         Napi::Value GetEmbedding(const Napi::CallbackInfo& info);
         Napi::Value ClearAccumulatedEmbeddings(const Napi::CallbackInfo& info);
